@@ -39,6 +39,13 @@ pub enum Code {
     BuiltinShadow,
     /// A component attribute cannot become a PHP named argument (`LNT0202`).
     HyphenArg,
+    /// A component prop does not match a declared parameter of the in-file
+    /// component signature (`LNT0203`); PHP would reject the call at runtime
+    /// with `Unknown named parameter`.
+    UnknownProp,
+    /// JSX children were passed to a component whose declared signature has
+    /// no `children` parameter (`LNT0204`).
+    UnexpectedChildren,
     /// A dynamic event-handler attribute was rejected (`LNT0301`).
     DynamicHandler,
     /// A static event-handler string is allowed but discouraged (`LNT0302`).
@@ -59,6 +66,8 @@ impl Code {
             Self::Expected => "LNT0105",
             Self::BuiltinShadow => "LNT0201",
             Self::HyphenArg => "LNT0202",
+            Self::UnknownProp => "LNT0203",
+            Self::UnexpectedChildren => "LNT0204",
             Self::DynamicHandler => "LNT0301",
             Self::StaticHandler => "LNT0302",
             Self::VoidChildren => "LNT0401",
@@ -76,6 +85,8 @@ impl Code {
             Self::Expected => "unexpected input",
             Self::BuiltinShadow => "component shadows a PHP builtin function",
             Self::HyphenArg => "attribute cannot become a named argument",
+            Self::UnknownProp => "component has no such parameter",
+            Self::UnexpectedChildren => "component does not accept children",
             Self::DynamicHandler => "dynamic event-handler attributes are not allowed",
             Self::StaticHandler => "static event-handler strings are discouraged",
             Self::VoidChildren => "void elements cannot have children",
@@ -252,6 +263,8 @@ mod tests {
         assert_eq!(Code::UnterminatedTag.lnt(), "LNT0101");
         assert_eq!(Code::BuiltinShadow.lnt(), "LNT0201");
         assert_eq!(Code::HyphenArg.lnt(), "LNT0202");
+        assert_eq!(Code::UnknownProp.lnt(), "LNT0203");
+        assert_eq!(Code::UnexpectedChildren.lnt(), "LNT0204");
         assert_eq!(Code::DynamicHandler.lnt(), "LNT0301");
         assert_eq!(Code::StaticHandler.lnt(), "LNT0302");
         assert_eq!(Code::VoidChildren.lnt(), "LNT0401");
