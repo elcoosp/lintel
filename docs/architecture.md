@@ -1251,7 +1251,9 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 > second pass (stream target + signature scanning), again after the
 > third pass (ignore directives + required-parameter signature checks), and
 > again after the fourth pass (validation-rule seam, `SourceMap` positions,
-> "did you mean" close-tag suggestions).
+> "did you mean" close-tag suggestions), and again after the fifth pass
+> (file-level `lintel-ignore-file` suppression, `srcset` attribute routing,
+> parse-error `help:` lines).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1267,10 +1269,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | T-08 validation pass | **done (v0.1 subset + warnings + signatures)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0203/0204/0205/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`. "Did you mean" close-tag suggestions are done: a mismatched close that shares the open tag's first character within a small edit distance carries a `help:` suggestion (`scan.rs::close_tag_help`, tested by `tests/parse_errors.rs`) |
 | Validation-rule seam (T-08 extension) | **done** | `validate::ValidationRule` trait + eight built-in rule structs + `builtin_rules()` registry in `crates/lintel-core/src/validate.rs`; `validate_with(roots, context, rules)` and `compile_with(src, opts, rules)` inject a consumer registry the way `scan_with` injects a lowering. Rules run in slice order over the shared depth-first walk, then the `lintel-ignore-next` filter applies — custom rules inherit the severity split and suppression choke point. Tested by `tests/rules.rs`, demoed by `examples/custom_rule.rs` |
 | `SourceMap` offset→position seam | **done** | `lintel_diag::SourceMap` (re-exported at the `lintel-core` root): byte offsets → 1-based line / char-based column / line text with clamp-and-floor semantics, byte-identical to what `Diagnostic::render` has always computed (which now delegates to it). The converter CLI/LSP consumers previously had to re-implement. Tested by `tests/sourcemap.rs` + inline `lintel-diag` tests, demoed by `examples/sourcemap.rs` |
-| `// lintel-ignore-next` (doc §17 mitigation) | **done (compiler subset)** | the scanner records one-line suppression windows into `ScanContext` (`scan::Suppression`, `add_suppression`/`suppressed_at`/`suppressions()`), and `validate` drops diagnostics inside them; parse diagnostics (`LNT01xx`) are never suppressible. The exact contract is recorded in `docs/ignore-directives.md` and tested by `tests/suppressions.rs` |
-| `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` |
+| `// lintel-ignore-next` + `// lintel-ignore-file` (doc §17 mitigation) | **done (compiler subset)** | the scanner records one-line suppression windows into `ScanContext` (`scan::Suppression`, `add_suppression`/`suppressed_at`/`suppressions()`), and the file-level `lintel-ignore-file` directive latches `ScanContext::suppress_file`/`file_suppressed` so `validate` drops every validation diagnostic and short-circuits the rule walk; parse diagnostics (`LNT01xx`) are never suppressible. The exact contracts are recorded in `docs/ignore-directives.md` and tested by `tests/suppressions.rs` |
+| `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` — the `Lowering` seam itself (consumer-injected strategies through `scan_with`) is demoed by `examples/custom_lowering.rs` |
 | `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol and runtime adapters are future work |
 | §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop, `LNT0204` unexpected children and `LNT0205` missing required parameter (a parameter declared without a default; spreads satisfy it, JSX children satisfy a `children` parameter) for components declared in the same file (PHP named arguments are case-sensitive); typed-parameter escape elision remains open |
+| §4.4/§7.1 `srcset` per-URL attribute routing | **done (compiler subset)** | `emit.rs::push_attr` routes dynamic `srcset={expr}` attributes through the dedicated `\Lintel\srcset()` helper on the string and stream targets (the runtime helper splits candidates and scheme-checks each URL); static values fold verbatim, the `rfc` target stays helper-free, component attributes stay named arguments. The exact contract is recorded in `docs/srcset-alignment.md` and tested by `tests/srcset.rs`; the `srcset()` runtime helper itself ships with the PHP runtime (T-07) |
 | T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
 | T-09+ differential/fuzz/CLI/daemon/WASM | **not started** | — |
@@ -1283,7 +1286,10 @@ lowering), `stream_component_tree` (streaming generator lowering),
 `lintel-ignore-next` window capture and per-diagnostic lookup path),
 `required_missing` (the LNT0205 required-parameter rejection path) and
 `custom_rule` (the injected validation-rule registry: built-in set plus one
-consumer policy rule, against the hardcoded `component_tree` cost). A
+consumer policy rule, against the hardcoded `component_tree` cost),
+`file_suppressed_handlers` (the file-level `lintel-ignore-file`
+short-circuit against the unsuppressed `warned_handlers` cost) and
+`srcset_attrs` (the `srcset` per-URL attribute routing path). A
 second group, `sourcemap`, measures the offset→line:col lookups behind
 every rendered diagnostic. They
 measure compiler throughput only; the §9.2 PHP rendering harness is future
