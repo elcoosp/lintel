@@ -1,0 +1,266 @@
+//! The `lintel` CLI contracts (architecture doc §6.7, task-card T-10
+//! subset): `build` compiles to stdout/`--out`/`--in-place`, `check` is
+//! the diagnostics-only CI gate, directories walk in sorted order, usage
+//! errors return [`lintel_cli::CliError`] instead of touching the sinks,
+//! and exit codes follow the usage text (0 clean, 1 any failure, 2 usage).
+//!
+//! The tests drive [`lintel_cli::run`] — the same engine `src/main.rs`
+//! wires to the process sinks — against scratch directories under the
+//! system temp dir.
+
+use std::{fs, path::PathBuf};
+
+const CLEAN_SOURCE: &str = "<?php\nreturn <b class=\"x\">{$name}</b>;\n";
+const ERROR_SOURCE: &str = "<?php\nreturn <button onclick={$handler}>go</button>;\n";
+const WARN_SOURCE: &str = "<?php\nreturn <button onclick=\"track('cta')\">go</button>;\n";
+
+/// A fresh scratch directory for one test; recreated on each run.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lintel-cli-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("creates scratch dir");
+    dir
+}
+
+/// `run` with string args, collecting both sinks as UTF-8.
+fn run_cli(argv: &[&str]) -> (i32, String, String) {
+    let invocation: Vec<String> = argv.iter().copied().map(String::from).collect();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = lintel_cli::run(&invocation, &mut stdout, &mut stderr).expect("arguments parse");
+    (
+        code,
+        String::from_utf8(stdout).expect("stdout is utf8"),
+        String::from_utf8(stderr).expect("stderr is utf8"),
+    )
+}
+
+/// `run` for an invocation expected to be rejected as a usage error.
+fn usage_error(argv: &[&str]) -> String {
+    let invocation: Vec<String> = argv.iter().copied().map(String::from).collect();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    match lintel_cli::run(&invocation, &mut stdout, &mut stderr) {
+        Err(problem) => problem.0,
+        Ok(code) => panic!("expected a usage error, got exit {code}"),
+    }
+}
+
+fn write_source(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, content).expect("writes source");
+    path
+}
+
+#[test]
+fn build_compiles_a_component_to_stdout() {
+    let dir = scratch("build-stdout");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["build", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("new \\Lintel\\Html("), "{stdout}");
+    assert!(stdout.contains("class=\"x\""), "{stdout}");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn build_out_dir_writes_named_php_files() {
+    let dir = scratch("build-out-dir");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let out_dir = dir.join("dist");
+    let (code, _, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        "--out",
+        out_dir.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let compiled = out_dir.join("Page.php");
+    let php = fs::read_to_string(&compiled).expect("compiled file exists");
+    assert!(php.contains("new \\Lintel\\Html("), "{php}");
+}
+
+#[test]
+fn build_in_place_writes_a_sibling_php_file() {
+    let dir = scratch("build-in-place");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let (code, _, stderr) = run_cli(&["build", source.to_str().expect("utf8 path"), "--in-place"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let compiled = dir.join("Page.php");
+    let php = fs::read_to_string(&compiled).expect("sibling file exists");
+    assert!(php.contains("return new \\Lintel\\Html("), "{php}");
+    assert_eq!(
+        fs::read_to_string(&source).expect("source intact"),
+        CLEAN_SOURCE,
+        "the build never overwrites its input"
+    );
+}
+
+#[test]
+fn build_fails_renders_diagnostics_and_writes_nothing() {
+    let dir = scratch("build-error");
+    let source = write_source(&dir, "Bad.lintel.php", ERROR_SOURCE);
+    let out_dir = dir.join("dist");
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        "--out",
+        out_dir.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("error[LNT0301]"), "{stderr}");
+    assert!(stderr.contains("help:"), "{stderr}");
+    assert!(!out_dir.join("Bad.php").exists(), "no output on failure");
+}
+
+#[test]
+fn build_warns_but_succeeds() {
+    let dir = scratch("build-warn");
+    let source = write_source(&dir, "Warn.lintel.php", WARN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["build", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "warnings do not fail the build");
+    assert!(stderr.contains("warning[LNT0302]"), "{stderr}");
+    assert!(stdout.contains("new \\Lintel\\Html("), "{stdout}");
+}
+
+#[test]
+fn build_streams_with_the_stream_target() {
+    let dir = scratch("build-stream");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        "--target=stream",
+        source.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("static function (): \\Generator"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn build_accepts_the_rfc_target_as_a_separate_word() {
+    let dir = scratch("build-rfc");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        "--target",
+        "rfc",
+        source.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("\\Markup\\Element"), "{stdout}");
+}
+
+#[test]
+fn check_is_quiet_when_clean_and_warns_without_failing() {
+    let dir = scratch("check");
+    let clean = write_source(&dir, "Clean.lintel.php", CLEAN_SOURCE);
+    let warned = write_source(&dir, "Warn.lintel.php", WARN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["check", clean.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "", "clean check is quiet: {stderr}");
+    let (code, _, stderr) = run_cli(&["check", warned.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "warnings pass the CI gate");
+    assert!(stderr.contains("warning[LNT0302]"), "{stderr}");
+}
+
+#[test]
+fn check_fails_on_error_severity_diagnostics() {
+    let dir = scratch("check-error");
+    let source = write_source(&dir, "Bad.lintel.php", ERROR_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["check", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 1);
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("error[LNT0301]"), "{stderr}");
+}
+
+#[test]
+fn directories_walk_recursively_in_path_order() {
+    let dir = scratch("walk");
+    let nested = dir.join("z-nested");
+    fs::create_dir_all(&nested).expect("creates nested dir");
+    write_source(&dir, "b.lintel.php", "<?php\nreturn <b>B-MARK</b>;\n");
+    write_source(&nested, "a.lintel.php", "<?php\nreturn <i>A-MARK</i>;\n");
+    write_source(&dir, "ignored.txt", "not a source");
+    let path = dir.to_str().expect("utf8 path");
+    let (code, stdout, stderr) = run_cli(&["build", path]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(!stdout.contains("not a source"), "{stdout}");
+    // Full paths sort: `b.lintel.php` (at the root) precedes
+    // `z-nested/a.lintel.php`, whatever their file names.
+    let b = stdout.find("B-MARK").expect("b.lintel.php compiled");
+    let a = stdout.find("A-MARK").expect("nested a.lintel.php compiled");
+    assert!(b < a, "walked sources compile in path order: {stdout}");
+    // The walk is deterministic across runs.
+    let (code, stdout_again, _) = run_cli(&["build", path]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, stdout_again);
+}
+
+#[test]
+fn check_fails_when_any_walked_file_fails() {
+    let dir = scratch("walk-error");
+    write_source(&dir, "Good.lintel.php", CLEAN_SOURCE);
+    write_source(&dir, "Bad.lintel.php", ERROR_SOURCE);
+    let (code, _, stderr) = run_cli(&["check", dir.to_str().expect("utf8 path")]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("error[LNT0301]"), "{stderr}");
+}
+
+#[test]
+fn sources_without_the_lintel_suffix_get_a_compiled_name() {
+    let dir = scratch("compiled-name");
+    let source = write_source(&dir, "plain.php", CLEAN_SOURCE);
+    let (code, _, stderr) = run_cli(&["build", source.to_str().expect("utf8 path"), "--in-place"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let compiled = dir.join("plain.php.compiled.php");
+    assert!(compiled.exists(), "the build never overwrites its input");
+}
+
+#[test]
+fn usage_errors_cover_flags_paths_and_modes() {
+    let dir = scratch("usage");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let path = source.to_str().expect("utf8 path");
+    assert_eq!(usage_error(&[]), "missing command: build or check");
+    assert!(usage_error(&["compile", path]).contains("unknown command `compile`"));
+    assert!(usage_error(&["build", "--wat", path]).contains("unknown flag `--wat`"));
+    assert!(usage_error(&["build", "--target=go", path]).contains("unknown target `go`"));
+    assert!(usage_error(&["build", path, "--target"]).contains("--target needs a value"));
+    assert!(usage_error(&["build", path, "--out"]).contains("--out needs a directory argument"));
+    assert!(
+        usage_error(&["build", path, "--in-place", "--out", "dist"]).contains("mutually exclusive")
+    );
+    assert!(usage_error(&["check", path, "--out", "dist"]).contains("--out is a `build` flag"));
+    assert!(usage_error(&["check", path, "--in-place"]).contains("--in-place is a `build` flag"));
+    assert!(usage_error(&["build"]).contains("needs at least one path"));
+    assert!(usage_error(&["check", "/nonexistent/lintel/path"]).contains("no such path"));
+    // No usage error ever writes to the sinks.
+    let mut sink = Vec::new();
+    let mut null = Vec::new();
+    let args: Vec<String> = ["build", "--wat", path]
+        .iter()
+        .copied()
+        .map(String::from)
+        .collect();
+    assert!(lintel_cli::run(&args, &mut sink, &mut null).is_err());
+    assert_eq!(sink, Vec::<u8>::new());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn help_and_version_exit_zero() {
+    let (code, stdout, _) = run_cli(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with("lintel —"), "{stdout}");
+    let (code, stdout, _) = run_cli(&["build", "-h"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("USAGE:"), "{stdout}");
+    let (code, stdout, _) = run_cli(&["--version"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("lintel 0.1.0"), "{stdout}");
+}
