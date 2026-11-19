@@ -14,6 +14,8 @@
 //! - [`Severity`] distinguishes hard failures from advisory warnings.
 //! - [`Diagnostic`] is the data type shared by CLI, daemon, LSP and WASM.
 //! - [`Diagnostic::render`] draws a miette-style snippet with a caret.
+//! - [`Diagnostic::to_json`] emits the same data as one-line JSON (JSON
+//!   Lines) for machine-readable consumers.
 //! - [`SourceMap`] converts the shared byte offsets into editor positions.
 
 use std::fmt;
@@ -221,6 +223,72 @@ impl Diagnostic {
         }
         let _ = writeln!(out, "  = docs: {}", self.code.docs_url());
         out
+    }
+
+    /// Render the diagnostic as a single-line JSON object (JSON Lines).
+    ///
+    /// The machine-readable counterpart to [`Diagnostic::render`], for CI
+    /// logs, editor pipes and LSP-style consumers: the same [`SourceMap`]
+    /// position semantics as the renderer (1-based line, 1-based character
+    /// column, out-of-range offsets clamped) with a **stable field order** —
+    /// `code`, `severity`, `message`, `offset`, `line`, `col`, `help`,
+    /// `docs`. `severity` repeats the renderer's words (`error`/`warning`,
+    /// see [`Severity::prefix`]); `help` is JSON `null` when absent; `docs`
+    /// is [`Code::docs_url`]. The string contains no newline and no trailing
+    /// newline, so a caller emits one object per line by appending `\n`.
+    ///
+    /// String values are JSON-escaped: `"` → `\"`, `\` → `\\`, control
+    /// characters → `\n`, `\r`, `\t` or `\u00xx`; everything else passes
+    /// through as UTF-8. Like [`Diagnostic::render`], the method never
+    /// panics: any offset is clamped before the position fields are
+    /// computed.
+    #[must_use]
+    pub fn to_json(&self, src: &str) -> String {
+        let map = SourceMap::new(src);
+        let (line, col) = map.line_col(self.offset);
+        let mut out = String::with_capacity(192);
+        out.push_str("{\"code\":\"");
+        out.push_str(self.code.lnt());
+        out.push_str("\",\"severity\":\"");
+        out.push_str(self.severity.prefix());
+        out.push_str("\",\"message\":\"");
+        json_escape(&self.message, &mut out);
+        out.push_str("\",\"offset\":");
+        let _ = write!(out, "{}", self.offset);
+        out.push_str(",\"line\":");
+        let _ = write!(out, "{line}");
+        out.push_str(",\"col\":");
+        let _ = write!(out, "{col}");
+        out.push_str(",\"help\":");
+        match &self.help {
+            Some(help) => {
+                out.push('"');
+                json_escape(help, &mut out);
+                out.push('"');
+            }
+            None => out.push_str("null"),
+        }
+        let _ = write!(out, ",\"docs\":\"{}\"}}", self.code.docs_url());
+        out
+    }
+}
+
+/// JSON-escape `value` into `out` (contract of [`Diagnostic::to_json`]):
+/// quotes, backslashes and control characters only — everything else is
+/// emitted verbatim so multi-byte UTF-8 survives untouched.
+fn json_escape(value: &str, out: &mut String) {
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
     }
 }
 
@@ -452,5 +520,55 @@ mod tests {
         let map = SourceMap::new(src);
         let (line, col) = map.line_col(problem.offset);
         assert!(problem.render(src).contains(&format!("input:{line}:{col}")));
+    }
+
+    #[test]
+    fn json_carries_code_severity_message_position_and_docs() {
+        let src = "<?php\n<button onclick={$handler}>";
+        let problem =
+            Diagnostic::new(Code::DynamicHandler, "boom", 16).with_help("use `data-action={...}`");
+        assert_eq!(
+            problem.to_json(src),
+            "{\"code\":\"LNT0301\",\"severity\":\"error\",\"message\":\"boom\",\"offset\":16,\"line\":2,\"col\":11,\"help\":\"use `data-action={...}`\",\"docs\":\"https://lintel.sh/e/LNT0301\"}"
+        );
+    }
+
+    #[test]
+    fn json_uses_the_warning_severity_and_null_help() {
+        let problem = Diagnostic::new(Code::StaticHandler, "static handler", 0)
+            .with_severity(Severity::Warning);
+        let json = problem.to_json("x");
+        assert!(
+            json.starts_with("{\"code\":\"LNT0302\",\"severity\":\"warning\""),
+            "{json}"
+        );
+        assert!(json.contains("\"help\":null"), "{json}");
+        assert!(
+            json.ends_with("\"docs\":\"https://lintel.sh/e/LNT0302\"}"),
+            "{json}"
+        );
+        assert!(
+            !json.contains('\n'),
+            "one line, no trailing newline: {json}"
+        );
+    }
+
+    #[test]
+    fn json_escapes_quotes_backslashes_and_control_characters() {
+        let problem = Diagnostic::new(Code::Expected, "expected `>`, got \"x\"\n\t\\y\u{7}", 7);
+        let json = problem.to_json("");
+        assert!(
+            json.contains("\"message\":\"expected `>`, got \\\"x\\\"\\n\\t\\\\y\\u0007\""),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn json_clamps_offsets_like_the_renderer() {
+        let problem = Diagnostic::new(Code::UnterminatedTag, "unclosed", 99);
+        assert_eq!(
+            problem.to_json("abc"),
+            "{\"code\":\"LNT0101\",\"severity\":\"error\",\"message\":\"unclosed\",\"offset\":99,\"line\":1,\"col\":4,\"help\":null,\"docs\":\"https://lintel.sh/e/LNT0101\"}"
+        );
     }
 }
