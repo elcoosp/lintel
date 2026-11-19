@@ -31,7 +31,17 @@ that runs under OPcache with the author's line numbers preserved.
   default that the invocation omits (`LNT0205`) — dynamic event handlers
   (`LNT0301`), static handler warning (`LNT0302`), void children
   (`LNT0401`). Errors fail the compile; warnings ride along on
-  [`Output::warnings`].
+  [`Output::warnings`]. A mismatched close tag that near-misses the open
+  tag in scope (`</sapn>` for `</span>`) gets a "did you mean" help line.
+- **`ValidationRule` seam** — the validation pass is a registry of rule
+  strategies ([`ValidationRule`](crates/lintel-core/src/validate.rs)):
+  `compile_with` runs consumer rules alongside (or instead of) the built-in
+  set, flowing through the same severity split and `lintel-ignore-next`
+  choke point as the built-in lints.
+- **`SourceMap` positions** — every diagnostic's byte offset maps to a
+  1-based line/column through the public, renderer-parity
+  [`SourceMap`](crates/lintel-diag/src/lib.rs) — the offset→position
+  converter CLI/LSP consumers previously had to re-implement.
 - **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
   comment drops the validation diagnostics anchored on the following line;
   parse errors are never suppressible. See
@@ -50,6 +60,9 @@ cargo run -p lintel-core --example security_lint   # rendered diagnostics
 cargo run -p lintel-core --example warnings_lint   # warning diagnostics
 cargo run -p lintel-core --example signature_lint  # signature validation
 cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next directives
+cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
+cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
+cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 ```
 
