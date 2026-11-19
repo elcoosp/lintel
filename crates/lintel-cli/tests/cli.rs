@@ -264,3 +264,111 @@ fn help_and_version_exit_zero() {
     assert_eq!(code, 0);
     assert!(stdout.contains("lintel 0.1.0"), "{stdout}");
 }
+
+/// A writer that always fails: the sink-injection contract lets tests (and
+/// embedders) drive write-error propagation without a real filesystem.
+struct BrokenSink;
+
+impl std::io::Write for BrokenSink {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("sink is broken"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn version_write_errors_propagate_like_help_write_errors() {
+    let args: Vec<String> = ["--version"].iter().copied().map(String::from).collect();
+    let mut broken = BrokenSink;
+    let mut null = Vec::new();
+    let message = match lintel_cli::run(&args, &mut broken, &mut null) {
+        Err(problem) => problem.0,
+        Ok(code) => panic!("a broken stdout sink must fail the run, got exit {code}"),
+    };
+    assert!(message.contains("I/O error"), "{message}");
+}
+
+#[test]
+fn json_format_emits_one_object_per_diagnostic() {
+    let dir = scratch("json-error");
+    let source = write_source(&dir, "Bad.lintel.php", ERROR_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(stdout, "");
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "one JSON object per line: {stderr}");
+    assert!(
+        lines[0].starts_with("{\"code\":\"LNT0301\",\"severity\":\"error\""),
+        "{stderr}"
+    );
+    assert!(lines[0].contains("\"line\":2"), "{stderr}");
+    assert!(
+        lines[0].ends_with("\"docs\":\"https://lintel.sh/e/LNT0301\"}"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn json_format_keeps_clean_files_silent() {
+    let dir = scratch("json-clean");
+    let source = write_source(&dir, "Clean.lintel.php", CLEAN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn json_format_reports_warnings_without_failing_the_gate() {
+    let dir = scratch("json-warn");
+    let source = write_source(&dir, "Warn.lintel.php", WARN_SOURCE);
+    let (code, _, stderr) = run_cli(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0, "warnings stay advisory in json format");
+    assert!(stderr.contains("\"code\":\"LNT0302\""), "{stderr}");
+    assert!(stderr.contains("\"severity\":\"warning\""), "{stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_json_format_writes_php_to_stdout_and_json_to_stderr() {
+    let dir = scratch("json-build");
+    let source = write_source(&dir, "Warn.lintel.php", WARN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("new \\Lintel\\Html("), "{stdout}");
+    assert!(stderr.contains("\"code\":\"LNT0302\""), "{stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn format_accepts_a_separate_word_and_rejects_unknown_values() {
+    let dir = scratch("json-usage");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let path = source.to_str().expect("utf8 path");
+    let (code, _, stderr) = run_cli(&["check", "--format", "json", path]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stderr, "");
+    assert!(usage_error(&["check", "--format=xml", path]).contains("unknown format `xml`"));
+    assert!(usage_error(&["build", path, "--format"]).contains("--format needs a value"));
+    let _ = fs::remove_dir_all(&dir);
+}
