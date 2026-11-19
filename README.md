@@ -26,11 +26,16 @@ that runs under OPcache with the author's line numbers preserved.
     [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
 - **Compile-time validation** with stable `LNTxxxx` diagnostics:
   builtin-shadow (`LNT0201`), invalid component prop (`LNT0202`), signature
-  checks for in-file components — unknown props (`LNT0203`) and children
-  without a `children` parameter (`LNT0204`) — dynamic event handlers
+  checks for in-file components — unknown props (`LNT0203`), children
+  without a `children` parameter (`LNT0204`), parameters declared without a
+  default that the invocation omits (`LNT0205`) — dynamic event handlers
   (`LNT0301`), static handler warning (`LNT0302`), void children
   (`LNT0401`). Errors fail the compile; warnings ride along on
   [`Output::warnings`].
+- **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
+  comment drops the validation diagnostics anchored on the following line;
+  parse errors are never suppressible. See
+  [`docs/ignore-directives.md`](docs/ignore-directives.md).
 
 ## Quick start
 
@@ -44,6 +49,7 @@ cargo run -p lintel-core --example rfc_target      # both lowering targets
 cargo run -p lintel-core --example security_lint   # rendered diagnostics
 cargo run -p lintel-core --example warnings_lint   # warning diagnostics
 cargo run -p lintel-core --example signature_lint  # signature validation
+cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next directives
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 ```
 
@@ -72,6 +78,7 @@ crates/lintel-diag   stable LNT codes, miette-style renderer, severities
 docs/architecture.md master plan + §21 implementation status
 docs/rfc-alignment.md  exact `rfc` lowering contract
 docs/stream-alignment.md  exact `stream` lowering contract
+docs/ignore-directives.md  exact `lintel-ignore-next` contract
 ```
 
 ## Status
