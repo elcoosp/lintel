@@ -182,6 +182,25 @@ fn elided_children_source() -> String {
     src
 }
 
+/// A profile page whose dynamic children are all `string`-typed parameters
+/// of the enclosing function (doc §7.3 typed-parameter elision,
+/// `docs/escape-elision.md`): measures the direct-`\htmlspecialchars()` fold
+/// path (no `\Lintel\c()` wrapper) against the helper-wrapped cost of the
+/// same children before the scope tracking existed.
+fn typed_children_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Profile(string $name, string $tagline, string $role): Html {\n    return <main class=\"profile\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <p class=\"line-{i}\"><b>{{$name}}</b> wrote {{$tagline}} as {{$role}}</p>"
+        );
+    }
+    src.push_str("    </main>;\n}\n");
+    src
+}
+
 /// The same signature-checked file, but every invocation omits the required
 /// `$label` parameter — measures the required-parameter rejection path
 /// (LNT0205) against the clean `signature_checked` cost.
@@ -263,6 +282,19 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("elided_children", |b| {
         let src = elided_children_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("typed_children", |b| {
+        let src = typed_children_source();
+        // Path drift-check (the §21.2 lesson): the fold must actually fire,
+        // or the bench silently measures the wrapped path again.
+        let out = compile(&src, &Options::default()).expect("typed children compile");
+        assert!(
+            out.php.contains("\\htmlspecialchars($name,"),
+            "typed children elide: {}",
+            out.php
+        );
+        assert!(!out.php.contains("\\Lintel\\c($name)"), "{}", out.php);
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
     group.bench_function("rejected_handlers", |b| {
