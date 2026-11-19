@@ -15,7 +15,7 @@
 //! written with a leading backslash are treated as operators.
 
 use crate::ast::{Attr, Element, Node};
-use crate::emit;
+use crate::emit::{Lowering, StringLowering};
 use crate::text::normalize_jsx_text;
 use lintel_diag::{Code, Diagnostic};
 
@@ -92,10 +92,19 @@ impl ScanContext {
     }
 }
 
-/// Scan a full `.lintel.php` source into its transpiled PHP and AST roots.
+/// Scan a full `.lintel.php` source into its transpiled PHP and AST roots,
+/// lowering JSX with the default string target.
 #[must_use]
 pub fn scan(src: &str) -> Parsed {
-    let mut scanner = Scanner::new(src);
+    scan_with(src, &StringLowering)
+}
+
+/// Scan a full `.lintel.php` source, lowering every JSX root with the given
+/// [`Lowering`] strategy (doc 5.3). The strategy is injected rather than
+/// chosen inside the scanner so new targets need no scanner changes.
+#[must_use]
+pub fn scan_with(src: &str, lowering: &dyn Lowering) -> Parsed {
+    let mut scanner = Scanner::new(src, lowering);
     scanner.transpile_file();
     Parsed {
         php: scanner.out,
@@ -112,6 +121,8 @@ struct Scanner<'s> {
     out: String,
     roots: Vec<Node>,
     context: ScanContext,
+    /// Lowering strategy applied to every JSX root as it is parsed (doc 5.3).
+    lowering: &'s dyn Lowering,
     /// Saw `function` and expect the declared name next.
     pending_function: bool,
     /// Saw `use` and expect the import list next.
@@ -122,14 +133,17 @@ struct Scanner<'s> {
 }
 
 impl<'s> Scanner<'s> {
-    fn new(src: &'s str) -> Self {
+    fn new(src: &'s str, lowering: &'s dyn Lowering) -> Self {
         Self {
             src,
             b: src.as_bytes(),
             pos: 0,
-            out: String::with_capacity(src.len() + src.len() / 4),
+            // `transpile_file` builds the output in a local buffer and moves
+            // it into `self.out` at the end, so no capacity is reserved here.
+            out: String::new(),
             roots: vec![],
             context: ScanContext::default(),
+            lowering,
             pending_function: false,
             pending_use: false,
             import_mode: false,
@@ -191,7 +205,7 @@ impl<'s> Scanner<'s> {
                     let start = self.pos;
                     let node = self.parse_element_or_fragment(start)?;
                     let total = self.newline_count(start);
-                    out.push_str(&emit::emit_root(&node, total));
+                    out.push_str(&self.lowering.emit_root(&node, total));
                     self.roots.push(node);
                     prev = Prev::Operand;
                 }
