@@ -21,8 +21,9 @@
 //!    (Xdebug/PHPStan-friendly, doc 13.4).
 //! 3. **Escape-by-default** — dynamic children go through `\Lintel\c()`,
 //!    dynamic attributes through the context-aware helpers (`a`, `u`,
-//!    `srcset`, `cls`, `sty`); only provably literal text folds directly
-//!    into the output.
+//!    `srcset`, `cls`, `sty`); only provably literal text — and provably
+//!    scalar child expressions (`(int)`/`(float)` casts and `count()`
+//!    calls, doc §7.3) — fold directly into the output.
 //!
 //! # Errors
 //!
