@@ -1,7 +1,9 @@
 //! `lintel-ignore-next` suppression directives (architecture doc §17): a
 //! PHP line comment `// lintel-ignore-next` (or `# lintel-ignore-next`) tells
 //! the validation pass to drop diagnostics anchored on the following source
-//! line. The exact contract is recorded in `docs/ignore-directives.md`.
+//! line. The file-level sibling `// lintel-ignore-file` drops every
+//! validation diagnostic in the file without suppressing parse errors. The
+//! exact contracts are recorded in `docs/ignore-directives.md`.
 //!
 //! The seam mirrors the signature-scanning one: the scanner records
 //! suppression windows into [`lintel_core::scan::ScanContext`] while copying
@@ -192,4 +194,138 @@ fn the_scanner_records_the_window_for_the_following_line() {
         "window covers the line after the directive: {:?}",
         parsed.context.suppressions()
     );
+}
+
+/// The file-level directive: `// lintel-ignore-file` (or `# …`, with an
+/// optional `: reason`) drops every validation diagnostic in the file —
+/// errors and warnings alike — while parse errors stay fatal. Unlike the
+/// one-line `ignore-next` window, the file-level flag is position
+/// independent and short-circuits the rule walk entirely.
+
+#[test]
+fn file_directive_suppresses_every_validation_diagnostic() {
+    // One file, two violations of different severities: the LNT0201 shadow
+    // lint (error) and the LNT0302 static handler (warning).
+    let src = "<?php\n// lintel-ignore-file: generated archive page, audited in CMS-77\n\
+               return <Header title=\"Archive\" />;\n\
+               return <button onclick=\"track('cta')\">Go</button>;\n";
+    let out = compile(src, &Options::default()).expect("file-level suppression compiles");
+    assert!(
+        out.warnings.is_empty(),
+        "warnings are suppressed too: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn the_same_file_fails_without_the_directive() {
+    let src = "<?php\nreturn <Header title=\"Archive\" />;\n\
+               return <button onclick=\"track('cta')\">Go</button>;\n";
+    match compile_src(src) {
+        Ok(php) => panic!("control: the shadow lint fires: {php}"),
+        Err(problems) => assert_eq!(problems[0].code, Code::BuiltinShadow),
+    }
+}
+
+#[test]
+fn file_directive_works_with_hash_comments() {
+    let src = "<?php\n# lintel-ignore-file\nreturn <Header title=\"Hi\" />;\n";
+    compile_src(src).expect("# is a PHP line comment and carries the file directive");
+}
+
+#[test]
+fn the_file_directive_word_must_be_exact() {
+    let src = "<?php\n// lintel-ignore-filex\nreturn <Header title=\"Hi\" />;\n";
+    match compile_src(src) {
+        Ok(php) => panic!("near-miss directive names do not suppress: {php}"),
+        Err(problems) => assert_eq!(problems[0].code, Code::BuiltinShadow),
+    }
+}
+
+#[test]
+fn block_comments_and_strings_are_not_file_directives() {
+    let blocked = "<?php\n/* lintel-ignore-file */\nreturn <Header title=\"Hi\" />;\n";
+    match compile_src(blocked) {
+        Ok(php) => panic!("block comments are not directives: {php}"),
+        Err(problems) => assert_eq!(problems[0].code, Code::BuiltinShadow),
+    }
+    let stringed = "<?php\n$note = \"// lintel-ignore-file\";\nreturn <Header title=\"Hi\" />;\n";
+    match compile_src(stringed) {
+        Ok(php) => panic!("a string containing it must not suppress: {php}"),
+        Err(problems) => assert_eq!(problems[0].code, Code::BuiltinShadow),
+    }
+}
+
+#[test]
+fn the_file_directive_is_position_independent() {
+    // Unlike the one-line `ignore-next` window, the file-level flag covers
+    // the whole file no matter where the comment sits — even on the last
+    // line, where a window would be inert.
+    let src = "<?php\nreturn <Header title=\"Hi\" />;\n// lintel-ignore-file";
+    compile_src(src).expect("a trailing file directive still suppresses");
+}
+
+#[test]
+fn parse_errors_are_never_file_suppressed() {
+    // Safety property, shared with `ignore-next`: LNT01xx diagnostics abort
+    // the compile before validation, so a file-level flag cannot hide a
+    // misparse behind a clean exit.
+    let src = "<?php\n// lintel-ignore-file\nreturn <div>unclosed</span>;\n";
+    match compile_src(src) {
+        Ok(php) => panic!("parse errors are not suppressible: {php}"),
+        Err(problems) => assert_eq!(problems[0].code, Code::MismatchedClose),
+    }
+}
+
+#[test]
+fn file_suppression_short_circuits_the_rule_walk() {
+    // At the raw seam: a file-suppressed context yields no diagnostics
+    // without running any rule — a rule that flags everything fires zero
+    // times, because the walk never happens.
+    struct FlagEverything;
+
+    impl lintel_core::ValidationRule for FlagEverything {
+        fn check(
+            &self,
+            node: &lintel_core::ast::Node,
+            _context: &ScanContext,
+            out: &mut Vec<lintel_core::Diagnostic>,
+        ) {
+            if let lintel_core::ast::Node::Element(element) = node {
+                out.push(lintel_core::Diagnostic::new(
+                    Code::BadAttr,
+                    format!("flagged `<{}>`", element.name),
+                    element.offset,
+                ));
+            }
+        }
+    }
+
+    let src = "<?php\n// lintel-ignore-file\nreturn <Header title=\"Hi\" />;\n";
+    let parsed = lintel_core::scan::scan(src);
+    assert!(parsed.context.file_suppressed(), "the scanner set the flag");
+    let problems =
+        lintel_core::validate::validate_with(&parsed.roots, &parsed.context, &[&FlagEverything]);
+    assert!(problems.is_empty(), "the walk never ran: {problems:?}");
+
+    let unsuppressed = lintel_core::scan::scan("<?php\nreturn <Header title=\"Hi\" />;\n");
+    assert!(!unsuppressed.context.file_suppressed(), "control: no flag");
+    assert_eq!(
+        lintel_core::validate::validate_with(
+            &unsuppressed.roots,
+            &unsuppressed.context,
+            &[&FlagEverything]
+        )
+        .len(),
+        1,
+        "without the directive the rule fires"
+    );
+}
+
+#[test]
+fn scan_context_file_flag_round_trip() {
+    let mut context = ScanContext::default();
+    assert!(!context.file_suppressed(), "default is unsuppressed");
+    context.suppress_file();
+    assert!(context.file_suppressed(), "suppress_file latches the flag");
 }
