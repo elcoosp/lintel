@@ -94,6 +94,20 @@ fn warned_handlers_source() -> String {
     src
 }
 
+/// Component invocations checked against an in-file signature (doc §17.1):
+/// every prop matches a declared parameter, so the file compiles cleanly —
+/// measures the signature-capture and prop-lookup path against the
+/// unchecked cost of undeclared components.
+fn signature_checked_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Row(string $label, bool $active = false): Html {\n    return <b>{$label}</b>;\n}\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(src, "echo <Row label=\"cell {i}\" active />;");
+    }
+    src
+}
+
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("compile");
     group.sample_size(30);
@@ -115,6 +129,13 @@ fn bench(c: &mut Criterion) {
         };
         b.iter(|| compile(black_box(&src), black_box(&opts)));
     });
+    group.bench_function("stream_component_tree", |b| {
+        let src = component_source();
+        let opts = Options {
+            target: Target::Stream,
+        };
+        b.iter(|| compile(black_box(&src), black_box(&opts)));
+    });
     group.bench_function("static_heavy", |b| {
         let src = static_heavy_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
@@ -125,6 +146,10 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("warned_handlers", |b| {
         let src = warned_handlers_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("signature_checked", |b| {
+        let src = signature_checked_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
 
