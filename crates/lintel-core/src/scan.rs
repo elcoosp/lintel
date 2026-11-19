@@ -776,10 +776,18 @@ impl<'s> Scanner<'s> {
                     self.skip_ws();
                     self.expect(b'>')?;
                     if name != parent {
-                        return self.fail(
+                        // A near-miss spelling of the open tag gets a
+                        // "did you mean" help line (§21.1); an unrelated
+                        // name must not guess.
+                        let mut problem = Diagnostic::new(
                             Code::MismatchedClose,
                             format!("expected </{parent}>, found </{name}>"),
+                            self.pos,
                         );
+                        if let Some(help) = close_tag_help(&name, parent) {
+                            problem = problem.with_help(help);
+                        }
+                        return Err(problem);
                     }
                     return Ok(out);
                 }
@@ -1204,6 +1212,56 @@ fn first_dollar_identifier(segment: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+/// The `did you mean` help for a mismatched close tag (§21.1): when the
+/// written name is a near-miss of the open tag actually in scope — same
+/// first character and a small edit distance — the diagnostic names the
+/// correct spelling; anything else returns `None` so the plain message
+/// stands alone and never guesses.
+fn close_tag_help(found: &str, expected: &str) -> Option<String> {
+    if !found.starts_with(expected.chars().next()?) {
+        return None;
+    }
+    // Short names tolerate one edit; four or more bytes tolerate two, which
+    // covers transpositions (`</sapn>` for `</span>`).
+    let limit = if found.len().min(expected.len()) < 4 {
+        1
+    } else {
+        2
+    };
+    let distance = bounded_edit_distance(found, expected, limit)?;
+    Some(format!(
+        "did you mean `</{expected}>`? ({distance} edit(s) away)"
+    ))
+}
+
+/// Bounded Levenshtein distance between two tag names: `None` as soon as
+/// every cell of the active row exceeds `limit`, so wildly different names
+/// cost O(len) and never produce a suggestion.
+fn bounded_edit_distance(a: &str, b: &str, limit: usize) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > limit {
+        return None;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur: Vec<usize> = vec![0; b.len() + 1];
+    for (i, a_char) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        let mut row_min = cur[0];
+        for j in 1..=b.len() {
+            let cost = usize::from(a_char != &b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            row_min = row_min.min(cur[j]);
+        }
+        if row_min > limit {
+            return None;
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    let distance = prev[b.len()];
+    (distance <= limit).then_some(distance)
 }
 
 /// Find `tag` in `rest` where the match is followed by whitespace or EOF
