@@ -62,16 +62,22 @@ that runs under OPcache with the author's line numbers preserved.
   diagnostic in the file (the rule walk short-circuits); parse errors are
   never suppressible. See
   [`docs/ignore-directives.md`](docs/ignore-directives.md).
-- **Escape elision** — dynamic children that are provably scalar at compile
-  time (`(int)`/`(integer)`/`(float)`/`(double)` casts spanning the whole
-  expression, `count()` calls) fold to the raw PHP expression instead of
-  the `\Lintel\c()` helper, on both markup targets; everything else keeps
-  the helper, conservative by design (doc §7.3 "honest version"). See
+- **Escape elision** — dynamic children that are provably safe at compile
+  time fold without the generic `\Lintel\c()` helper, on both markup
+  targets: provably-scalar children (`(int)`/`(integer)`/`(float)`/`(double)`
+  casts spanning the whole expression, `count()` calls) fold to the raw PHP
+  expression, and children that are exactly a parameter the enclosing
+  function declares as a non-nullable `string` fold to a direct
+  `\htmlspecialchars(...)` call (the scanner tracks the enclosing function
+  scope and unproves any name the body can rebind, conservative by design —
+  doc §7.3 "honest version"). See
   [`docs/escape-elision.md`](docs/escape-elision.md).
-- **`lintel` CLI (T-10 subset)** — `lintel build` compiles files/directories
-  to stdout, `--out DIR` or `--in-place`; `lintel check` is the
-  diagnostics-only CI gate (exit 1 on errors, warnings advisory). Sources
-  walk in path order; diagnostics render through the same
+- **`lintel` CLI (T-10 subset)** — `lintel init [DIR]` scaffolds a runnable
+  demo page and compiles it in the same command (no clobber); `lintel
+  build` compiles files/directories to stdout, `--out DIR` or
+  `--in-place`; `lintel check` is the diagnostics-only CI gate (exit 1 on
+  errors, warnings advisory). Sources are collected in deterministic
+  sorted-path order; diagnostics render through the same
   [`Diagnostic::render`](crates/lintel-diag/src/lib.rs) snippets.
 
 ## Quick start
@@ -90,6 +96,7 @@ cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next direc
 cargo run -p lintel-core --example ignore_file       # lintel-ignore-file directive
 cargo run -p lintel-core --example srcset_attr       # srcset per-URL attribute routing
 cargo run -p lintel-core --example elision          # escape elision of scalar children
+cargo run -p lintel-core --example typed_elision    # typed-parameter direct-escape fold
 cargo run -p lintel-core --example parse_errors     # parse diagnostics + did-you-mean
 cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
 cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
@@ -98,7 +105,9 @@ cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 cargo run -p lintel-cli --example build_library    # the CLI engine as a library
 cargo run -p lintel-cli --example json_diagnostics # --format=json machine-readable diagnostics
+cargo run -p lintel-cli --example init_demo        # `lintel init`: scaffold + compile a runnable demo
 cargo install --path crates/lintel-cli             # install the `lintel` binary
+lintel init my-demo                                # scaffold + compile a runnable demo page
 lintel build page.lintel.php                       # compile to stdout
 lintel check src/                                  # diagnostics-only CI gate
 ```
@@ -139,9 +148,10 @@ docs/node-visitor.md  exact read-only AST traversal contract
 ## Status
 
 The compiler core, the three lowering targets, the validation pass, the
-`lintel-ignore-*` directives, escape elision, the machine-readable JSON
-diagnostics, the `NodeVisitor` read traversal and the minimal `lintel`
-build/check CLI run today. The remaining CLI surface (watch/init/daemon),
+`lintel-ignore-*` directives, escape elision (scalar folds and the
+typed-parameter direct escape), the machine-readable JSON diagnostics, the
+`NodeVisitor` read traversal and the minimal `lintel`
+init/build/check CLI run today. The remaining CLI surface (watch/daemon),
 WASM playground, LSP, PHP runtime and the PHP rendering benchmark harness
 (§9.2) are future milestones (see `docs/architecture.md` §15 task cards and
 §21 status table) — the criterion compiler-throughput benches in
