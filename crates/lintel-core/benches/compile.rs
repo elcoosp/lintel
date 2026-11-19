@@ -87,7 +87,7 @@ fn warned_handlers_source() -> String {
     for i in 0..20 {
         let _ = writeln!(
             src,
-            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+            "        <button onclick=\"track('row-{i}')\">action {i}</button>"
         );
     }
     src.push_str("    </section>;\n}\n");
@@ -106,7 +106,7 @@ fn suppressed_handlers_source() -> String {
         let _ = writeln!(src, "        // lintel-ignore-next: legacy handler {i}");
         let _ = writeln!(
             src,
-            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+            "        <button onclick=\"track('row-{i}')\">action {i}</button>"
         );
     }
     src.push_str("    </section>;\n}\n");
@@ -125,7 +125,7 @@ fn file_suppressed_handlers_source() -> String {
     for i in 0..20 {
         let _ = writeln!(
             src,
-            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+            "        <button onclick=\"track('row-{i}')\">action {i}</button>"
         );
     }
     src.push_str("    </section>;\n}\n");
@@ -341,5 +341,72 @@ fn sourcemap_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, sourcemap_bench);
+/// Machine-readable diagnostic emission (the `--format=json` CLI path, built
+/// on the `lintel_diag::Diagnostic::to_json` seam — see
+/// `docs/diagnostics-json.md`): compile the warned-handlers file, then emit
+/// one JSON object per warning — the per-diagnostic cost a CI log or editor
+/// pipe pays, `SourceMap` position lookup and escaping included.
+fn json_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("json");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("warning_emission", |b| {
+        let src = warned_handlers_source();
+        let warnings: Vec<lintel_core::Diagnostic> =
+            compile(black_box(&src), black_box(&Options::default()))
+                .expect("warned handlers compile")
+                .warnings;
+        // The source builders drift-checked (rustc accepts a lone `}` in a
+        // format string, which once turned these static strings into dynamic
+        // handlers and silently measured the rejection path instead).
+        assert_eq!(warnings.len(), 20, "warned handlers carry 20 LNT0302");
+        b.iter(|| {
+            for warning in &warnings {
+                black_box(warning.to_json(black_box(&src)));
+            }
+        });
+    });
+
+    group.finish();
+}
+
+/// The `NodeVisitor` read traversal (`docs/node-visitor.md` seam): walk the
+/// component tree counting elements — the pure-AST read cost an LSP or
+/// metrics consumer pays, with no lowering and no validation work.
+struct ElementCounter {
+    elements: usize,
+}
+
+impl lintel_core::NodeVisitor for ElementCounter {
+    fn visit(&mut self, node: &lintel_core::ast::Node) {
+        if matches!(node, lintel_core::ast::Node::Element(_)) {
+            self.elements += 1;
+        }
+    }
+}
+
+fn visitor_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("visitor");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("element_count_walk", |b| {
+        let src = component_source();
+        let parsed = lintel_core::scan::scan(black_box(&src));
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_eq!(parsed.roots.len(), 1, "the component tree is one root");
+        b.iter(|| {
+            let mut counter = ElementCounter { elements: 0 };
+            lintel_core::visit_roots(black_box(&parsed.roots), &mut counter);
+            black_box(counter.elements);
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench, sourcemap_bench, json_bench, visitor_bench);
 criterion_main!(benches);
