@@ -25,7 +25,7 @@ use std::io::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use lintel_core::{compile, Diagnostic, Options, Target};
+use lintel_core::{builtin_rule_metas, compile, Diagnostic, Options, Target};
 
 /// The usage text `lintel --help` prints and usage errors point at.
 pub const USAGE: &str = "\
@@ -35,6 +35,7 @@ USAGE:
     lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place]
     lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
     lintel stats <paths>... [--format=text|json]
+    lintel rules [--format=text|json]
     lintel init [DIR]
     lintel --help | --version
 
@@ -47,6 +48,10 @@ COMMANDS:
     check    compile diagnostics-only; exit 1 when any error-severity diagnostic fires
     stats    report each file's component shape (declared + invoked) without
              emitting PHP; exit 1 only when a file fails to parse
+    rules    list the built-in validation rules — one `<id> <LNTxxxx codes>
+             <summary>` line per rule in registry order, or one JSON object
+             per rule with --format=json (docs/rule-registry.md); takes no
+             paths, exit 0
     init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php
 
 FLAGS:
@@ -156,6 +161,13 @@ enum Invocation {
     Init {
         path: PathBuf,
     },
+    /// `lintel rules`: the built-in validation registry's machine-readable
+    /// listing (`docs/rule-registry.md`), rendered to stdout in the
+    /// requested [`Format`]; compile-time knowledge, so no paths are taken
+    /// and the exit code is always 0.
+    Rules {
+        format: Format,
+    },
     Help,
     Version,
 }
@@ -230,6 +242,7 @@ pub fn run(
             )?;
             Ok(0)
         }
+        Invocation::Rules { format } => rules(format, stdout),
     }
 }
 
@@ -297,9 +310,12 @@ fn parse_args(
                 index += 1;
                 parsed.format = parse_format(value)?;
             }
-            s if s.starts_with("--out=") => {
+            s if s.starts_with("--out=") && is_build => {
                 parsed.out_seen = true;
                 parsed.destination = Destination::Dir(PathBuf::from(&s["--out=".len()..]));
+            }
+            s if s.starts_with("--out=") => {
+                return Err(CliError("--out is a `build` flag".into()));
             }
             "--out" if is_build => {
                 let Some(value) = args.get(index) else {
@@ -330,13 +346,20 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
         "--help" | "-h" => return Ok(Invocation::Help),
         "--version" => return Ok(Invocation::Version),
         "build" | "check" | "stats" => {}
+        "rules" => {
+            let format = match parse_rules(&args[1..])? {
+                ControlFlow::Break(invocation) => return Ok(invocation),
+                ControlFlow::Continue(format) => format,
+            };
+            return Ok(Invocation::Rules { format });
+        }
         "init" => {
             let path = parse_init(&args[1..])?;
             return Ok(Invocation::Init { path });
         }
         other => {
             return Err(CliError(format!(
-                "unknown command `{other}`: expected build, check, stats or init"
+                "unknown command `{other}`: expected build, check, stats, rules or init"
             )))
         }
     }
@@ -377,6 +400,44 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             format: parsed.format,
         }),
     }
+}
+
+/// Parse the `rules` invocation: the registry listing takes no paths and
+/// only the shared `--format` flag (plus the global `--help`/`--version`
+/// short-circuits) — the registry is compile-time knowledge, so path,
+/// target and output flags have nothing to annotate
+/// (`docs/rule-registry.md`).
+fn parse_rules(args: &[String]) -> Result<ControlFlow<Invocation, Format>, CliError> {
+    let mut format = Format::default();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--help" | "-h" => return Ok(ControlFlow::Break(Invocation::Help)),
+            "--version" => return Ok(ControlFlow::Break(Invocation::Version)),
+            s if s.starts_with("--format=") => {
+                format = parse_format(&s["--format=".len()..])?;
+            }
+            "--format" => {
+                let Some(value) = args.get(index) else {
+                    return Err(CliError("--format needs a value: text or json".into()));
+                };
+                index += 1;
+                format = parse_format(value)?;
+            }
+            s if s.starts_with('-') => {
+                return Err(CliError(format!("unknown flag `{s}`: see `lintel --help`")))
+            }
+            path => {
+                return Err(CliError(format!(
+                    "`lintel rules` takes no paths (the registry is compile-time knowledge): \
+                     got `{path}`"
+                )))
+            }
+        }
+    }
+    Ok(ControlFlow::Continue(format))
 }
 
 /// Parse the `init` invocation: `lintel init [DIR]` takes no flags and at
@@ -461,6 +522,36 @@ fn walk_dir(dir: &Path, sources: &mut Vec<PathBuf>) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Render the built-in rule-registry listing to `stdout`
+/// (`docs/rule-registry.md`): text = one `<id> <codes> <summary>` line per
+/// rule in registry order (comma-joined `LNTxxxx` codes), JSON = one
+/// [`lintel_core::RuleMeta::to_json`] object per line. The listing never
+/// scans sources, so the exit code is always 0; a broken/injected sink
+/// fails the run like `--help` does.
+fn rules(format: Format, stdout: &mut dyn Write) -> Result<i32, CliError> {
+    let mut out = String::new();
+    match format {
+        Format::Text => {
+            for meta in builtin_rule_metas() {
+                let codes = meta
+                    .codes
+                    .iter()
+                    .map(|code| code.lnt())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let _ = writeln!(out, "{} {codes} {}", meta.id, meta.summary);
+            }
+        }
+        Format::Json => {
+            for meta in builtin_rule_metas() {
+                let _ = writeln!(out, "{}", meta.to_json());
+            }
+        }
+    }
+    stdout.write_all(out.as_bytes())?;
+    Ok(0)
 }
 
 /// Compile every source with `build` semantics: PHP goes to the
@@ -767,6 +858,17 @@ pub struct InitReport {
     pub lines: usize,
 }
 
+/// The usage-style error for a demo source that does not compile: each
+/// problem's human headline (`error[LNTxxxx]: …`), one per line, instead
+/// of a `Debug` dump — the same shape a failed `lintel check` renders.
+fn compile_problems_error(problems: &[Diagnostic]) -> CliError {
+    let mut message = String::from("the demo source does not compile:");
+    for problem in problems {
+        let _ = write!(message, "\n  {}", problem.headline());
+    }
+    CliError(message)
+}
+
 /// Scaffold the runnable demo (task-card T-10 acceptance): write
 /// [`DEMO_SOURCE`] into `target_dir` as [`DEMO_SOURCE_NAME`], creating
 /// missing directories, and compile it once to [`DEMO_COMPILED_NAME`] so a
@@ -792,7 +894,7 @@ pub fn init(target_dir: &Path) -> Result<InitReport, CliError> {
     fs::create_dir_all(target_dir)?;
     fs::write(&source, DEMO_SOURCE)?;
     let compiled_php = compile(DEMO_SOURCE, &Options::default())
-        .map_err(|problems| CliError(format!("the demo source does not compile: {problems:?}")))?
+        .map_err(|problems| compile_problems_error(&problems))?
         .php;
     let compiled = target_dir.join(DEMO_COMPILED_NAME);
     fs::write(&compiled, compiled_php)?;
@@ -801,4 +903,35 @@ pub fn init(target_dir: &Path) -> Result<InitReport, CliError> {
         source,
         compiled,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_problems_error;
+    use lintel_core::{Code, Diagnostic};
+
+    #[test]
+    fn demo_compile_failures_render_human_headlines() {
+        let problems = vec![
+            Diagnostic::new(Code::MissingRequiredProp, "missing `$label`", 3),
+            Diagnostic::new(Code::BadAttr, "bad attribute", 7),
+        ];
+        let message = compile_problems_error(&problems).0;
+        assert!(
+            message.starts_with("the demo source does not compile:"),
+            "{message}"
+        );
+        assert!(
+            message.contains("error[LNT0205]: missing `$label`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("error[LNT0103]: bad attribute"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("Diagnostic {"),
+            "no Debug dump: {message}"
+        );
+    }
 }
