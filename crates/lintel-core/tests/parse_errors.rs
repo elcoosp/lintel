@@ -75,3 +75,46 @@ fn clean_sources_report_no_diagnostics() {
         }
     }
 }
+
+/// "Did you mean" close-tag suggestions (the `LNT0102` weak-error cleanup
+/// flagged open in `docs/architecture.md` §21.1): a near-miss close tag
+/// carries a `help:` line naming the open tag that was actually in scope;
+/// an unrelated name stands alone.
+
+#[test]
+fn mismatched_close_suggests_a_near_miss_spelling() {
+    let src = "<?php\nreturn <span>text</sapn>;\n";
+    let problems = expect_code(src, Code::MismatchedClose);
+    let help = problems[0]
+        .help
+        .as_deref()
+        .expect("a suggestion is attached");
+    assert!(help.contains("`</span>`"), "{help}");
+    assert!(help.contains("did you mean"), "{help}");
+}
+
+#[test]
+fn mismatched_close_suggests_a_prefix_or_suffix_typo() {
+    let src = "<?php\nreturn <div>x</divx>;\n";
+    let problems = expect_code(src, Code::MismatchedClose);
+    assert!(
+        problems[0]
+            .help
+            .as_deref()
+            .unwrap_or_default()
+            .contains("`</div>`"),
+        "{:?}",
+        problems[0].help
+    );
+}
+
+#[test]
+fn unrelated_close_tags_get_no_suggestion() {
+    let src = "<?php\nreturn <span>text</div>;\n";
+    let problems = expect_code(src, Code::MismatchedClose);
+    assert!(
+        problems[0].help.is_none(),
+        "an unrelated name must not guess: {:?}",
+        problems[0].help
+    );
+}
