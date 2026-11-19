@@ -300,6 +300,45 @@ impl ScanContext {
         let needle = name.to_lowercase();
         self.declared.contains(&needle)
     }
+
+    /// Merge `other`'s declaration tables into a copy of `self` for
+    /// cross-file signature checks (`docs/cross-file-signatures.md`): the
+    /// declared-function set and the signature table union, with `self`
+    /// — the file being validated — winning case-insensitive name
+    /// collisions and keeping its declaration order, while `other`'s new
+    /// entries append in their own declaration order. Suppression state is
+    /// deliberately **not** merged: the `lintel-ignore-next` windows are
+    /// byte ranges of *their own* source and the `lintel-ignore-file` flag
+    /// silences one file, so neither fact is meaningful in another file's
+    /// coordinate space. The merge is read-only on both inputs and
+    /// documented non-commutative: `a.merged_with(&b)` resolves
+    /// [`ScanContext::signature_of`]/[`ScanContext::declares_function`]
+    /// lookups against `a`'s tables first, the way PHP resolves a call in
+    /// the file it appears in.
+    #[must_use]
+    pub fn merged_with(&self, other: &ScanContext) -> ScanContext {
+        let mut merged = ScanContext {
+            declared: self.declared.clone(),
+            signatures: self.signatures.clone(),
+            suppressions: Vec::new(),
+            file_suppressed: false,
+        };
+        for name in &other.declared {
+            if !merged.declared.contains(name) {
+                merged.declared.push(name.clone());
+            }
+        }
+        for (name, signature) in &other.signatures {
+            let known = merged
+                .signatures
+                .iter()
+                .any(|(existing, _)| existing.to_lowercase() == name.to_lowercase());
+            if !known {
+                merged.signatures.push((name.clone(), signature.clone()));
+            }
+        }
+        merged
+    }
 }
 
 /// Scan a full `.lintel.php` source into its transpiled PHP and AST roots,
