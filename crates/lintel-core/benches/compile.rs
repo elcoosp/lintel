@@ -164,6 +164,24 @@ fn srcset_attrs_source() -> String {
     src
 }
 
+/// A stats page whose dynamic children are all provably scalar — `(int)`
+/// casts and `count()` calls (doc §7.3 escape elision, `docs/escape-elision.md`):
+/// measures the elision path (raw-expression folding, no `\Lintel\c()`)
+/// against the helper-wrapped `static_heavy` dynamic slots.
+fn elided_children_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Stats(array $rows, array $counts): Html {\n    return <main class=\"stats\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <p>{{(int)$counts[{i}]}} of {{count($rows)}} rows rendered</p>"
+        );
+    }
+    src.push_str("    </main>;\n}\n");
+    src
+}
+
 /// The same signature-checked file, but every invocation omits the required
 /// `$label` parameter — measures the required-parameter rejection path
 /// (LNT0205) against the clean `signature_checked` cost.
@@ -241,6 +259,10 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("srcset_attrs", |b| {
         let src = srcset_attrs_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("elided_children", |b| {
+        let src = elided_children_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
     group.bench_function("rejected_handlers", |b| {
