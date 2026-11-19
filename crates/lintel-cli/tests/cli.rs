@@ -226,7 +226,7 @@ fn usage_errors_cover_flags_paths_and_modes() {
     let dir = scratch("usage");
     let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
     let path = source.to_str().expect("utf8 path");
-    assert_eq!(usage_error(&[]), "missing command: build or check");
+    assert_eq!(usage_error(&[]), "missing command: build, check or stats");
     assert!(usage_error(&["compile", path]).contains("unknown command `compile`"));
     assert!(usage_error(&["build", "--wat", path]).contains("unknown flag `--wat`"));
     assert!(usage_error(&["build", "--target=go", path]).contains("unknown target `go`"));
@@ -371,4 +371,130 @@ fn format_accepts_a_separate_word_and_rejects_unknown_values() {
     assert!(usage_error(&["check", "--format=xml", path]).contains("unknown format `xml`"));
     assert!(usage_error(&["build", path, "--format"]).contains("--format needs a value"));
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A file with one declared component (a required and an optional
+/// parameter) and two invocations — the second from a component declared
+/// in another file.
+const STATS_SOURCE: &str = "\
+<?php
+function Card(string $title, int $count = 0): Html {
+    return <div class=\"card\">{$title}</div>;
+}
+echo <Card title=\"hi\">text</Card>;
+echo <Grid rows={$rows} />;
+";
+
+#[test]
+fn stats_prints_declared_and_invoked_components_as_text() {
+    let dir = scratch("stats-text");
+    let source = write_source(&dir, "Page.lintel.php", STATS_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["stats", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stderr, "", "stats is not a linter: no diagnostics here");
+    // One section per file: the path header, then the declared table and
+    // the invocation list (`!` marks a required parameter; `...` marks the
+    // variadic tail).
+    assert!(stdout.contains("Page.lintel.php\n"), "{stdout}");
+    assert!(
+        stdout.contains("  declared Card(title!, count)\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  invoke <Card> at 5:6 props: title; children\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  invoke <Grid> at 6:6 props: rows; undeclared\n"),
+        "{stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_json_is_one_object_per_file_with_the_file_field() {
+    let dir = scratch("stats-json");
+    let source = write_source(&dir, "Page.lintel.php", STATS_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "stats",
+        "--format=json",
+        source.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stderr, "");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "one JSON object per file: {stdout}");
+    assert!(
+        lines[0].starts_with("{\"file\":\""),
+        "the file field leads: {}",
+        lines[0]
+    );
+    assert!(lines[0].contains("\"name\":\"Card\""), "{}", lines[0]);
+    assert!(
+        lines[0].contains("\"declared_in_file\":true"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("\"declared_in_file\":false"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("\"variadic\":false"), "{}", lines[0]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_reports_parse_errors_and_fails_the_run() {
+    let dir = scratch("stats-parse-error");
+    let bad = write_source(&dir, "Bad.lintel.php", "<?php\nreturn <b>unclosed;\n");
+    let (code, stdout, stderr) = run_cli(&["stats", bad.to_str().expect("utf8 path")]);
+    assert_eq!(code, 1, "a parse error fails the stats run");
+    assert_eq!(stdout, "", "a failed file prints no report section");
+    assert!(stderr.contains("error[LNT0101]"), "{stderr}");
+    // The JSON format renders the same diagnostics as JSON lines on stderr.
+    let (code, stdout, stderr) =
+        run_cli(&["stats", "--format=json", bad.to_str().expect("utf8 path")]);
+    assert_eq!(code, 1);
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("\"code\":\"LNT0101\""), "{stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_is_not_a_linter() {
+    // `ERROR_SOURCE` fails `lintel check` (the dynamic-handler `LNT0301`
+    // error); `stats` runs the scanner only and reports the file's shape.
+    let dir = scratch("stats-not-a-linter");
+    let source = write_source(&dir, "Handlers.lintel.php", ERROR_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["stats", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stderr, "");
+    assert!(stdout.contains("Handlers.lintel.php\n"), "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_walks_directories_in_sorted_order() {
+    let dir = scratch("stats-dirs");
+    let sub = dir.join("sub");
+    fs::create_dir_all(&sub).expect("creates subdir");
+    write_source(&dir, "Zeta.lintel.php", STATS_SOURCE);
+    write_source(&sub, "Alpha.lintel.php", STATS_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["stats", dir.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let zeta = stdout.find("Zeta.lintel.php").expect("zeta section");
+    let alpha = stdout.find("Alpha.lintel.php").expect("alpha section");
+    // The documented `collect_sources` contract sorts by **full path** for
+    // deterministic output: byte-wise, `dir/Zeta…` (0x5A) precedes
+    // `dir/sub/Alpha…` (0x73) even though the walk visits the subdir first.
+    assert!(zeta < alpha, "sections are sorted by full path: {stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stats_usage_errors_follow_the_shared_contract() {
+    assert!(usage_error(&["stats"]).contains("needs at least one path"));
+    assert!(usage_error(&["stats", "--out", "dist", "x"]).contains("is a `build` flag"));
+    assert!(usage_error(&["stats", "--format=yaml", "x"]).contains("unknown format"));
 }
