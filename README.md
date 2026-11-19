@@ -56,6 +56,14 @@ that runs under OPcache with the author's line numbers preserved.
   validation pass walks — so LSP features, metrics and doc generators do
   not re-implement the recursion. The contract lives in
   [`docs/node-visitor.md`](docs/node-visitor.md).
+- **Component inventory** — a read-only shape report
+  ([`collect_inventory`](crates/lintel-core/src/inventory.rs)) over one
+  scanned file: every declared component with its parameter list and every
+  invocation site with its byte offset, prop names and children/spread/
+  in-file flags, plus a one-line JSON emitter under the same contract as
+  the diagnostics. Outlines, metrics and dashboards consume the compiler's
+  own data instead of re-walking the roots; the contract lives in
+  [`docs/component-inventory.md`](docs/component-inventory.md).
 - **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
   comment drops the validation diagnostics anchored on the following line,
   and the file-level `// lintel-ignore-file` drops every validation
@@ -76,7 +84,9 @@ that runs under OPcache with the author's line numbers preserved.
   demo page and compiles it in the same command (no clobber); `lintel
   build` compiles files/directories to stdout, `--out DIR` or
   `--in-place`; `lintel check` is the diagnostics-only CI gate (exit 1 on
-  errors, warnings advisory). Sources are collected in deterministic
+  errors, warnings advisory); `lintel stats` reports each file's component
+  shape (declared + invoked, text or `--format=json`) without compiling
+  PHP — exit 1 only on parse errors. Sources are collected in deterministic
   sorted-path order; diagnostics render through the same
   [`Diagnostic::render`](crates/lintel-diag/src/lib.rs) snippets.
 
@@ -102,14 +112,17 @@ cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custo
 cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
 cargo run -p lintel-core --example custom_visitor   # NodeVisitor seam: walk the AST
 cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
+cargo run -p lintel-core --example inventory        # component inventory: declared + invoked
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 cargo run -p lintel-cli --example build_library    # the CLI engine as a library
 cargo run -p lintel-cli --example json_diagnostics # --format=json machine-readable diagnostics
 cargo run -p lintel-cli --example init_demo        # `lintel init`: scaffold + compile a runnable demo
+cargo run -p lintel-cli --example stats_library    # `lintel stats`: the component shape report as a library
 cargo install --path crates/lintel-cli             # install the `lintel` binary
 lintel init my-demo                                # scaffold + compile a runnable demo page
 lintel build page.lintel.php                       # compile to stdout
 lintel check src/                                  # diagnostics-only CI gate
+lintel stats src/                                  # per-file component shape report (text or --format=json)
 ```
 
 ```rust
@@ -143,6 +156,7 @@ docs/escape-elision.md  exact provably-scalar child folding contract
 docs/ignore-directives.md  exact suppression directive contracts
 docs/diagnostics-json.md  exact machine-readable diagnostic contract
 docs/node-visitor.md  exact read-only AST traversal contract
+docs/component-inventory.md  exact component shape-report contract
 ```
 
 ## Status
@@ -150,8 +164,9 @@ docs/node-visitor.md  exact read-only AST traversal contract
 The compiler core, the three lowering targets, the validation pass, the
 `lintel-ignore-*` directives, escape elision (scalar folds and the
 typed-parameter direct escape), the machine-readable JSON diagnostics, the
-`NodeVisitor` read traversal and the minimal `lintel`
-init/build/check CLI run today. The remaining CLI surface (watch/daemon),
+`NodeVisitor` read traversal, the component-inventory shape report and the
+minimal `lintel`
+init/build/check/stats CLI run today. The remaining CLI surface (watch/daemon),
 WASM playground, LSP, PHP runtime and the PHP rendering benchmark harness
 (§9.2) are future milestones (see `docs/architecture.md` §15 task cards and
 §21 status table) — the criterion compiler-throughput benches in
