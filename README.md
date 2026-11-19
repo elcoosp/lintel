@@ -17,7 +17,7 @@ that runs under OPcache with the author's line numbers preserved.
   boolean, spread), raw-text `<script>`/`<style>` bodies.
 - **Three lowering targets** ([`Target`](crates/lintel-core/src/lib.rs)):
   - `String` (default) — `new \Lintel\Html(...)` string-concat AOT with the
-    context-aware `\Lintel\c/a/u/cls/sty/attrs` runtime helpers.
+    context-aware `\Lintel\c/a/u/cls/sty/srcset/attrs` runtime helpers.
   - `Stream` — streaming SSR: the root becomes an immediately-invoked
     `static function (): \Generator` closure yielding markup one chunk at a
     time; see [`docs/stream-alignment.md`](docs/stream-alignment.md).
@@ -43,8 +43,10 @@ that runs under OPcache with the author's line numbers preserved.
   [`SourceMap`](crates/lintel-diag/src/lib.rs) — the offset→position
   converter CLI/LSP consumers previously had to re-implement.
 - **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
-  comment drops the validation diagnostics anchored on the following line;
-  parse errors are never suppressible. See
+  comment drops the validation diagnostics anchored on the following line,
+  and the file-level `// lintel-ignore-file` drops every validation
+  diagnostic in the file (the rule walk short-circuits); parse errors are
+  never suppressible. See
   [`docs/ignore-directives.md`](docs/ignore-directives.md).
 
 ## Quick start
@@ -60,6 +62,8 @@ cargo run -p lintel-core --example security_lint   # rendered diagnostics
 cargo run -p lintel-core --example warnings_lint   # warning diagnostics
 cargo run -p lintel-core --example signature_lint  # signature validation
 cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next directives
+cargo run -p lintel-core --example ignore_file       # lintel-ignore-file directive
+cargo run -p lintel-core --example srcset_attr       # srcset per-URL attribute routing
 cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
 cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
 cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
@@ -91,12 +95,15 @@ crates/lintel-diag   stable LNT codes, miette-style renderer, severities
 docs/architecture.md master plan + §21 implementation status
 docs/rfc-alignment.md  exact `rfc` lowering contract
 docs/stream-alignment.md  exact `stream` lowering contract
-docs/ignore-directives.md  exact `lintel-ignore-next` contract
+docs/srcset-alignment.md  exact `srcset` attribute routing contract
+docs/ignore-directives.md  exact suppression directive contracts
 ```
 
 ## Status
 
-CLI, WASM playground, LSP, PHP runtime and the benchmark harness are future
-milestones (see `docs/architecture.md` §15 task cards and §21 status table).
-The clippy gate is `cargo clippy --workspace --all-targets --all-features --
+CLI, WASM playground, LSP, PHP runtime and the PHP rendering benchmark
+harness (§9.2) are future milestones (see `docs/architecture.md` §15 task
+cards and §21 status table) — the criterion compiler-throughput benches in
+`crates/lintel-core/benches/` already run today. The clippy gate is
+`cargo clippy --workspace --all-targets --all-features --
 -D warnings -W clippy::pedantic` with zero warnings.
