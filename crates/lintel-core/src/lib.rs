@@ -53,7 +53,16 @@
 //! the CLI's `stats` command — use the [`inventory`] seam
 //! ([`collect_inventory`]): every declared component with its signature and
 //! every invocation site with its position and props, in one read-only
-//! report (`docs/component-inventory.md`).
+//! report (`docs/component-inventory.md`). Consumers that list what a
+//! validation registry enforces — docs-site generators, editor
+//! integrations, CI reporters — use the rule-registry seam
+//! ([`RuleMeta`] + [`builtin_rule_metas`]/[`registry_metas`]): every
+//! rule's stable id, emitted `LNTxxxx` codes and one-line summary
+//! (`docs/rule-registry.md`). Consumers validating one file against
+//! components declared in other files fold the tables together with
+//! [`scan::ScanContext::merged_with`] — the cross-file signature seam the
+//! same-file boundary rules respected until then
+//! (`docs/cross-file-signatures.md`).
 
 pub mod ast;
 pub mod emit;
@@ -65,7 +74,7 @@ pub mod validate;
 pub use ast::{visit_node, visit_roots, NodeVisitor};
 pub use inventory::{collect_inventory, DeclaredComponent, FileInventory, Invocation};
 pub use lintel_diag::{json_escape, Code, Diagnostic, Severity, SourceMap};
-pub use validate::{builtin_rules, ValidationRule};
+pub use validate::{builtin_rule_metas, builtin_rules, registry_metas, RuleMeta, ValidationRule};
 
 /// Output lowering target (doc 5.3).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
