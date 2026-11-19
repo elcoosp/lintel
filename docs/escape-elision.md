@@ -1,15 +1,17 @@
-# Escape elision: provably-scalar children fold without the `c()` helper
+# Escape elision: provably-safe children fold without the `c()` helper
 
 > Architecture doc §7.3 ("Escape elision (honest version)") plans a v0.1
 > compiler-side subset: *fold literals; direct `htmlspecialchars` when the
 > expression is a typed parameter of the enclosing function; `(int)`/`(float)`
 > casts and `count()` skip escaping.* The literal fold has shipped since the
-> first emitter; this page records the exact contract for the next subset —
-> the **provably-scalar expression fold** — the same way
+> first emitter; this page records the exact contract for the other two
+> subsets — the **provably-scalar expression fold** and the
+> **typed-parameter direct escape** — the same way
 > `docs/rfc-alignment.md`, `docs/stream-alignment.md`,
 > `docs/srcset-alignment.md` and `docs/ignore-directives.md` record their
 > contracts, so the behavior is intentional and testable
-> (`crates/lintel-core/tests/elision.rs`).
+> (`crates/lintel-core/tests/elision.rs`,
+> `crates/lintel-core/tests/typed_elision.rs`).
 
 ## Source of truth
 
@@ -72,16 +74,62 @@ Details the doc does not pin down, decided here:
    interleaving; the `elided_children_preserve_line_numbers` test asserts
    the invariant end-to-end.
 
+## The typed-parameter direct escape (`string` and `stream` targets)
+
+The doc's remaining v0.1 bullet — *direct `htmlspecialchars` when the
+expression is a typed parameter of the enclosing function* — folds on the
+same rule: the declaration already proves the value is a string, so the
+generic `\Lintel\c()` wrapper's runtime check is pure overhead.
+
+| Source child (inside `function Card(...)`) | Lowered PHP |
+|---|---|
+| `string $title` declared, child `{$title}` | `\htmlspecialchars($title, \ENT_QUOTES \| \ENT_SUBSTITUTE \| \ENT_HTML5)` |
+| `private string $title` (constructor promotion) | same — promotion modifiers are stripped from the type text |
+| `STRING $title`, `string &$title`, `string $title = 'x'` | same — type names are case-insensitive, `&` is stripped, defaults do not change the type |
+| `{$note}` with no `string $note` declared | wrapped — an undeclared name proves nothing |
+| `$title` typed `int`/`bool`/`array`/`?string`/`string\|int`/`\App\Name` | wrapped — only exactly-`string` declarations qualify |
+| `string ...$rest`, child `{$rest}` | wrapped — the bare name is an array |
+
+Details the doc does not pin down, decided here:
+
+8. **The scope must still prove the name.** The scanner tracks one
+   `scan::FunctionScope` per declared function (and per braced closure,
+   whose parameters are parsed for the fold but registered nowhere) while
+   it scans; a JSX root lowers against the innermost scope, and a name is
+   **unproven** the moment the body can rebind it: an assignment shaped
+   token after the name (`=`, compound `+=`/`.=`/…, `??=`, shift
+   assignment, `[`), a `global`/`static`/`unset`/`list`/`as`
+   (`foreach … as`) construct in flight, or destructuring
+   (`[$title] = $pair;`). Statements that merely *read* the name
+   (`$title . 'x'`, `$map[$title]`, array literals ending in `];`) do not
+   unprove it.
+9. **Dynamic binding clears the whole scope.** `extract`, `$$name`
+   variable-variables, `include`/`require` (they share the function's
+   variable scope) and `eval` can rebind arbitrary names, so the scope's
+   proven set is dropped instead of trying to enumerate what moved.
+10. **Arrow functions clear the enclosing scope.** `fn(...) =>` bodies are
+    braceless expressions, so the arrow's own parameters cannot be scoped;
+    their names may shadow anything, and the enclosing scope's proven set
+    is cleared conservatively. Braced closures are scoped properly: a
+    closure's `string`-typed parameters elide inside it, its untyped
+    parameters do not, and the enclosing function's elisions are untouched.
+11. **Only child expressions fold, on both markup targets.** Attribute
+    values keep `\Lintel\a/u/srcset/cls/sty` (rule 5), component arguments
+    stay named arguments, the `rfc` target stays helper-free, and the
+    emitted call participates in the same line-preservation interleaving.
+12. **The declaration, not the call site, is the proof.** A
+    `string $title` parameter is a string at every use in the body (PHP
+    rejects `null` for a non-nullable parameter); what the compiler cannot
+    know — shadowing, rebinding, dynamic binding — is exactly what the
+    scope rules above unprove. A false negative costs one `\Lintel\c()`
+    call at render time; a false elision would fold a rebound value.
+
 ## What the compiler does not do yet
 
-- **Typed-parameter elision** ("direct `htmlspecialchars` when the
-  expression is a typed parameter of the enclosing function") stays open:
-  it needs the scanner to track the enclosing function's signature for
-  each JSX root and to record parameter *types*, not just names — the
-  remaining §7.3 v0.1 bullet, deliberately not bundled with this fold.
 - **PHPStan-backed elision** (`int|float|bool|numeric-string|literal`) is
   the §7.3 Y2 plan (`lintel analyze`); benchmarks must report the elision
-  rate when it lands.
+  rate when it lands. The `fn`-arrow bodies' own typed parameters also
+  wait for that pass (rule 10).
 - **No runtime change.** The PHP runtime (T-07) is unaffected: the emitted
   calls shrink, the `\Lintel\c()` helper itself stays for every wrapped
   child.
