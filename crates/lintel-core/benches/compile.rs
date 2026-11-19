@@ -113,6 +113,25 @@ fn suppressed_handlers_source() -> String {
     src
 }
 
+/// The same warned-handlers file, but the first line carries the file-level
+/// `// lintel-ignore-file` directive (`docs/ignore-directives.md`) — the
+/// validation pass short-circuits before the walk, so this measures the
+/// suppressed-file floor against the unsuppressed `warned_handlers` cost.
+fn file_suppressed_handlers_source() -> String {
+    let mut src = String::from(
+        "<?php\n// lintel-ignore-file: legacy CTA page, audited in CMS-77\n\
+         function Panel(string $user): Html {\n    return <section class=\"panel\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+        );
+    }
+    src.push_str("    </section>;\n}\n");
+    src
+}
+
 /// Component invocations checked against an in-file signature (doc §17.1):
 /// every prop matches a declared parameter, so the file compiles cleanly —
 /// measures the signature-capture and prop-lookup path against the
@@ -124,6 +143,24 @@ fn signature_checked_source() -> String {
     for i in 0..20 {
         let _ = writeln!(src, "echo <Row label=\"cell {i}\" active />;");
     }
+    src
+}
+
+/// An image gallery whose `<img>` tags carry dynamic `srcset` + `src`
+/// attributes: measures the per-URL `srcset` routing path (`\Lintel\srcset()`
+/// emission, `docs/srcset-alignment.md`) against the plain attribute helper
+/// cost of `static_heavy`'s img-free markup.
+fn srcset_attrs_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Gallery(array $variants, array $sources): Html {\n    return <main class=\"gallery\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <img src={{$sources[{i}]}} srcset={{$variants[{i}]}} alt=\"photo {i}\" />"
+        );
+    }
+    src.push_str("    </main>;\n}\n");
     src
 }
 
@@ -202,12 +239,20 @@ fn bench(c: &mut Criterion) {
         let src = static_heavy_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
+    group.bench_function("srcset_attrs", |b| {
+        let src = srcset_attrs_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
     group.bench_function("rejected_handlers", |b| {
         let src = rejected_handlers_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
     group.bench_function("warned_handlers", |b| {
         let src = warned_handlers_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("file_suppressed_handlers", |b| {
+        let src = file_suppressed_handlers_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
     group.bench_function("suppressed_handlers", |b| {
