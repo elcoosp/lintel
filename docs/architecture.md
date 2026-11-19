@@ -1251,9 +1251,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 > second pass (stream target + signature scanning), again after the
 > third pass (ignore directives + required-parameter signature checks), and
 > again after the fourth pass (validation-rule seam, `SourceMap` positions,
-> "did you mean" close-tag suggestions), and again after the fifth pass
+> "did you mean" close-tag suggestions), again after the fifth pass
 > (file-level `lintel-ignore-file` suppression, `srcset` attribute routing,
-> parse-error `help:` lines).
+> parse-error `help:` lines), and again after the sixth pass (§7.3 escape
+> elision for provably-scalar children, the minimal `lintel-cli` build/check
+> binary).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1261,7 +1263,7 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 
 | Plan item | Status | Where |
 |---|---|---|
-| T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` only; `lintel-cli`/`lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1). CI clippy gate uses the renamed `-W clippy::pedantic` lint: the bare `-W pedantic` name is a `renamed-and-removed-lints` hard error on current stable toolchains |
+| T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` and (since the sixth pass) `lintel-cli`; `lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1). CI clippy gate uses the renamed `-W clippy::pedantic` lint: the bare `-W pedantic` name is a `renamed-and-removed-lints` hard error on current stable toolchains |
 | T-02 diagnostics crate | **done (with severities)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401 plus `LNT0205`), `Severity` (`Error`/`Warning`), `Diagnostic` (implements `std::error::Error` for CLI/LSP consumers), dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
 | T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested; lowering is injected via `scan_with(src, &dyn Lowering)` instead of being hardcoded |
 | T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
@@ -1274,9 +1276,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol and runtime adapters are future work |
 | §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop, `LNT0204` unexpected children and `LNT0205` missing required parameter (a parameter declared without a default; spreads satisfy it, JSX children satisfy a `children` parameter) for components declared in the same file (PHP named arguments are case-sensitive); typed-parameter escape elision remains open |
 | §4.4/§7.1 `srcset` per-URL attribute routing | **done (compiler subset)** | `emit.rs::push_attr` routes dynamic `srcset={expr}` attributes through the dedicated `\Lintel\srcset()` helper on the string and stream targets (the runtime helper splits candidates and scheme-checks each URL); static values fold verbatim, the `rfc` target stays helper-free, component attributes stay named arguments. The exact contract is recorded in `docs/srcset-alignment.md` and tested by `tests/srcset.rs`; the `srcset()` runtime helper itself ships with the PHP runtime (T-07) |
+| §7.3 escape elision (v0.1 "honest version", casts + `count()`) | **done (compiler subset)** | `emit.rs::dyn_child` folds dynamic children that are provably non-string scalars — `(int)`/`(integer)`/`(float)`/`(double)` casts spanning the whole expression, and `count()` calls — to the raw PHP expression on both markup targets; everything else keeps `\Lintel\c()`, conservative by design. The exact contract is recorded in `docs/escape-elision.md` and tested by `tests/elision.rs` + the `emit` matcher unit tests; the typed-parameter bullet of §7.3 v0.1 (and the PHPStan-backed Y2 pass) remains open |
+| T-10 CLI | **done (minimal subset)** | `crates/lintel-cli` — the `lintel` binary with `build` (stdout / `--out DIR` / `--in-place`) and `check` (diagnostics-only, exit 1 on errors, warnings advisory) over files and recursively-walked directories in path order; `--target=string|stream|rfc`, `--help`, `--version`. The engine lives in the library target so `tests/cli.rs` drives the exact code `main.rs` runs; `watch`/`init`/`fmt`/`daemon` and the rayon/blake3 layer stay future work |
 | T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
-| T-09+ differential/fuzz/CLI/daemon/WASM | **not started** | — |
+| T-09+ differential/fuzz/daemon/WASM | **not started** | — |
 
 Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion): the
 four compiler-throughput scenarios plus `rfc_component_tree` (RFC-parity
@@ -1288,8 +1292,10 @@ lowering), `stream_component_tree` (streaming generator lowering),
 `custom_rule` (the injected validation-rule registry: built-in set plus one
 consumer policy rule, against the hardcoded `component_tree` cost),
 `file_suppressed_handlers` (the file-level `lintel-ignore-file`
-short-circuit against the unsuppressed `warned_handlers` cost) and
-`srcset_attrs` (the `srcset` per-URL attribute routing path). A
+short-circuit against the unsuppressed `warned_handlers` cost),
+`srcset_attrs` (the `srcset` per-URL attribute routing path) and
+`elided_children` (the §7.3 escape-elision path: provably-scalar children
+compile without the `\Lintel\c()` wrapper). A
 second group, `sourcemap`, measures the offset→line:col lookups behind
 every rendered diagnostic. They
 measure compiler throughput only; the §9.2 PHP rendering harness is future
