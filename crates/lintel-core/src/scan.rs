@@ -205,14 +205,18 @@ impl ScanContext {
     /// Record a declared function's parameter list (doc §17.1). Also feeds
     /// [`ScanContext::declare`] so builtin-shadow resolution sees the
     /// declaration. Only `function Name(...)` declarations carry a visible
-    /// parameter list; `use function` imports are recorded name-only.
+    /// parameter list; `use function` imports are recorded name-only. The
+    /// table keeps the name's **last path segment in its original
+    /// spelling** ([`ScanContext::declared_signatures`] reports what the
+    /// author wrote); every lookup on it stays case-insensitive, like PHP
+    /// function calls.
     pub fn declare_signature(&mut self, name: &str, signature: Signature) {
         self.declare(name);
-        let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
+        let candidate = name.rsplit('\\').next().unwrap_or(name).to_string();
         if !self
             .signatures
             .iter()
-            .any(|(existing, _)| *existing == candidate)
+            .any(|(existing, _)| existing.eq_ignore_ascii_case(&candidate))
         {
             self.signatures.push((candidate, signature));
         }
@@ -226,7 +230,7 @@ impl ScanContext {
         let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
         self.signatures
             .iter()
-            .find(|(existing, _)| *existing == candidate)
+            .find(|(existing, _)| existing.to_lowercase() == candidate)
             .map(|(_, signature)| signature)
     }
 
@@ -274,6 +278,19 @@ impl ScanContext {
     #[must_use]
     pub fn file_suppressed(&self) -> bool {
         self.file_suppressed
+    }
+
+    /// Every declared function's parameter list, in declaration order: each
+    /// item is `(last path segment in the author's spelling, &Signature)` —
+    /// the table the validation pass looks up case-insensitively through
+    /// [`ScanContext::signature_of`]. Consumers that report the file's shape
+    /// (the component inventory, LSP outlines) iterate this instead of
+    /// re-reading the source: every declared function is listed, whether or
+    /// not any JSX in the file invokes it.
+    pub fn declared_signatures(&self) -> impl Iterator<Item = (&str, &Signature)> {
+        self.signatures
+            .iter()
+            .map(|(name, signature)| (name.as_str(), signature))
     }
 
     /// Whether a function with this name is declared/imported. PHP function
