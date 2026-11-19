@@ -1,0 +1,268 @@
+//! Stable-coded diagnostics for the Lintel JSX-for-PHP compiler.
+//!
+//! Every diagnostic carries a stable `LNTxxxx` code (see the error index at
+//! `https://lintel.sh/e/LNTxxxx`), a human message, a byte offset into the
+//! source and an optional `help:` line. The crate has no dependencies: the
+//! compiler core (and later the WASM playground) can render diagnostics
+//! without pulling in `miette`. The CLI crate may still choose to re-render
+//! diagnostics with `miette` for fancy output; [`Diagnostic::render`] is the
+//! dependency-free fallback that guarantees a stable, testable shape.
+//!
+//! # Layout
+//!
+//! - [`Code`] enumerates every stable error class.
+//! - [`Diagnostic`] is the data type shared by CLI, daemon, LSP and WASM.
+//! - [`Diagnostic::render`] draws a miette-style snippet with a caret.
+
+use std::fmt;
+use std::fmt::Write as _;
+
+/// Every stable diagnostic class emitted by the Lintel compiler.
+///
+/// Parse errors use the `LNT01xx` range, component/attribute validation the
+/// `LNT02xx` range, security checks `LNT03xx`, and content-model checks
+/// `LNT04xx`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Code {
+    /// A tag or element was never closed (`LNT0101`).
+    UnterminatedTag,
+    /// A closing tag does not match the innermost open tag (`LNT0102`).
+    MismatchedClose,
+    /// An attribute could not be parsed (`LNT0103`).
+    BadAttr,
+    /// A spread was not written as `{...expr}` (`LNT0104`).
+    BadSpread,
+    /// A specific character was expected (`LNT0105`).
+    Expected,
+    /// A component name shadows a PHP builtin function (`LNT0201`).
+    BuiltinShadow,
+    /// A component attribute cannot become a PHP named argument (`LNT0202`).
+    HyphenArg,
+    /// A dynamic event-handler attribute was rejected (`LNT0301`).
+    DynamicHandler,
+    /// A void element was given children (`LNT0401`).
+    VoidChildren,
+}
+
+impl Code {
+    /// The stable `LNTxxxx` identifier for this code.
+    #[must_use]
+    pub const fn lnt(self) -> &'static str {
+        match self {
+            Self::UnterminatedTag => "LNT0101",
+            Self::MismatchedClose => "LNT0102",
+            Self::BadAttr => "LNT0103",
+            Self::BadSpread => "LNT0104",
+            Self::Expected => "LNT0105",
+            Self::BuiltinShadow => "LNT0201",
+            Self::HyphenArg => "LNT0202",
+            Self::DynamicHandler => "LNT0301",
+            Self::VoidChildren => "LNT0401",
+        }
+    }
+
+    /// One-line human summary, shown after the code when rendering.
+    #[must_use]
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::UnterminatedTag => "unterminated tag",
+            Self::MismatchedClose => "mismatched closing tag",
+            Self::BadAttr => "invalid attribute",
+            Self::BadSpread => "invalid spread expression",
+            Self::Expected => "unexpected input",
+            Self::BuiltinShadow => "component shadows a PHP builtin function",
+            Self::HyphenArg => "attribute cannot become a named argument",
+            Self::DynamicHandler => "dynamic event-handler attributes are not allowed",
+            Self::VoidChildren => "void elements cannot have children",
+        }
+    }
+
+    /// Link to the documentation page for this code.
+    #[must_use]
+    pub fn docs_url(self) -> String {
+        format!("https://lintel.sh/e/{}", self.lnt())
+    }
+}
+
+impl fmt::Display for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.lnt())
+    }
+}
+
+/// A single compiler diagnostic with a stable [`Code`].
+///
+/// `offset` is a byte offset into the scanned source; it always points at an
+/// ASCII-delimited boundary produced by the parser, so `Diagnostic::render`
+/// can compute line/column information without panicking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// Stable error class.
+    pub code: Code,
+    /// Human-readable description of the problem.
+    pub message: String,
+    /// Byte offset into the source the diagnostic points at.
+    pub offset: usize,
+    /// Optional actionable `help:` line.
+    pub help: Option<String>,
+}
+
+impl Diagnostic {
+    /// Create a diagnostic without a `help:` line.
+    pub fn new(code: Code, message: impl Into<String>, offset: usize) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            offset,
+            help: None,
+        }
+    }
+
+    /// Attach an actionable `help:` line.
+    #[must_use]
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    /// `error[LNTxxxx]: message`, as shown on the first render line.
+    #[must_use]
+    pub fn headline(&self) -> String {
+        format!("error[{}]: {}", self.code.lnt(), self.message)
+    }
+
+    /// Render a miette-style snippet with a caret under the offending byte.
+    ///
+    /// The renderer is deliberately dependency-free: it prints the headline,
+    /// a `input:line:col` header, the offending line with a `^` caret, and
+    /// optional `help:`/`docs:` lines. Offsets beyond the end of `src` are
+    /// clamped so rendering can never panic.
+    #[must_use]
+    pub fn render(&self, src: &str) -> String {
+        let offset = clamp_offset(src, self.offset);
+        let (line_no, col) = line_col(src, offset);
+        let line_text = line_text(src, offset);
+
+        let mut out = String::new();
+        out.push_str(&self.headline());
+        out.push('\n');
+        let _ = writeln!(out, "  \u{250c}\u{2500} input:{line_no}:{col}");
+        out.push_str("  \u{2502}\n");
+        let gutter = line_no.to_string();
+        let pad = " ".repeat(gutter.len());
+        let _ = writeln!(out, "{gutter} \u{2502} {line_text}");
+        let _ = writeln!(out, "{pad} \u{b7} {}^", " ".repeat(col.saturating_sub(1)));
+        if let Some(help) = &self.help {
+            let _ = writeln!(out, "  = help: {help}");
+        }
+        let _ = writeln!(out, "  = docs: {}", self.code.docs_url());
+        out
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at offset {}", self.headline(), self.offset)?;
+        if let Some(help) = &self.help {
+            write!(f, " (help: {help})")?;
+        }
+        Ok(())
+    }
+}
+
+/// Clamp a byte offset into `src` and floor it to a char boundary.
+fn clamp_offset(src: &str, offset: usize) -> usize {
+    let end = src.len();
+    let mut off = offset.min(end);
+    while off > 0 && !src.is_char_boundary(off) {
+        off -= 1;
+    }
+    off
+}
+
+/// 1-based line number and 1-based character column of a byte offset.
+fn line_col(src: &str, offset: usize) -> (usize, usize) {
+    let prefix = &src[..offset];
+    let line_no = prefix.matches('\n').count() + 1;
+    let line_start = prefix.rfind('\n').map_or(0, |idx| idx + 1);
+    let col = src[line_start..offset].chars().count() + 1;
+    (line_no, col)
+}
+
+/// The full text of the line containing a byte offset (without the newline).
+fn line_text(src: &str, offset: usize) -> String {
+    let line_start = src[..offset].rfind('\n').map_or(0, |idx| idx + 1);
+    let line_end = src[line_start..]
+        .find('\n')
+        .map_or(src.len(), |idx| line_start + idx);
+    src[line_start..line_end].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Code, Diagnostic};
+
+    #[test]
+    fn lnt_codes_are_stable() {
+        assert_eq!(Code::UnterminatedTag.lnt(), "LNT0101");
+        assert_eq!(Code::BuiltinShadow.lnt(), "LNT0201");
+        assert_eq!(Code::HyphenArg.lnt(), "LNT0202");
+        assert_eq!(Code::DynamicHandler.lnt(), "LNT0301");
+        assert_eq!(Code::VoidChildren.lnt(), "LNT0401");
+    }
+
+    #[test]
+    fn docs_url_embeds_the_code() {
+        assert_eq!(
+            Code::DynamicHandler.docs_url(),
+            "https://lintel.sh/e/LNT0301"
+        );
+    }
+
+    #[test]
+    fn display_includes_code_and_offset() {
+        let problem = Diagnostic::new(Code::Expected, "expected `>`", 7);
+        assert_eq!(
+            problem.to_string(),
+            "error[LNT0105]: expected `>` at offset 7"
+        );
+    }
+
+    #[test]
+    fn render_points_at_the_offending_byte() {
+        let src = "<?php\n<button onclick={$handler}>";
+        let problem =
+            Diagnostic::new(Code::DynamicHandler, "boom", 16).with_help("use `data-action={...}`");
+        let rendered = problem.render(src);
+        assert!(rendered.starts_with("error[LNT0301]: boom\n"), "{rendered}");
+        assert!(rendered.contains("input:2:11"), "{rendered}");
+        assert!(
+            rendered.contains("<button onclick={$handler}>"),
+            "{rendered}"
+        );
+        assert!(rendered.contains('^'), "{rendered}");
+        assert!(
+            rendered.contains("= help: use `data-action={...}`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("= docs: https://lintel.sh/e/LNT0301"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_clamps_out_of_range_offsets() {
+        let src = "abc";
+        let problem = Diagnostic::new(Code::UnterminatedTag, "unclosed", 99);
+        let rendered = problem.render(src);
+        assert!(rendered.contains("input:1:4"), "{rendered}");
+    }
+
+    #[test]
+    fn render_omits_absent_help_line() {
+        let problem = Diagnostic::new(Code::BadAttr, "bad", 0);
+        let rendered = problem.render("x");
+        assert!(!rendered.contains("= help:"), "{rendered}");
+    }
+}
