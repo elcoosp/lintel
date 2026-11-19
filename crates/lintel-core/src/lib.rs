@@ -20,8 +20,9 @@
 //!    the source, so every PHP token after a JSX root keeps its line number
 //!    (Xdebug/PHPStan-friendly, doc 13.4).
 //! 3. **Escape-by-default** — dynamic children go through `\Lintel\c()`,
-//!    dynamic attributes through the context-aware helpers (`a`, `u`, `cls`,
-//!    `sty`); only provably literal text folds directly into the output.
+//!    dynamic attributes through the context-aware helpers (`a`, `u`,
+//!    `srcset`, `cls`, `sty`); only provably literal text folds directly
+//!    into the output.
 //!
 //! # Errors
 //!
@@ -33,9 +34,10 @@
 //!
 //! Validation diagnostics anchored on a line preceded by a
 //! `// lintel-ignore-next` (or `# lintel-ignore-next`) line comment are
-//! dropped — see `docs/ignore-directives.md` and
-//! [`scan::ScanContext::suppressed_at`]. Parse diagnostics (`LNT01xx`) are
-//! never suppressible.
+//! dropped, and a file-level `// lintel-ignore-file` comment drops every
+//! validation diagnostic in the file — see `docs/ignore-directives.md` and
+//! [`scan::ScanContext::suppressed_at`]/[`scan::ScanContext::file_suppressed`].
+//! Parse diagnostics (`LNT01xx`) are never suppressible.
 
 pub mod ast;
 pub mod emit;
