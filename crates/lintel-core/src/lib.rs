@@ -21,9 +21,12 @@
 //!    (Xdebug/PHPStan-friendly, doc 13.4).
 //! 3. **Escape-by-default** — dynamic children go through `\Lintel\c()`,
 //!    dynamic attributes through the context-aware helpers (`a`, `u`,
-//!    `srcset`, `cls`, `sty`); only provably literal text — and provably
+//!    `srcset`, `cls`, `sty`); only provably literal text — provably
 //!    scalar child expressions (`(int)`/`(float)` casts and `count()`
-//!    calls, doc §7.3) — fold directly into the output.
+//!    calls, doc §7.3) — and children that are exactly a parameter the
+//!    enclosing function declares as a non-nullable `string` (folded to a
+//!    direct `\htmlspecialchars(...)` call, `docs/escape-elision.md`) skip
+//!    the generic helper.
 //!
 //! # Errors
 //!
