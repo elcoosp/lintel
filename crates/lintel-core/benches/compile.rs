@@ -440,5 +440,45 @@ fn visitor_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, sourcemap_bench, json_bench, visitor_bench);
+/// The component-inventory report (`docs/component-inventory.md` seam): the
+/// declared-signature table plus the invocation walk over the component
+/// tree — the shape-report cost an LSP outline or metrics collector pays,
+/// with no diagnostics and no lowering output.
+fn inventory_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("inventory");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("component_inventory", |b| {
+        let src = component_source();
+        let parsed = lintel_core::scan::scan(black_box(&src));
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        // Path drift-check (the §21.2 lesson): the report must actually find
+        // the component tree's invocations, or the bench silently measures
+        // an empty walk.
+        let inventory = lintel_core::collect_inventory(&parsed.roots, &parsed.context);
+        assert_eq!(
+            inventory.invocations.len(),
+            13,
+            "PageShell + 3 Section + 9 Row: {:?}",
+            inventory.invocations
+        );
+        assert_eq!(inventory.declared.len(), 1, "only `Page` is declared here");
+        b.iter(|| {
+            lintel_core::collect_inventory(black_box(&parsed.roots), black_box(&parsed.context))
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench,
+    sourcemap_bench,
+    json_bench,
+    visitor_bench,
+    inventory_bench
+);
 criterion_main!(benches);
