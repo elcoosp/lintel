@@ -40,6 +40,12 @@ const URL_ATTRS: &[&str] = &[
     "background",
 ];
 
+/// `srcset` attributes route to their own `\Lintel\srcset()` helper (doc
+/// §4.4/§7.1) instead of [`URL_ATTRS`]'s `\Lintel\u()`: the runtime helper
+/// splits the candidate list (`url width`, `url density`, …) and
+/// scheme-checks each URL, which a single-value attribute escape cannot do.
+const SRCSET_ATTR: &str = "srcset";
+
 /// Lowering strategy for one compilation target (doc 5.3).
 ///
 /// The scanner lowers each JSX root as it parses it, so a lowering is a
@@ -398,7 +404,9 @@ fn push_attr(attr: &Attr, parts: &mut Parts) {
                 return;
             }
             let lower_name = name.to_ascii_lowercase();
-            let call = if URL_ATTRS.contains(&lower_name.as_str()) {
+            let call = if lower_name == SRCSET_ATTR {
+                format!("\\Lintel\\srcset('{name}', {trimmed})")
+            } else if URL_ATTRS.contains(&lower_name.as_str()) {
                 format!("\\Lintel\\u('{name}', {trimmed})")
             } else if lower_name == "class" {
                 format!("\\Lintel\\cls({trimmed})")
