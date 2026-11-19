@@ -1,0 +1,869 @@
+//! PHP-aware scanner (architecture doc 6.3).
+//!
+//! PHP passes through verbatim; JSX is recognized **only in expression-start
+//! position** (doc 4.1): after keywords such as `return`/`echo`, after `(`,
+//! `,`, `=>`, operators, or at the start of an argument. After an *operand*,
+//! `<` is the less-than operator. This single rule resolves `$a < $b` versus
+//! `return <div/>`.
+//!
+//! The scanner handles strings, comments, `#[attributes]`, heredocs/nowdocs,
+//! inline-HTML interleave and `?>` transitions without rewriting any of them:
+//! non-JSX bytes are copied 1:1, which the golden tests assert byte-for-byte.
+//!
+//! Known, deliberate v0.1 limitations (documented, safe): `<?` short open
+//! tags are not recognized (deprecated upstream) and `<\Namespaced>` tags
+//! written with a leading backslash are treated as operators.
+
+use crate::ast::{Attr, Element, Node};
+use crate::emit;
+use crate::text::normalize_jsx_text;
+use lintel_diag::{Code, Diagnostic};
+
+/// Keywords after which `<` starts an expression (doc 4.1).
+const START_KEYWORDS: &[&str] = &[
+    "return", "echo", "print", "yield", "and", "or", "xor", "case", "else", "throw", "match", "fn",
+];
+
+/// Whether the previous token can end an expression (operand) or starts one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Prev {
+    Start,
+    Operand,
+}
+
+/// Result of trying to copy a compound token (string/comment/heredoc).
+enum Compound {
+    /// The byte is not a compound token; the caller keeps scanning it.
+    None,
+    /// A compound token was copied verbatim.
+    Copied {
+        /// Optional next previous-token state (`None` = leave unchanged).
+        next_prev: Option<Prev>,
+    },
+}
+
+/// What terminates a PHP scan: end of file, or the closing `}` of a JSX
+/// expression brace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    Eof,
+    Brace,
+}
+
+/// Everything the scanner produced for one source file.
+#[derive(Debug)]
+pub struct Parsed {
+    /// Transpiled PHP: the verbatim input with every JSX root lowered.
+    pub php: String,
+    /// Every JSX root parsed at any nesting depth, in source order.
+    pub roots: Vec<Node>,
+    /// Functions declared (`function f()`) or imported (`use function f;`)
+    /// in the file, used by the validation pass for shadow detection.
+    pub context: ScanContext,
+    /// Parse diagnostics; empty iff the source parsed cleanly.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Functions declared or imported in the scanned file (lowercase, last path
+/// segment). The validation pass consults it to decide whether a component
+/// call like `<Header>` shadows the PHP builtin `header()` (doc 4.7).
+#[derive(Debug, Default, Clone)]
+pub struct ScanContext {
+    declared: Vec<String>,
+}
+
+impl ScanContext {
+    /// Record a declared or imported function name; the last namespace
+    /// segment is stored lowercased (PHP function lookups are
+    /// case-insensitive).
+    pub fn declare(&mut self, name: &str) {
+        let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
+        if !self.declared.contains(&candidate) {
+            self.declared.push(candidate);
+        }
+    }
+
+    /// Whether a function with this name is declared/imported. PHP function
+    /// lookups are case-insensitive, so the comparison is too.
+    #[must_use]
+    pub fn declares_function(&self, name: &str) -> bool {
+        let needle = name.to_lowercase();
+        self.declared.contains(&needle)
+    }
+}
+
+/// Scan a full `.lintel.php` source into its transpiled PHP and AST roots.
+#[must_use]
+pub fn scan(src: &str) -> Parsed {
+    let mut scanner = Scanner::new(src);
+    scanner.transpile_file();
+    Parsed {
+        php: scanner.out,
+        roots: scanner.roots,
+        context: scanner.context,
+        diagnostics: scanner.diagnostics,
+    }
+}
+
+struct Scanner<'s> {
+    src: &'s str,
+    b: &'s [u8],
+    pos: usize,
+    out: String,
+    roots: Vec<Node>,
+    context: ScanContext,
+    /// Saw `function` and expect the declared name next.
+    pending_function: bool,
+    /// Saw `use` and expect the import list next.
+    pending_use: bool,
+    /// Inside `use function …;` — every identifier is an imported name.
+    import_mode: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl<'s> Scanner<'s> {
+    fn new(src: &'s str) -> Self {
+        Self {
+            src,
+            b: src.as_bytes(),
+            pos: 0,
+            out: String::with_capacity(src.len() + src.len() / 4),
+            roots: vec![],
+            context: ScanContext::default(),
+            pending_function: false,
+            pending_use: false,
+            import_mode: false,
+            diagnostics: vec![],
+        }
+    }
+
+    /// Entry point: whole file → transpiled PHP.
+    fn transpile_file(&mut self) {
+        let mut out = String::with_capacity(self.src.len() + self.src.len() / 4);
+        while self.pos < self.b.len() {
+            self.copy_inline_html(&mut out);
+            if self.pos >= self.b.len() {
+                break;
+            }
+            if let Err(problem) = self.php(&mut out, Stop::Eof) {
+                self.diagnostics.push(problem);
+                break;
+            }
+        }
+        self.out = out;
+    }
+
+    /// Copy until `<?php` / `<?=` (inclusive of the open tag).
+    fn copy_inline_html(&mut self, out: &mut String) {
+        let start = self.pos;
+        let rest = &self.src[self.pos..];
+        let target = match (find_open_tag(rest, "<?php"), rest.find("<?=")) {
+            (Some(p), Some(e)) => Some(if p <= e { (p, 5) } else { (e, 3) }),
+            (Some(p), None) => Some((p, 5)),
+            (None, Some(e)) => Some((e, 3)),
+            (None, None) => None,
+        };
+        match target {
+            Some((rel, len)) => self.pos += rel + len,
+            None => self.pos = self.b.len(),
+        }
+        out.push_str(&self.src[start..self.pos]);
+    }
+
+    /// Scan PHP, copying verbatim, transforming JSX at expression starts.
+    fn php(&mut self, out: &mut String, stop: Stop) -> Result<(), Diagnostic> {
+        let mut depth: usize = 0;
+        let mut prev = Prev::Start;
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            let n1 = self.b.get(self.pos + 1).copied();
+            match self.copy_compound(out, c, n1) {
+                Compound::Copied { next_prev } => {
+                    if let Some(next) = next_prev {
+                        prev = next;
+                    }
+                    continue;
+                }
+                Compound::None => {}
+            }
+            match c {
+                b'<' if prev == Prev::Start && self.looks_like_tag() => {
+                    let start = self.pos;
+                    let node = self.parse_element_or_fragment(start)?;
+                    let total = self.newline_count(start);
+                    out.push_str(&emit::emit_root(&node, total));
+                    self.roots.push(node);
+                    prev = Prev::Operand;
+                }
+                b'?' if n1 == Some(b'>') && stop == Stop::Eof => {
+                    let s = self.pos;
+                    self.pos += 2;
+                    self.flush(out, s);
+                    return Ok(()); // back to inline HTML
+                }
+                b'{' => {
+                    depth += 1;
+                    let s = self.pos;
+                    self.pos += 1;
+                    self.flush(out, s);
+                    prev = Prev::Start;
+                }
+                b'}' => {
+                    if depth == 0 && stop == Stop::Brace {
+                        return Ok(()); // caller consumes the closing '}'
+                    }
+                    depth = depth.saturating_sub(1);
+                    let s = self.pos;
+                    self.pos += 1;
+                    self.flush(out, s);
+                    prev = Prev::Operand;
+                }
+                b'$' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'\\' | 0x80..=0xff => {
+                    let s = self.pos;
+                    let word = self.take_word();
+                    self.flush(out, s);
+                    self.track_functions(word);
+                    prev = Self::prev_after_word(word);
+                }
+                b'0'..=b'9' => {
+                    let s = self.pos;
+                    while self.pos < self.b.len()
+                        && (self.b[self.pos].is_ascii_alphanumeric()
+                            || matches!(self.b[self.pos], b'.' | b'_'))
+                    {
+                        self.pos += 1;
+                    }
+                    self.flush(out, s);
+                    prev = Prev::Operand;
+                }
+                b' ' | b'\t' | b'\r' | b'\n' => {
+                    let s = self.pos;
+                    while self.pos < self.b.len() && self.b[self.pos].is_ascii_whitespace() {
+                        self.pos += 1;
+                    }
+                    self.flush(out, s);
+                }
+                b')' | b']' => {
+                    let s = self.pos;
+                    self.pos += 1;
+                    self.flush(out, s);
+                    prev = Prev::Operand;
+                }
+                _ => {
+                    let s = self.pos;
+                    self.advance_char();
+                    self.flush(out, s);
+                    self.reset_pending(c);
+                    prev = Prev::Start;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Track function declarations and imports for the validation pass.
+    fn track_functions(&mut self, word: &str) {
+        let lower = word.to_lowercase();
+        if self.import_mode {
+            if lower == "as" || lower == "function" {
+                return;
+            }
+            self.context.declare(word);
+            return;
+        }
+        if self.pending_use {
+            self.pending_use = false;
+            if lower == "function" {
+                self.import_mode = true;
+            }
+            return;
+        }
+        if lower == "use" {
+            self.pending_use = true;
+            return;
+        }
+        if lower == "function" {
+            self.pending_function = true;
+            return;
+        }
+        if self.pending_function {
+            self.pending_function = false;
+            self.context.declare(word);
+        }
+    }
+
+    /// Punctuation that ends a pending declaration/import context: `;` ends
+    /// `use` lists, `(` ends an anonymous `function (`, anything else but `&`
+    /// (name-by-reference) also cancels a pending function name.
+    fn reset_pending(&mut self, c: u8) {
+        if c == b';' {
+            self.import_mode = false;
+            self.pending_use = false;
+            self.pending_function = false;
+        } else if c != b'&' {
+            self.pending_function = false;
+        }
+    }
+
+    /// Strings, comments and heredocs are compound tokens; copies one and
+    /// flushes it. Comments leave the previous-token state untouched (PHP
+    /// treats them as transparent), strings/heredocs end with an operand.
+    fn copy_compound(&mut self, out: &mut String, c: u8, n1: Option<u8>) -> Compound {
+        let s = self.pos;
+        match c {
+            b'\'' => {
+                self.copy_single_quoted();
+                self.flush(out, s);
+                Compound::Copied {
+                    next_prev: Some(Prev::Operand),
+                }
+            }
+            b'"' => {
+                self.copy_double_quoted();
+                self.flush(out, s);
+                Compound::Copied {
+                    next_prev: Some(Prev::Operand),
+                }
+            }
+            b'`' => {
+                self.copy_until_unescaped(b'`');
+                self.flush(out, s);
+                Compound::Copied {
+                    next_prev: Some(Prev::Operand),
+                }
+            }
+            b'/' if n1 == Some(b'/') => {
+                self.copy_line_comment();
+                self.flush(out, s);
+                Compound::Copied { next_prev: None }
+            }
+            b'#' if n1 != Some(b'[') => {
+                self.copy_line_comment();
+                self.flush(out, s);
+                Compound::Copied { next_prev: None }
+            }
+            b'/' if n1 == Some(b'*') => {
+                self.copy_block_comment();
+                self.flush(out, s);
+                Compound::Copied { next_prev: None }
+            }
+            b'<' if n1 == Some(b'<') && self.b.get(self.pos + 2) == Some(&b'<') => {
+                self.copy_heredoc();
+                self.flush(out, s);
+                Compound::Copied {
+                    next_prev: Some(Prev::Operand),
+                }
+            }
+            _ => Compound::None,
+        }
+    }
+
+    fn prev_after_word(word: &str) -> Prev {
+        if !word.starts_with('$') && START_KEYWORDS.iter().any(|k| word.eq_ignore_ascii_case(k)) {
+            Prev::Start
+        } else {
+            Prev::Operand
+        }
+    }
+
+    fn advance_char(&mut self) {
+        let width = self.src[self.pos..]
+            .chars()
+            .next()
+            .map_or(1, char::len_utf8);
+        self.pos = (self.pos + width).min(self.b.len());
+    }
+
+    fn take_word(&mut self) -> &'s str {
+        let s = self.pos;
+        if self.b[self.pos] == b'$' {
+            self.pos += 1;
+        }
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80 {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        &self.src[s..self.pos]
+    }
+
+    /// At `<`: fragment `<>` or `<Name` (doc 6.3 `looks_like_tag`).
+    fn looks_like_tag(&self) -> bool {
+        match self.b.get(self.pos + 1) {
+            Some(b'>') => true,
+            Some(c) => c.is_ascii_alphabetic() || *c == b'_',
+            None => false,
+        }
+    }
+
+    // ---------- JSX parser ----------
+
+    fn newline_count(&self, from: usize) -> u32 {
+        u32::try_from(
+            self.src[from.min(self.src.len())..self.pos]
+                .matches('\n')
+                .count(),
+        )
+        .unwrap_or(u32::MAX)
+    }
+
+    fn line_of(&self, upto: usize, from: usize) -> u32 {
+        let end = upto.min(self.src.len());
+        u32::try_from(self.src[from.min(end)..end].matches('\n').count()).unwrap_or(u32::MAX)
+    }
+
+    fn parse_element_or_fragment(&mut self, root: usize) -> Result<Node, Diagnostic> {
+        let line = self.line_of(self.pos, root);
+        let offset = self.pos;
+        self.pos += 1; // consume '<'
+        if self.b.get(self.pos) == Some(&b'>') {
+            self.pos += 1;
+            let children = self.parse_children(root, "")?;
+            return Ok(Node::Fragment {
+                children,
+                line,
+                offset,
+            });
+        }
+        let name = self.take_tag_name();
+        if name.is_empty() {
+            return self.fail(Code::UnterminatedTag, "expected a tag name after `<`");
+        }
+        let is_component =
+            name.chars().next().is_some_and(char::is_uppercase) || name.contains('\\');
+        let (attrs, self_closing) = self.parse_attrs(root)?;
+        if self_closing {
+            return Ok(Node::Element(Element {
+                name,
+                is_component,
+                attrs,
+                children: vec![],
+                self_closing: true,
+                line,
+                end_line: self.line_of(self.pos, root),
+                offset,
+                end_offset: self.pos,
+            }));
+        }
+        let raw_text = matches!(name.as_str(), "script" | "style");
+        let children = if raw_text {
+            self.parse_raw_children(root, &name)?
+        } else {
+            self.parse_children(root, &name)?
+        };
+        Ok(Node::Element(Element {
+            name,
+            is_component,
+            attrs,
+            children,
+            self_closing: false,
+            line,
+            end_line: self.line_of(self.pos, root),
+            offset,
+            end_offset: self.pos,
+        }))
+    }
+
+    /// Parse attributes up to `>` (returns `(attrs, was_self_closing)`).
+    fn parse_attrs(&mut self, root: usize) -> Result<(Vec<Attr>, bool), Diagnostic> {
+        let mut attrs: Vec<Attr> = vec![];
+        loop {
+            self.skip_ws();
+            match self.b.get(self.pos) {
+                None => return self.fail(Code::UnterminatedTag, "unterminated tag"),
+                Some(b'/') if self.b.get(self.pos + 1) == Some(&b'>') => {
+                    self.pos += 2;
+                    return Ok((attrs, true));
+                }
+                Some(b'>') => {
+                    self.pos += 1;
+                    return Ok((attrs, false));
+                }
+                Some(b'{') => attrs.push(self.parse_spread(root)?),
+                Some(_) => attrs.push(self.parse_attr(root)?),
+            }
+        }
+    }
+
+    fn parse_spread(&mut self, root: usize) -> Result<Attr, Diagnostic> {
+        let line = self.line_of(self.pos, root);
+        let offset = self.pos;
+        self.pos += 1; // consume '{'
+        let mut php = String::new();
+        self.php(&mut php, Stop::Brace)?;
+        self.expect(b'}')?;
+        let trimmed = php.trim_start();
+        if let Some(expr) = trimmed.strip_prefix("...") {
+            Ok(Attr::Spread {
+                php: expr.to_string(),
+                line,
+                offset,
+            })
+        } else {
+            self.fail(Code::BadSpread, "expected `{...expr}`")
+        }
+    }
+
+    fn parse_attr(&mut self, root: usize) -> Result<Attr, Diagnostic> {
+        let line = self.line_of(self.pos, root);
+        let offset = self.pos;
+        let s = self.pos;
+        while self.pos < self.b.len()
+            && (self.b[self.pos].is_ascii_alphanumeric()
+                || matches!(self.b[self.pos], b'-' | b'_' | b':' | b'.' | b'@'))
+        {
+            self.pos += 1;
+        }
+        if s == self.pos {
+            return self.fail(Code::BadAttr, "expected attribute name");
+        }
+        let name = self.src[s..self.pos].to_string();
+        self.skip_ws();
+        if self.b.get(self.pos) != Some(&b'=') {
+            return Ok(Attr::Bool { name, line, offset });
+        }
+        self.pos += 1;
+        self.skip_ws();
+        match self.b.get(self.pos) {
+            Some(q @ (b'"' | b'\'')) => {
+                let quote = *q;
+                self.pos += 1;
+                let vs = self.pos;
+                while self.pos < self.b.len() && self.b[self.pos] != quote {
+                    self.pos += 1;
+                }
+                let value = self.src[vs..self.pos].to_string();
+                self.pos += 1;
+                Ok(Attr::Str {
+                    name,
+                    value,
+                    line,
+                    offset,
+                })
+            }
+            Some(b'{') => {
+                self.pos += 1;
+                let mut php = String::new();
+                self.php(&mut php, Stop::Brace)?;
+                self.expect(b'}')?;
+                Ok(Attr::Expr {
+                    name,
+                    php,
+                    line,
+                    offset,
+                })
+            }
+            _ => self.fail(
+                Code::BadAttr,
+                "attribute value must be \"…\", '…' or {expr}",
+            ),
+        }
+    }
+
+    fn parse_children(&mut self, root: usize, parent: &str) -> Result<Vec<Node>, Diagnostic> {
+        let mut out: Vec<Node> = vec![];
+        let mut text_start = self.pos;
+        loop {
+            if self.pos >= self.b.len() {
+                return self.fail(Code::UnterminatedTag, "unclosed element");
+            }
+            match self.b[self.pos] {
+                b'<' if self.b.get(self.pos + 1) == Some(&b'/') => {
+                    self.flush_text(&mut out, text_start, root);
+                    self.pos += 2;
+                    let name = self.take_tag_name();
+                    self.skip_ws();
+                    self.expect(b'>')?;
+                    if name != parent {
+                        return self.fail(
+                            Code::MismatchedClose,
+                            format!("expected </{parent}>, found </{name}>"),
+                        );
+                    }
+                    return Ok(out);
+                }
+                b'<' => {
+                    self.flush_text(&mut out, text_start, root);
+                    let child = self.parse_element_or_fragment(root)?;
+                    out.push(child);
+                    text_start = self.pos;
+                }
+                b'{' => {
+                    self.flush_text(&mut out, text_start, root);
+                    let line = self.line_of(self.pos, root);
+                    let offset = self.pos;
+                    self.pos += 1;
+                    let mut php = String::new();
+                    self.php(&mut php, Stop::Brace)?;
+                    self.expect(b'}')?;
+                    let trimmed = php.trim();
+                    let is_comment = trimmed.starts_with("/*")
+                        && trimmed.ends_with("*/")
+                        && trimmed.matches("*/").count() == 1;
+                    if !trimmed.is_empty() && !is_comment {
+                        out.push(Node::Expr { php, line, offset });
+                    }
+                    text_start = self.pos;
+                }
+                _ => self.pos += 1,
+            }
+        }
+    }
+
+    fn parse_raw_children(&mut self, root: usize, parent: &str) -> Result<Vec<Node>, Diagnostic> {
+        let close = format!("</{parent}");
+        let start = self.pos;
+        let mut scan_from = start;
+        let body_end = loop {
+            match self.src[scan_from..].find(&close) {
+                None => {
+                    return self.fail(
+                        Code::UnterminatedTag,
+                        format!("unclosed raw-text element `<{parent}>`"),
+                    )
+                }
+                Some(rel) => {
+                    let after = scan_from + rel + close.len();
+                    match self.b.get(after) {
+                        Some(b'>' | b' ' | b'\t' | b'\r' | b'\n') => break scan_from + rel,
+                        // e.g. `</scripted>` is not a close tag; keep looking
+                        _ => scan_from = after,
+                    }
+                }
+            }
+        };
+        let text = self.src[start..body_end].to_string();
+        let line = self.line_of(start, root);
+        self.pos = body_end + close.len();
+        self.skip_ws();
+        self.expect(b'>')?;
+        Ok(if text.is_empty() {
+            vec![]
+        } else {
+            vec![Node::Text {
+                text,
+                line,
+                offset: start,
+            }]
+        })
+    }
+
+    fn flush_text(&mut self, out: &mut Vec<Node>, from: usize, root: usize) {
+        if from >= self.pos {
+            return;
+        }
+        let raw = &self.src[from..self.pos];
+        if let Some(text) = normalize_jsx_text(raw) {
+            out.push(Node::Text {
+                text,
+                line: self.line_of(from, root),
+                offset: from,
+            });
+        }
+    }
+
+    fn take_tag_name(&mut self) -> String {
+        let s = self.pos;
+        while self.pos < self.b.len()
+            && (self.b[self.pos].is_ascii_alphanumeric()
+                || matches!(self.b[self.pos], b'_' | b'-' | b':' | b'\\' | b'.'))
+        {
+            self.pos += 1;
+        }
+        self.src[s..self.pos].to_string()
+    }
+
+    fn skip_ws(&mut self) {
+        while self.pos < self.b.len() && self.b[self.pos].is_ascii_whitespace() {
+            self.pos += 1;
+        }
+    }
+
+    fn expect(&mut self, expected: u8) -> Result<(), Diagnostic> {
+        if self.b.get(self.pos) == Some(&expected) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            let found = self.src[self.pos.min(self.src.len())..]
+                .chars()
+                .next()
+                .map_or("end of input".to_string(), |c| format!("`{c}`"));
+            self.fail(
+                Code::Expected,
+                format!("expected `{}`, found {found}", char::from(expected)),
+            )
+        }
+    }
+
+    fn fail<T>(&self, code: Code, message: impl Into<String>) -> Result<T, Diagnostic> {
+        Err(Diagnostic::new(code, message, self.pos))
+    }
+
+    // ---------- verbatim copiers ----------
+
+    fn flush(&self, out: &mut String, from: usize) {
+        out.push_str(&self.src[from..self.pos]);
+    }
+
+    fn copy_single_quoted(&mut self) {
+        self.pos += 1;
+        while self.pos < self.b.len() {
+            match self.b[self.pos] {
+                b'\\' => self.pos += 2,
+                b'\'' => {
+                    self.pos += 1;
+                    break;
+                }
+                _ => self.pos += 1,
+            }
+        }
+        self.pos = self.pos.min(self.b.len());
+    }
+
+    /// Double-quoted with `{$expr["k"]}` interpolation support (nested quotes
+    /// inside braces).
+    fn copy_double_quoted(&mut self) {
+        self.pos += 1;
+        let mut brace = 0usize;
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            match c {
+                b'\\' => self.pos += 2,
+                b'"' if brace == 0 => {
+                    self.pos += 1;
+                    break;
+                }
+                b'{' if self.b.get(self.pos + 1) == Some(&b'$') => {
+                    brace += 1;
+                    self.pos += 1;
+                }
+                b'}' if brace > 0 => {
+                    brace -= 1;
+                    self.pos += 1;
+                }
+                b'\'' | b'"' if brace > 0 => {
+                    let quote = c;
+                    self.pos += 1;
+                    while self.pos < self.b.len() && self.b[self.pos] != quote {
+                        if self.b[self.pos] == b'\\' {
+                            self.pos += 1;
+                        }
+                        self.pos += 1;
+                    }
+                    self.pos += 1;
+                }
+                _ => self.pos += 1,
+            }
+        }
+        self.pos = self.pos.min(self.b.len());
+    }
+
+    fn copy_until_unescaped(&mut self, quote: u8) {
+        self.pos += 1;
+        while self.pos < self.b.len() {
+            if self.b[self.pos] == b'\\' {
+                self.pos += 2;
+                continue;
+            }
+            if self.b[self.pos] == quote {
+                self.pos += 1;
+                break;
+            }
+            self.pos += 1;
+        }
+        self.pos = self.pos.min(self.b.len());
+    }
+
+    /// `//` / `#` comments end at the newline — or at `?>`, which ends PHP
+    /// mode in real PHP and therefore ends the comment here too.
+    fn copy_line_comment(&mut self) {
+        while self.pos < self.b.len()
+            && self.b[self.pos] != b'\n'
+            && !(self.b[self.pos] == b'?' && self.b.get(self.pos + 1) == Some(&b'>'))
+        {
+            self.pos += 1;
+        }
+    }
+
+    /// Block comments end at `*/` — or at `?>`, which the PHP engine treats
+    /// as leaving PHP mode even inside a comment.
+    fn copy_block_comment(&mut self) {
+        let start = self.pos;
+        self.pos += 2;
+        let rest = &self.src[self.pos.min(self.src.len())..];
+        let block_end = rest.find("*/").map(|rel| start + 2 + rel + 2);
+        let close_end = rest.find("?>").map(|rel| start + 2 + rel);
+        self.pos = match (block_end, close_end) {
+            (Some(block), Some(close)) => block.min(close),
+            (Some(end), None) | (None, Some(end)) => end,
+            (None, None) => self.b.len(),
+        };
+        self.pos = self.pos.min(self.b.len());
+    }
+
+    /// `<<<LABEL` / `<<<"LABEL"` / `<<<'LABEL'` … closing label (PHP ≥7.3
+    /// allows indentation before the label).
+    fn copy_heredoc(&mut self) {
+        self.pos += 3;
+        while self
+            .b
+            .get(self.pos)
+            .is_some_and(|c| matches!(*c, b' ' | b'\t'))
+        {
+            self.pos += 1;
+        }
+        let quote = self
+            .b
+            .get(self.pos)
+            .copied()
+            .filter(|c| *c == b'"' || *c == b'\'');
+        if quote.is_some() {
+            self.pos += 1;
+        }
+        let ls = self.pos;
+        while self.pos < self.b.len()
+            && (self.b[self.pos].is_ascii_alphanumeric() || self.b[self.pos] == b'_')
+        {
+            self.pos += 1;
+        }
+        let label = self.src[ls..self.pos].to_string();
+        if quote.is_some() {
+            self.pos += 1;
+        }
+        // Find a line that, after optional indentation, starts with the label
+        // followed by a non-identifier character.
+        let mut cur = self.pos;
+        while let Some(nl) = self.src[cur..].find('\n') {
+            let line_start = cur + nl + 1;
+            let trimmed = self.src[line_start..].trim_start_matches([' ', '\t']);
+            if trimmed.starts_with(&label)
+                && !trimmed[label.len()..]
+                    .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            {
+                let end = line_start + (self.src[line_start..].len() - trimmed.len()) + label.len();
+                self.pos = end;
+                return;
+            }
+            cur = line_start;
+        }
+        self.pos = self.b.len();
+    }
+}
+
+/// Find `tag` in `rest` where the match is followed by whitespace or EOF
+/// (`<?phpx` is not an open tag).
+fn find_open_tag(rest: &str, tag: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = rest[from..].find(tag) {
+        let at = from + rel;
+        let after = at + tag.len();
+        if after >= rest.len() || rest[after..].starts_with(|c: char| c.is_ascii_whitespace()) {
+            return Some(at);
+        }
+        from = after;
+    }
+    None
+}
