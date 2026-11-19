@@ -31,9 +31,11 @@
 //!
 //! Diagnostics anchored inside a `lintel-ignore-next` suppression window
 //! (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
-//! here; parse diagnostics never reach this pass, so a directive cannot
-//! hide a misparse. The filter sits in the shared walk ([`validate_with`]),
-//! so custom rules inherit it — no rule sees suppression at all.
+//! here, and a file-level `lintel-ignore-file` directive short-circuits the
+//! whole walk before any rule runs; parse diagnostics never reach this
+//! pass, so a directive cannot hide a misparse. The filters sit in the
+//! shared walk ([`validate_with`]), so custom rules inherit them — no rule
+//! sees suppression at all.
 //!
 //! The pass is pure: `validate` maps roots + context → diagnostics, and
 //! [`crate::compile`] splits them by severity — errors fail the compilation,
@@ -59,8 +61,9 @@ use lintel_diag::{Code, Diagnostic, Severity};
 ///   on [`crate::Output::warnings`] (doc 4.4).
 /// - **No suppression knowledge.** Diagnostics anchored inside a
 ///   `lintel-ignore-next` window are dropped by the shared walk
-///   ([`validate_with`]) after rules run — a rule cannot opt out of, or
-///   observe, suppression.
+///   ([`validate_with`]) after rules run, and a file-level
+///   `lintel-ignore-file` flag short-circuits the walk before any rule
+///   runs — a rule cannot opt out of, or observe, suppression either way.
 /// - **Rules see every node.** Filter by [`Node`] variant (elements,
 ///   fragments, text, expressions) and by `Element::is_component`; pushing
 ///   nothing is a valid rule.
@@ -690,7 +693,10 @@ pub fn validate(roots: &[Node], context: &ScanContext) -> Vec<Diagnostic> {
 /// Validate with an explicit rule registry (doc T-08 seam).
 ///
 /// Rules run in slice order over a depth-first walk, then the
-/// `lintel-ignore-next` filter applies to the combined output. Pass
+/// `lintel-ignore-next` filter applies to the combined output. A
+/// `lintel-ignore-file` directive short-circuits before the walk: the
+/// context's file-level flag drops every validation diagnostic without
+/// running any rule, so a suppressed file pays no lint cost. Pass
 /// [`builtin_rules`] for the default set, or a custom slice to extend,
 /// reorder or replace it ([`crate::compile_with`] wires the same choice
 /// into a full compile).
@@ -700,6 +706,9 @@ pub fn validate_with(
     context: &ScanContext,
     rules: &[&dyn ValidationRule],
 ) -> Vec<Diagnostic> {
+    if context.file_suppressed() {
+        return vec![];
+    }
     let mut problems: Vec<Diagnostic> = vec![];
     for root in roots {
         walk(root, rules, context, &mut problems);
