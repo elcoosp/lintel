@@ -1242,3 +1242,47 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 - dev-null.sh commit constraints (3–280 chars, SSH signing) — https://packagist.org/packages/gromnan/devnull-notifier
 - Prior art — https://packagist.org/packages/syntaxx/phpx-compiler · https://packagist.org/packages/pre/phpx · https://packagist.org/packages/phpmystic/liqx · https://packagist.org/packages/lmc/twigx-bundle
 - Your three research documents (XHP/PHPX history, viral-DX brainstorm, Rust architecture) — incorporated, with corrections in §0.2.
+
+---
+
+## 21. Implementation status (agent-maintained; drift fixes live here)
+
+> Updated 2026-11-19, after the first execution pass. This section reconciles
+> the plan above with what the repository actually contains, so readers do
+> not treat §5–§6 as an inventory of shipped code.
+
+### 21.1 What exists
+
+| Plan item | Status | Where |
+|---|---|---|
+| T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` only; `lintel-cli`/`lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1) |
+| T-02 diagnostics crate | **done** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401), `Diagnostic`, dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
+| T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested |
+| T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
+| T-05 parse + emit (string target) | **done** | `crates/lintel-core/src/{ast,scan,emit}.rs`, `compile()` contract in `lib.rs` |
+| T-08 validation pass | **done (v0.1 subset)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0301/0401; "did you mean" close-tag suggestions and the static `on*` lint *warning* are open (the `Diagnostic` type has no severity field yet, per §6.6) |
+| T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality |
+| T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
+| T-09+ differential/fuzz/CLI/daemon/WASM | **not started** | — |
+
+Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion). They
+measure compiler throughput only; the §9.2 PHP rendering harness is future
+work, so no perf claims beyond these numbers are made anywhere.
+
+### 21.2 Drift corrections baked into the executable goldens
+
+The hand-written §6.9 golden does not follow §6.3's own `line_of` semantics
+(it places `\Lintel\c($label)` on the opening line of the `<span>` literal
+even though the expression sits one source line later, and it shows one
+fewer closing paren). The executable goldens in
+`crates/lintel-core/tests/golden.rs` are now the source of truth; they keep
+the invariants that matter — total line count preserved, every non-JSX token
+on its original line — and are verified end-to-end by the test suite.
+
+### 21.3 Documented v0.1 scanner limitations
+
+`<?` short open tags are not recognized (deprecated upstream); a file
+without a `<?php` open tag is treated as a pure HTML template and passed
+through untouched; `<\Namespaced\Tag>` written with a leading backslash is
+treated as operators (use `<Ui\Button>`). Each is asserted by a test so the
+behavior is intentional, not accidental.
