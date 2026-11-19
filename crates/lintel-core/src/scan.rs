@@ -55,6 +55,19 @@ enum Stop {
     Brace,
 }
 
+/// A suppression directive parsed out of a PHP line comment
+/// (`docs/ignore-directives.md`): the one-line `lintel-ignore-next` window
+/// and the file-level `lintel-ignore-file` flag. Anything else — including
+/// near-miss spellings, block comments, strings and heredocs — is data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Directive {
+    /// `// lintel-ignore-next` — suppress the line after the comment.
+    IgnoreNext,
+    /// `// lintel-ignore-file` — suppress every validation diagnostic in
+    /// the file.
+    IgnoreFile,
+}
+
 /// Everything the scanner produced for one source file.
 #[derive(Debug)]
 pub struct Parsed {
@@ -79,6 +92,11 @@ pub struct ScanContext {
     /// Source byte ranges covered by a `lintel-ignore-next` directive
     /// (`docs/ignore-directives.md`); consulted by the validation pass.
     suppressions: Vec<Suppression>,
+    /// Whether a `lintel-ignore-file` directive was seen anywhere in the
+    /// file (`docs/ignore-directives.md`): the validation pass drops every
+    /// diagnostic for the file, and parse diagnostics stay fatal because
+    /// they never reach that pass.
+    file_suppressed: bool,
 }
 
 /// A source byte range `[start, end)` in which validation diagnostics are
@@ -181,6 +199,24 @@ impl ScanContext {
     #[must_use]
     pub fn suppressions(&self) -> &[Suppression] {
         &self.suppressions
+    }
+
+    /// Latch the file-level suppression flag: a `// lintel-ignore-file` (or
+    /// `# lintel-ignore-file`) line comment seen anywhere in the file
+    /// (`docs/ignore-directives.md`). Idempotent; there is no opt-back-out
+    /// form. The validation pass consults [`ScanContext::file_suppressed`]
+    /// before running any rule; parse diagnostics are never affected.
+    pub fn suppress_file(&mut self) {
+        self.file_suppressed = true;
+    }
+
+    /// Whether a `lintel-ignore-file` directive was seen anywhere in the
+    /// file. Unlike the [`Suppression`] windows this flag is position
+    /// independent: the directive suppresses the whole file from wherever it
+    /// sits, including the last line.
+    #[must_use]
+    pub fn file_suppressed(&self) -> bool {
+        self.file_suppressed
     }
 
     /// Whether a function with this name is declared/imported. PHP function
@@ -628,7 +664,11 @@ impl<'s> Scanner<'s> {
         }
         let name = self.take_tag_name();
         if name.is_empty() {
-            return self.fail(Code::UnterminatedTag, "expected a tag name after `<`");
+            return self.fail_help(
+                Code::UnterminatedTag,
+                "expected a tag name after `<`",
+                "tag names start with a letter or `_`; `<>` opens a fragment",
+            );
         }
         let is_component =
             name.chars().next().is_some_and(char::is_uppercase) || name.contains('\\');
@@ -671,7 +711,13 @@ impl<'s> Scanner<'s> {
         loop {
             self.skip_ws();
             match self.b.get(self.pos) {
-                None => return self.fail(Code::UnterminatedTag, "unterminated tag"),
+                None => {
+                    return self.fail_help(
+                        Code::UnterminatedTag,
+                        "unterminated tag",
+                        "close the tag before the end of input: `>` or `/>`",
+                    )
+                }
                 Some(b'/') if self.b.get(self.pos + 1) == Some(&b'>') => {
                     self.pos += 2;
                     return Ok((attrs, true));
@@ -692,7 +738,7 @@ impl<'s> Scanner<'s> {
         self.pos += 1; // consume '{'
         let mut php = String::new();
         self.php(&mut php, Stop::Brace)?;
-        self.expect(b'}')?;
+        self.expect(b'}', "close the `{ … }` spread expression")?;
         let trimmed = php.trim_start();
         if let Some(expr) = trimmed.strip_prefix("...") {
             Ok(Attr::Spread {
@@ -701,7 +747,11 @@ impl<'s> Scanner<'s> {
                 offset,
             })
         } else {
-            self.fail(Code::BadSpread, "expected `{...expr}`")
+            self.fail_help(
+                Code::BadSpread,
+                "expected `{...expr}`",
+                "write the spread as `{...$attrs}`",
+            )
         }
     }
 
@@ -716,7 +766,11 @@ impl<'s> Scanner<'s> {
             self.pos += 1;
         }
         if s == self.pos {
-            return self.fail(Code::BadAttr, "expected attribute name");
+            return self.fail_help(
+                Code::BadAttr,
+                "expected attribute name",
+                "write `name=\"value\"`, a bare boolean `name`, or end the tag with `>`",
+            );
         }
         let name = self.src[s..self.pos].to_string();
         self.skip_ws();
@@ -746,7 +800,7 @@ impl<'s> Scanner<'s> {
                 self.pos += 1;
                 let mut php = String::new();
                 self.php(&mut php, Stop::Brace)?;
-                self.expect(b'}')?;
+                self.expect(b'}', "close the `{ … }` attribute expression")?;
                 Ok(Attr::Expr {
                     name,
                     php,
@@ -754,9 +808,10 @@ impl<'s> Scanner<'s> {
                     offset,
                 })
             }
-            _ => self.fail(
+            _ => self.fail_help(
                 Code::BadAttr,
                 "attribute value must be \"…\", '…' or {expr}",
+                "quote the value: `name=\"text\"`, `name='text'` or `name={expr}`",
             ),
         }
     }
@@ -766,7 +821,11 @@ impl<'s> Scanner<'s> {
         let mut text_start = self.pos;
         loop {
             if self.pos >= self.b.len() {
-                return self.fail(Code::UnterminatedTag, "unclosed element");
+                return self.fail_help(
+                    Code::UnterminatedTag,
+                    "unclosed element",
+                    format!("close the element: `</{parent}>`"),
+                );
             }
             match self.b[self.pos] {
                 b'<' if self.b.get(self.pos + 1) == Some(&b'/') => {
@@ -774,7 +833,7 @@ impl<'s> Scanner<'s> {
                     self.pos += 2;
                     let name = self.take_tag_name();
                     self.skip_ws();
-                    self.expect(b'>')?;
+                    self.expect(b'>', "end the closing tag with `>`")?;
                     if name != parent {
                         // A near-miss spelling of the open tag gets a
                         // "did you mean" help line (§21.1); an unrelated
@@ -804,7 +863,7 @@ impl<'s> Scanner<'s> {
                     self.pos += 1;
                     let mut php = String::new();
                     self.php(&mut php, Stop::Brace)?;
-                    self.expect(b'}')?;
+                    self.expect(b'}', "close the `{ … }` child expression")?;
                     let trimmed = php.trim();
                     let is_comment = trimmed.starts_with("/*")
                         && trimmed.ends_with("*/")
@@ -826,9 +885,10 @@ impl<'s> Scanner<'s> {
         let body_end = loop {
             match self.src[scan_from..].find(&close) {
                 None => {
-                    return self.fail(
+                    return self.fail_help(
                         Code::UnterminatedTag,
                         format!("unclosed raw-text element `<{parent}>`"),
+                        format!("close the raw-text element: `</{parent}>`"),
                     )
                 }
                 Some(rel) => {
@@ -845,7 +905,7 @@ impl<'s> Scanner<'s> {
         let line = self.line_of(start, root);
         self.pos = body_end + close.len();
         self.skip_ws();
-        self.expect(b'>')?;
+        self.expect(b'>', "end the closing tag with `>`")?;
         Ok(if text.is_empty() {
             vec![]
         } else {
@@ -888,7 +948,7 @@ impl<'s> Scanner<'s> {
         }
     }
 
-    fn expect(&mut self, expected: u8) -> Result<(), Diagnostic> {
+    fn expect(&mut self, expected: u8, help: &str) -> Result<(), Diagnostic> {
         if self.b.get(self.pos) == Some(&expected) {
             self.pos += 1;
             Ok(())
@@ -897,15 +957,24 @@ impl<'s> Scanner<'s> {
                 .chars()
                 .next()
                 .map_or("end of input".to_string(), |c| format!("`{c}`"));
-            self.fail(
+            self.fail_help(
                 Code::Expected,
                 format!("expected `{}`, found {found}", char::from(expected)),
+                help,
             )
         }
     }
 
-    fn fail<T>(&self, code: Code, message: impl Into<String>) -> Result<T, Diagnostic> {
-        Err(Diagnostic::new(code, message, self.pos))
+    /// The actionable `help:` line the operating manual requires on every
+    /// diagnostic (architecture doc §18); the message names the problem,
+    /// the help names the fix.
+    fn fail_help<T>(
+        &self,
+        code: Code,
+        message: impl Into<String>,
+        help: impl Into<String>,
+    ) -> Result<T, Diagnostic> {
+        Err(Diagnostic::new(code, message, self.pos).with_help(help))
     }
 
     // ---------- verbatim copiers ----------
@@ -988,6 +1057,9 @@ impl<'s> Scanner<'s> {
     /// carrying the `lintel-ignore-next` directive records a suppression
     /// window covering the physical line after the comment's own line
     /// (`docs/ignore-directives.md`); `start` is the comment's first byte.
+    /// A comment carrying the file-level `lintel-ignore-file` directive
+    /// latches [`ScanContext::suppress_file`] — position independent, so no
+    /// window is recorded for it.
     fn copy_line_comment(&mut self, start: usize) {
         while self.pos < self.b.len()
             && self.b[self.pos] != b'\n'
@@ -995,32 +1067,43 @@ impl<'s> Scanner<'s> {
         {
             self.pos += 1;
         }
-        if Self::is_ignore_next(&self.src[start..self.pos]) {
-            let line_end = self.src[self.pos..]
-                .find('\n')
-                .map_or(self.b.len(), |rel| self.pos + rel);
-            let window_start = line_end + 1;
-            if window_start < self.b.len() {
-                let window_end = self.src[window_start..]
+        match Self::directive_of(&self.src[start..self.pos]) {
+            Some(Directive::IgnoreNext) => {
+                let line_end = self.src[self.pos..]
                     .find('\n')
-                    .map_or(self.b.len(), |rel| window_start + rel);
-                self.context.add_suppression(window_start, window_end);
+                    .map_or(self.b.len(), |rel| self.pos + rel);
+                let window_start = line_end + 1;
+                if window_start < self.b.len() {
+                    let window_end = self.src[window_start..]
+                        .find('\n')
+                        .map_or(self.b.len(), |rel| window_start + rel);
+                    self.context.add_suppression(window_start, window_end);
+                }
             }
+            Some(Directive::IgnoreFile) => self.context.suppress_file(),
+            None => {}
         }
     }
 
-    /// Whether a copied line comment carries the `lintel-ignore-next`
-    /// directive: the comment marker(s) stripped, leading whitespace trimmed,
-    /// then the directive word, then end-of-comment, whitespace, or a `:`
-    /// before the optional reason.
-    fn is_ignore_next(comment: &str) -> bool {
+    /// Which suppression directive a copied line comment carries, if any:
+    /// the comment marker(s) stripped, leading whitespace trimmed, then the
+    /// directive word, then end-of-comment, whitespace, or a `:` before the
+    /// optional reason. The word is exact, so `lintel-ignore-nextline` and
+    /// `lintel-ignore-filex` match nothing.
+    fn directive_of(comment: &str) -> Option<Directive> {
         let body = comment.trim_start_matches(['/', '#']).trim_start();
-        match body.strip_prefix("lintel-ignore-next") {
-            Some(rest) => {
-                rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace)
+        for (word, directive) in [
+            ("lintel-ignore-next", Directive::IgnoreNext),
+            ("lintel-ignore-file", Directive::IgnoreFile),
+        ] {
+            if let Some(rest) = body.strip_prefix(word) {
+                if rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace)
+                {
+                    return Some(directive);
+                }
             }
-            None => false,
         }
+        None
     }
 
     /// Block comments end at `*/` — or at `?>`, which the PHP engine treats
