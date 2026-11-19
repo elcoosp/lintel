@@ -164,6 +164,7 @@ fn crate_sig() -> lintel_core::scan::Signature {
         params: vec!["heading".to_string()],
         variadic: false,
         required: vec![],
+        typed_strings: vec!["heading".to_string()],
     }
 }
 
