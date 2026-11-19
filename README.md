@@ -42,6 +42,20 @@ that runs under OPcache with the author's line numbers preserved.
   1-based line/column through the public, renderer-parity
   [`SourceMap`](crates/lintel-diag/src/lib.rs) — the offset→position
   converter CLI/LSP consumers previously had to re-implement.
+- **Machine-readable diagnostics** — `lintel check --format=json` (and the
+  same flag on `build`) emits one JSON object per diagnostic on stderr —
+  stable `LNTxxxx` code, severity, message, byte offset, 1-based line/col,
+  optional `help:` line and the docs URL — built on the dependency-free
+  [`Diagnostic::to_json`](crates/lintel-diag/src/lib.rs) seam; exit codes
+  are identical to text format. The exact contract lives in
+  [`docs/diagnostics-json.md`](docs/diagnostics-json.md).
+- **`NodeVisitor` traversal** — a read-only visitor
+  ([`NodeVisitor`](crates/lintel-core/src/ast.rs) +
+  `visit_node`/`visit_roots`) walks the compiler's AST top-down,
+  depth-first, children in source order — the exact sequence the
+  validation pass walks — so LSP features, metrics and doc generators do
+  not re-implement the recursion. The contract lives in
+  [`docs/node-visitor.md`](docs/node-visitor.md).
 - **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
   comment drops the validation diagnostics anchored on the following line,
   and the file-level `// lintel-ignore-file` drops every validation
@@ -79,9 +93,11 @@ cargo run -p lintel-core --example elision          # escape elision of scalar c
 cargo run -p lintel-core --example parse_errors     # parse diagnostics + did-you-mean
 cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
 cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
+cargo run -p lintel-core --example custom_visitor   # NodeVisitor seam: walk the AST
 cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 cargo run -p lintel-cli --example build_library    # the CLI engine as a library
+cargo run -p lintel-cli --example json_diagnostics # --format=json machine-readable diagnostics
 cargo install --path crates/lintel-cli             # install the `lintel` binary
 lintel build page.lintel.php                       # compile to stdout
 lintel check src/                                  # diagnostics-only CI gate
@@ -116,12 +132,15 @@ docs/stream-alignment.md  exact `stream` lowering contract
 docs/srcset-alignment.md  exact `srcset` attribute routing contract
 docs/escape-elision.md  exact provably-scalar child folding contract
 docs/ignore-directives.md  exact suppression directive contracts
+docs/diagnostics-json.md  exact machine-readable diagnostic contract
+docs/node-visitor.md  exact read-only AST traversal contract
 ```
 
 ## Status
 
 The compiler core, the three lowering targets, the validation pass, the
-`lintel-ignore-*` directives, escape elision and the minimal `lintel`
+`lintel-ignore-*` directives, escape elision, the machine-readable JSON
+diagnostics, the `NodeVisitor` read traversal and the minimal `lintel`
 build/check CLI run today. The remaining CLI surface (watch/init/daemon),
 WASM playground, LSP, PHP runtime and the PHP rendering benchmark harness
 (§9.2) are future milestones (see `docs/architecture.md` §15 task cards and
