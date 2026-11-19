@@ -1253,9 +1253,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 > again after the fourth pass (validation-rule seam, `SourceMap` positions,
 > "did you mean" close-tag suggestions), again after the fifth pass
 > (file-level `lintel-ignore-file` suppression, `srcset` attribute routing,
-> parse-error `help:` lines), and again after the sixth pass (§7.3 escape
+> parse-error `help:` lines), again after the sixth pass (§7.3 escape
 > elision for provably-scalar children, the minimal `lintel-cli` build/check
-> binary).
+> binary), and again after the seventh pass (machine-readable JSON
+> diagnostics with the CLI `--format=json` flag, and the read-only
+> `NodeVisitor` traversal seam).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1264,7 +1266,7 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | Plan item | Status | Where |
 |---|---|---|
 | T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` and (since the sixth pass) `lintel-cli`; `lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1). CI clippy gate uses the renamed `-W clippy::pedantic` lint: the bare `-W pedantic` name is a `renamed-and-removed-lints` hard error on current stable toolchains |
-| T-02 diagnostics crate | **done (with severities)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401 plus `LNT0205`), `Severity` (`Error`/`Warning`), `Diagnostic` (implements `std::error::Error` for CLI/LSP consumers), dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
+| T-02 diagnostics crate | **done (with severities + JSON)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401 plus `LNT0205`), `Severity` (`Error`/`Warning`), `Diagnostic` (implements `std::error::Error` for CLI/LSP consumers), dependency-free miette-style `render()` and, since the seventh pass, dependency-free `to_json()` (one-line JSON object, renderer-parity positions, stable field order — `docs/diagnostics-json.md`); `docs/errors/LNT*.md` pages not yet written |
 | T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested; lowering is injected via `scan_with(src, &dyn Lowering)` instead of being hardcoded |
 | T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
 | T-05 parse + emit (string target) | **done** | `crates/lintel-core/src/{ast,scan,emit}.rs`, `compile()` contract in `lib.rs` |
@@ -1277,7 +1279,8 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop, `LNT0204` unexpected children and `LNT0205` missing required parameter (a parameter declared without a default; spreads satisfy it, JSX children satisfy a `children` parameter) for components declared in the same file (PHP named arguments are case-sensitive); typed-parameter escape elision remains open |
 | §4.4/§7.1 `srcset` per-URL attribute routing | **done (compiler subset)** | `emit.rs::push_attr` routes dynamic `srcset={expr}` attributes through the dedicated `\Lintel\srcset()` helper on the string and stream targets (the runtime helper splits candidates and scheme-checks each URL); static values fold verbatim, the `rfc` target stays helper-free, component attributes stay named arguments. The exact contract is recorded in `docs/srcset-alignment.md` and tested by `tests/srcset.rs`; the `srcset()` runtime helper itself ships with the PHP runtime (T-07) |
 | §7.3 escape elision (v0.1 "honest version", casts + `count()`) | **done (compiler subset)** | `emit.rs::dyn_child` folds dynamic children that are provably non-string scalars — `(int)`/`(integer)`/`(float)`/`(double)` casts spanning the whole expression, and `count()` calls — to the raw PHP expression on both markup targets; everything else keeps `\Lintel\c()`, conservative by design. The exact contract is recorded in `docs/escape-elision.md` and tested by `tests/elision.rs` + the `emit` matcher unit tests; the typed-parameter bullet of §7.3 v0.1 (and the PHPStan-backed Y2 pass) remains open |
-| T-10 CLI | **done (minimal subset)** | `crates/lintel-cli` — the `lintel` binary with `build` (stdout / `--out DIR` / `--in-place`) and `check` (diagnostics-only, exit 1 on errors, warnings advisory) over files and recursively-walked directories in path order; `--target=string|stream|rfc`, `--help`, `--version`. The engine lives in the library target so `tests/cli.rs` drives the exact code `main.rs` runs; `watch`/`init`/`fmt`/`daemon` and the rayon/blake3 layer stay future work |
+| T-10 CLI | **done (minimal subset)** | `crates/lintel-cli` — the `lintel` binary with `build` (stdout / `--out DIR` / `--in-place`) and `check` (diagnostics-only, exit 1 on errors, warnings advisory) over files and recursively-walked directories in path order; `--target=string|stream|rfc`, `--format=text|json` (since the seventh pass: machine-readable diagnostics on stderr, exit codes unchanged — `docs/diagnostics-json.md`), `--help`, `--version`. The engine lives in the library target so `tests/cli.rs` drives the exact code `main.rs` runs; `watch`/`init`/`fmt`/`daemon` and the rayon/blake3 layer stay future work |
+| `NodeVisitor` read traversal (seventh pass) | **done** | `ast::NodeVisitor` trait + `visit_node`/`visit_roots` in `crates/lintel-core/src/ast.rs`, re-exported at the crate root: the exact top-down, depth-first, source-ordered walk the validation pass runs, as a read-only consumer contract (attributes ride on the element visit; root trees are disjoint, so every node is visited exactly once over one `scan()`). The contract is recorded in `docs/node-visitor.md`, tested by `tests/visitor.rs`, demoed by `examples/custom_visitor.rs` and benched by the `visitor` group |
 | T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
 | T-09+ differential/fuzz/daemon/WASM | **not started** | — |
@@ -1297,7 +1300,11 @@ short-circuit against the unsuppressed `warned_handlers` cost),
 `elided_children` (the §7.3 escape-elision path: provably-scalar children
 compile without the `\Lintel\c()` wrapper). A
 second group, `sourcemap`, measures the offset→line:col lookups behind
-every rendered diagnostic. They
+every rendered diagnostic. Since the seventh pass, a `json` group measures
+the machine-readable emission path (`Diagnostic::to_json` over the
+`warned_handlers` warnings — `docs/diagnostics-json.md`) and a `visitor`
+group measures the read-only `NodeVisitor` traversal
+(`docs/node-visitor.md`). They
 measure compiler throughput only; the §9.2 PHP rendering harness is future
 work, so no perf claims beyond these numbers are made anywhere.
 
@@ -1310,6 +1317,17 @@ fewer closing paren). The executable goldens in
 `crates/lintel-core/tests/golden.rs` are now the source of truth; they keep
 the invariants that matter — total line count preserved, every non-JSX token
 on its original line — and are verified end-to-end by the test suite.
+
+A seventh-pass drift correction fixed the bench source builders:
+`warned_handlers_source`, `suppressed_handlers_source` and
+`file_suppressed_handlers_source` wrote `onclick={track('row-i')}` — a
+dynamic handler, so `warned_handlers` measured the LNT0301 *rejection*
+path while its doc comment, name and this table claimed the LNT0302
+*warning* path (rustc accepts the lone `}` in the format string, so the
+compile could not catch it, and the benches never unwrapped the result).
+The builders now emit static `onclick="track('row-i')"` strings, and the
+`json` bench asserts the 20 warnings exist so the path cannot silently
+drift back.
 
 ### 21.3 Documented v0.1 scanner limitations
 
