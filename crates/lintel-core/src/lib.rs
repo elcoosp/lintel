@@ -39,6 +39,13 @@
 //! validation diagnostic in the file — see `docs/ignore-directives.md` and
 //! [`scan::ScanContext::suppressed_at`]/[`scan::ScanContext::file_suppressed`].
 //! Parse diagnostics (`LNT01xx`) are never suppressible.
+//!
+//! # Reading the tree
+//!
+//! Consumers that walk the AST without validating — LSP features, metrics,
+//! doc generators — use the [`NodeVisitor`] seam ([`visit_node`]/[`visit_roots`]):
+//! the exact top-down, depth-first, source-ordered traversal the validation
+//! pass runs, as a read-only visitor contract (`docs/node-visitor.md`).
 
 pub mod ast;
 pub mod emit;
@@ -46,6 +53,7 @@ pub mod scan;
 pub mod text;
 pub mod validate;
 
+pub use ast::{visit_node, visit_roots, NodeVisitor};
 pub use lintel_diag::{Code, Diagnostic, Severity, SourceMap};
 pub use validate::{builtin_rules, ValidationRule};
 
