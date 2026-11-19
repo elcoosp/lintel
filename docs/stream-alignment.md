@@ -36,7 +36,7 @@ Details the doc does not pin down, decided here:
 2. **Chunks mirror the string target's parts.** Literal runs merge into one
    quoted string chunk (one `yield` per literal run, same merge rule as the
    string concat, doc 6.5); dynamic children/attributes ride through the same
-   context-aware `\Lintel\c/a/u/cls/sty/attrs` helpers. Escape-by-default
+   context-aware `\Lintel\c/a/u/cls/sty/srcset/attrs` helpers. Escape-by-default
    (doc 4.4) is unchanged by streaming.
 3. **Components stay wrapped in `\Lintel\c()`.** A component call is yielded
    as `\Lintel\c(Card(...))`: the runtime helper already renders `Html`
