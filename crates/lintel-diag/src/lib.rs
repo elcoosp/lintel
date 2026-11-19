@@ -46,6 +46,10 @@ pub enum Code {
     /// JSX children were passed to a component whose declared signature has
     /// no `children` parameter (`LNT0204`).
     UnexpectedChildren,
+    /// A component invocation omits a parameter the in-file signature
+    /// declares without a default value (`LNT0205`); PHP would reject the
+    /// call at runtime with `Argument ... not given`.
+    MissingRequiredProp,
     /// A dynamic event-handler attribute was rejected (`LNT0301`).
     DynamicHandler,
     /// A static event-handler string is allowed but discouraged (`LNT0302`).
@@ -68,6 +72,7 @@ impl Code {
             Self::HyphenArg => "LNT0202",
             Self::UnknownProp => "LNT0203",
             Self::UnexpectedChildren => "LNT0204",
+            Self::MissingRequiredProp => "LNT0205",
             Self::DynamicHandler => "LNT0301",
             Self::StaticHandler => "LNT0302",
             Self::VoidChildren => "LNT0401",
@@ -87,6 +92,7 @@ impl Code {
             Self::HyphenArg => "attribute cannot become a named argument",
             Self::UnknownProp => "component has no such parameter",
             Self::UnexpectedChildren => "component does not accept children",
+            Self::MissingRequiredProp => "required component parameter missing",
             Self::DynamicHandler => "dynamic event-handler attributes are not allowed",
             Self::StaticHandler => "static event-handler strings are discouraged",
             Self::VoidChildren => "void elements cannot have children",
@@ -108,9 +114,10 @@ impl fmt::Display for Code {
 
 /// How hard a diagnostic fails the compilation.
 ///
-/// [`Severity::Error`] diagnostics fail [`lintel_core::compile`]; warnings
-/// are returned on the compiled output without failing it (doc 4.4: static
-/// `on*` strings are "allowed with a lint warning").
+/// [`Severity::Error`] diagnostics fail `lintel_core::compile` (see the
+/// `lintel-core` crate); warnings are returned on the compiled output
+/// without failing it (doc 4.4: static `on*` strings are "allowed with a
+/// lint warning").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Severity {
     /// A hard failure: the compilation returns `Err` (default).
@@ -151,7 +158,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Create an [`Severity::Error`] diagnostic without a `help:` line.
+    /// Create an error-severity diagnostic without a `help:` line.
     pub fn new(code: Code, message: impl Into<String>, offset: usize) -> Self {
         Self {
             code,
@@ -226,6 +233,8 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+impl std::error::Error for Diagnostic {}
+
 /// Clamp a byte offset into `src` and floor it to a char boundary.
 fn clamp_offset(src: &str, offset: usize) -> usize {
     let end = src.len();
@@ -265,9 +274,33 @@ mod tests {
         assert_eq!(Code::HyphenArg.lnt(), "LNT0202");
         assert_eq!(Code::UnknownProp.lnt(), "LNT0203");
         assert_eq!(Code::UnexpectedChildren.lnt(), "LNT0204");
+        assert_eq!(Code::MissingRequiredProp.lnt(), "LNT0205");
         assert_eq!(Code::DynamicHandler.lnt(), "LNT0301");
         assert_eq!(Code::StaticHandler.lnt(), "LNT0302");
         assert_eq!(Code::VoidChildren.lnt(), "LNT0401");
+    }
+
+    #[test]
+    fn diagnostics_are_std_errors() {
+        // The `std::error::Error` impl lets CLI/LSP consumers box a
+        // diagnostic into `anyhow`/`Box<dyn Error>` without a wrapper.
+        let problem: Box<dyn std::error::Error> = Box::new(Diagnostic::new(
+            Code::MissingRequiredProp,
+            "missing `$label`",
+            3,
+        ));
+        assert_eq!(
+            problem.to_string(),
+            "error[LNT0205]: missing `$label` at offset 3"
+        );
+    }
+
+    #[test]
+    fn required_prop_summary_is_stable() {
+        assert_eq!(
+            Code::MissingRequiredProp.summary(),
+            "required component parameter missing"
+        );
     }
 
     #[test]
