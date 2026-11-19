@@ -94,6 +94,25 @@ fn warned_handlers_source() -> String {
     src
 }
 
+/// The same warned-handlers file, but every `onclick` line carries a
+/// `lintel-ignore-next` directive on the line above — measures the
+/// suppression-window capture and per-diagnostic window lookup
+/// (`docs/ignore-directives.md`) against the unsuppressed cost.
+fn suppressed_handlers_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Panel(string $user): Html {\n    return <section class=\"panel\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(src, "        // lintel-ignore-next: legacy handler {i}");
+        let _ = writeln!(
+            src,
+            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+        );
+    }
+    src.push_str("    </section>;\n}\n");
+    src
+}
+
 /// Component invocations checked against an in-file signature (doc §17.1):
 /// every prop matches a declared parameter, so the file compiles cleanly —
 /// measures the signature-capture and prop-lookup path against the
@@ -104,6 +123,19 @@ fn signature_checked_source() -> String {
     );
     for i in 0..20 {
         let _ = writeln!(src, "echo <Row label=\"cell {i}\" active />;");
+    }
+    src
+}
+
+/// The same signature-checked file, but every invocation omits the required
+/// `$label` parameter — measures the required-parameter rejection path
+/// (LNT0205) against the clean `signature_checked` cost.
+fn required_missing_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Row(string $label, bool $active = false): Html {\n    return <b>{$label}</b>;\n}\n",
+    );
+    for _ in 0..20 {
+        let _ = writeln!(src, "echo <Row active />;");
     }
     src
 }
@@ -148,8 +180,16 @@ fn bench(c: &mut Criterion) {
         let src = warned_handlers_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
+    group.bench_function("suppressed_handlers", |b| {
+        let src = suppressed_handlers_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
     group.bench_function("signature_checked", |b| {
         let src = signature_checked_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("required_missing", |b| {
+        let src = required_missing_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
 
