@@ -1248,8 +1248,10 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 ## 21. Implementation status (agent-maintained; drift fixes live here)
 
 > Updated 2026-11-19 after the first execution pass, again after the
-> second pass (stream target + signature scanning), and again after the
-> third pass (ignore directives + required-parameter signature checks).
+> second pass (stream target + signature scanning), again after the
+> third pass (ignore directives + required-parameter signature checks), and
+> again after the fourth pass (validation-rule seam, `SourceMap` positions,
+> "did you mean" close-tag suggestions).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1262,7 +1264,9 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested; lowering is injected via `scan_with(src, &dyn Lowering)` instead of being hardcoded |
 | T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
 | T-05 parse + emit (string target) | **done** | `crates/lintel-core/src/{ast,scan,emit}.rs`, `compile()` contract in `lib.rs` |
-| T-08 validation pass | **done (v0.1 subset + warnings + signatures)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0203/0204/0205/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`; "did you mean" close-tag suggestions remain open |
+| T-08 validation pass | **done (v0.1 subset + warnings + signatures)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0203/0204/0205/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`. "Did you mean" close-tag suggestions are done: a mismatched close that shares the open tag's first character within a small edit distance carries a `help:` suggestion (`scan.rs::close_tag_help`, tested by `tests/parse_errors.rs`) |
+| Validation-rule seam (T-08 extension) | **done** | `validate::ValidationRule` trait + eight built-in rule structs + `builtin_rules()` registry in `crates/lintel-core/src/validate.rs`; `validate_with(roots, context, rules)` and `compile_with(src, opts, rules)` inject a consumer registry the way `scan_with` injects a lowering. Rules run in slice order over the shared depth-first walk, then the `lintel-ignore-next` filter applies — custom rules inherit the severity split and suppression choke point. Tested by `tests/rules.rs`, demoed by `examples/custom_rule.rs` |
+| `SourceMap` offset→position seam | **done** | `lintel_diag::SourceMap` (re-exported at the `lintel-core` root): byte offsets → 1-based line / char-based column / line text with clamp-and-floor semantics, byte-identical to what `Diagnostic::render` has always computed (which now delegates to it). The converter CLI/LSP consumers previously had to re-implement. Tested by `tests/sourcemap.rs` + inline `lintel-diag` tests, demoed by `examples/sourcemap.rs` |
 | `// lintel-ignore-next` (doc §17 mitigation) | **done (compiler subset)** | the scanner records one-line suppression windows into `ScanContext` (`scan::Suppression`, `add_suppression`/`suppressed_at`/`suppressions()`), and `validate` drops diagnostics inside them; parse diagnostics (`LNT01xx`) are never suppressible. The exact contract is recorded in `docs/ignore-directives.md` and tested by `tests/suppressions.rs` |
 | `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` |
 | `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol and runtime adapters are future work |
@@ -1276,8 +1280,12 @@ four compiler-throughput scenarios plus `rfc_component_tree` (RFC-parity
 lowering), `stream_component_tree` (streaming generator lowering),
 `warned_handlers` (warn-and-continue validation path), `signature_checked`
 (in-file signature validation path), `suppressed_handlers` (the
-`lintel-ignore-next` window capture and per-diagnostic lookup path) and
-`required_missing` (the LNT0205 required-parameter rejection path). They
+`lintel-ignore-next` window capture and per-diagnostic lookup path),
+`required_missing` (the LNT0205 required-parameter rejection path) and
+`custom_rule` (the injected validation-rule registry: built-in set plus one
+consumer policy rule, against the hardcoded `component_tree` cost). A
+second group, `sourcemap`, measures the offset→line:col lookups behind
+every rendered diagnostic. They
 measure compiler throughput only; the §9.2 PHP rendering harness is future
 work, so no perf claims beyond these numbers are made anywhere.
 
