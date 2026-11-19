@@ -8,7 +8,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use lintel_core::{compile, Options};
+use lintel_core::{compile, Options, Target};
 
 /// ~200 lines of plain PHP with strings, comments, heredocs and no JSX.
 fn passthrough_source() -> String {
@@ -77,6 +77,23 @@ fn rejected_handlers_source() -> String {
     src
 }
 
+/// Static-heavy handlers: every `onclick` is a static string, so each file
+/// compiles successfully but carries an `LNT0302` warning — measures the
+/// warn-and-continue validation path against the clean compile cost.
+fn warned_handlers_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Panel(string $user): Html {\n    return <section class=\"panel\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <button onclick={{track('row-{i}')}}>action {i}</button>"
+        );
+    }
+    src.push_str("    </section>;\n}\n");
+    src
+}
+
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("compile");
     group.sample_size(30);
@@ -91,12 +108,23 @@ fn bench(c: &mut Criterion) {
         let src = component_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
+    group.bench_function("rfc_component_tree", |b| {
+        let src = component_source();
+        let opts = Options {
+            target: Target::Rfc,
+        };
+        b.iter(|| compile(black_box(&src), black_box(&opts)));
+    });
     group.bench_function("static_heavy", |b| {
         let src = static_heavy_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
     group.bench_function("rejected_handlers", |b| {
         let src = rejected_handlers_source();
+        b.iter(|| compile(black_box(&src), black_box(&Options::default())));
+    });
+    group.bench_function("warned_handlers", |b| {
+        let src = warned_handlers_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
 
