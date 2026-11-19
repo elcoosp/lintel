@@ -273,10 +273,14 @@ impl Diagnostic {
     }
 }
 
-/// JSON-escape `value` into `out` (contract of [`Diagnostic::to_json`]):
-/// quotes, backslashes and control characters only — everything else is
-/// emitted verbatim so multi-byte UTF-8 survives untouched.
-fn json_escape(value: &str, out: &mut String) {
+/// JSON-escape `value` into `out`, the shared escaping rule of every
+/// machine-readable emitter in the workspace (contract of
+/// [`Diagnostic::to_json`]): quotes, backslashes and control characters
+/// only — everything else is emitted verbatim so multi-byte UTF-8 survives
+/// untouched. Public so sibling crates that emit their own JSON Lines
+/// (e.g. the core's `FileInventory::to_json`) reuse the exact escaping the
+/// diagnostics use instead of re-implementing it.
+pub fn json_escape(value: &str, out: &mut String) {
     for c in value.chars() {
         match c {
             '"' => out.push_str("\\\""),
