@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/lintel-diag", "crates/lintel-core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+
+[workspace.lints.clippy]
+# Relaxations of the `pedantic` group used by CI (`clippy -D warnings -W pedantic`).
+# Each entry carries a rationale; everything else in `pedantic` stays warn-by-default.
+cast_possible_truncation = "allow" # line/offset counters go usize -> u32; u32 covers >4G lines per file
+module_name_repetitions = "allow"  # ast::Node / scan::Parsed are re-exported at the crate root by design
+string_slice = "allow"             # the scanner slices only at ASCII-delimited byte offsets (parser invariant)
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
