@@ -25,25 +25,31 @@
 //!
 //! # Errors
 //!
-//! [`compile`] returns every [`Diagnostic`] it found (parse diagnostics from
-//! the scanner, later validation diagnostics) instead of panicking; each has
-//! a stable `LNTxxxx` code, a source offset and an optional help line.
+//! [`compile`] returns every error-severity [`Diagnostic`] it found (parse
+//! diagnostics from the scanner, later validation diagnostics) instead of
+//! panicking; each has a stable `LNTxxxx` code, a [`Severity`], a source
+//! offset and an optional help line. Warnings (e.g. the static `on*` handler
+//! lint) ride along on [`Output::warnings`] without failing the compilation.
 
 pub mod ast;
-mod emit;
+pub mod emit;
 pub mod scan;
 pub mod text;
 pub mod validate;
 
-pub use lintel_diag::{Code, Diagnostic};
+pub use lintel_diag::{Code, Diagnostic, Severity};
 
-/// Output lowering target (doc 5.3). Only the string target exists in v0.1;
-/// `rfc` and `stream` arrive with later milestones.
+/// Output lowering target (doc 5.3). `stream` arrives with later milestones.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Target {
     /// String-concat AOT (default): functions return one `Html` value.
     #[default]
     String,
+    /// RFC-parity lowering (doc 5.3, §0.1): markup becomes
+    /// `new \Markup\Element(...)` constructor calls / named-argument
+    /// component calls; no `\Lintel\` runtime helpers are emitted.
+    /// See `docs/rfc-alignment.md` for the exact lowering contract.
+    Rfc,
 }
 
 /// Compiler options.
@@ -58,6 +64,10 @@ pub struct Options {
 pub struct Output {
     /// Plain, vendor-free PHP ready for `OPcache`.
     pub php: String,
+    /// Warning-severity diagnostics (doc 4.4): the file compiled, but the
+    /// validation pass has advice. Errors never appear here — they fail the
+    /// compilation instead.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Compile `.lintel.php` source into plain PHP.
@@ -67,25 +77,25 @@ pub struct Output {
 ///
 /// # Errors
 ///
-/// Returns every [`Diagnostic`] found while scanning (stable `LNTxxxx`
-/// codes, byte offsets, optional help lines). Partial output is never
-/// returned: any diagnostic fails the whole compilation.
+/// Returns every error-severity [`Diagnostic`] found while scanning or
+/// validating (stable `LNTxxxx` codes, byte offsets, optional help lines).
+/// Partial output is never returned: any error fails the whole compilation.
+/// Warning-severity diagnostics ride along on [`Output::warnings`].
 pub fn compile(src: &str, opts: &Options) -> Result<Output, Vec<Diagnostic>> {
-    match opts.target {
-        Target::String => compile_string(src),
-    }
-}
-
-fn compile_string(src: &str) -> Result<Output, Vec<Diagnostic>> {
-    let parsed = scan::scan(src);
+    let parsed = scan::scan_with(src, emit::lowering_for(opts.target));
     if !parsed.diagnostics.is_empty() {
         return Err(parsed.diagnostics);
     }
-    let problems = validate::validate(&parsed.roots, &parsed.context);
-    if !problems.is_empty() {
-        return Err(problems);
+    let (errors, warnings): (Vec<_>, Vec<_>) = validate::validate(&parsed.roots, &parsed.context)
+        .into_iter()
+        .partition(|problem| problem.severity == Severity::Error);
+    if !errors.is_empty() {
+        return Err(errors);
     }
-    Ok(Output { php: parsed.php })
+    Ok(Output {
+        php: parsed.php,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -111,6 +121,12 @@ mod tests {
     #[test]
     fn empty_source_compiles_to_empty_output() {
         let out = compile("", &Options::default()).expect("compiles");
-        assert_eq!(out, Output { php: String::new() });
+        assert_eq!(
+            out,
+            Output {
+                php: String::new(),
+                warnings: vec![],
+            }
+        );
     }
 }
