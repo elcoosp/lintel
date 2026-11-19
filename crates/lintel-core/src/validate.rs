@@ -10,14 +10,18 @@
 //!   a PHP named argument (e.g. `data-x`), with a spread suggestion.
 //! - **`LNT0301` dynamic event handler** — `onclick={expr}` and friends are
 //!   compile errors; static strings stay author-trusted (doc 4.4).
+//! - **`LNT0302` static event handler** — `onclick="…"` strings compile but
+//!   carry a [`Severity::Warning`] (doc 4.4: "static strings allowed with a
+//!   lint warning"); the compiler still returns output.
 //! - **`LNT0401` void children** — void elements cannot take children.
 //!
 //! The pass is pure: `validate` maps roots + context → diagnostics, and
-//! [`crate::compile`] refuses to return output when any are found.
+//! [`crate::compile`] splits them by severity — errors fail the compilation,
+//! warnings ride along on the output.
 
 use crate::ast::{is_void_element, Attr, Element, Node};
 use crate::scan::ScanContext;
-use lintel_diag::{Code, Diagnostic};
+use lintel_diag::{Code, Diagnostic, Severity};
 
 /// PHP builtin function names a component call could shadow.
 ///
@@ -361,8 +365,8 @@ fn check_component(element: &Element, context: &ScanContext, out: &mut Vec<Diagn
 
 fn check_html_element(element: &Element, out: &mut Vec<Diagnostic>) {
     for attr in &element.attrs {
-        if let Attr::Expr { name, .. } = attr {
-            if name.to_ascii_lowercase().starts_with("on") {
+        match attr {
+            Attr::Expr { name, .. } if name.to_ascii_lowercase().starts_with("on") => {
                 out.push(
                     Diagnostic::new(
                         Code::DynamicHandler,
@@ -375,6 +379,22 @@ fn check_html_element(element: &Element, out: &mut Vec<Diagnostic>) {
                     ),
                 );
             }
+            Attr::Str { name, .. } if name.to_ascii_lowercase().starts_with("on") => {
+                out.push(
+                    Diagnostic::new(
+                        Code::StaticHandler,
+                        format!("static event-handler attribute `{name}` is discouraged"),
+                        attr_offset(attr),
+                    )
+                    .with_severity(Severity::Warning)
+                    .with_help(
+                        "inline JS strings bypass CSP nonces and cannot be tree-shaken: \
+                         use `data-action={...}` and attach the listener in JavaScript \
+                         (or an `hx-*` / `x-on:*` binding)",
+                    ),
+                );
+            }
+            _ => {}
         }
     }
     if is_void_element(&element.name) && !element.children.is_empty() {
