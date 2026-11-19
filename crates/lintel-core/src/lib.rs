@@ -43,7 +43,8 @@ pub mod scan;
 pub mod text;
 pub mod validate;
 
-pub use lintel_diag::{Code, Diagnostic, Severity};
+pub use lintel_diag::{Code, Diagnostic, Severity, SourceMap};
+pub use validate::{builtin_rules, ValidationRule};
 
 /// Output lowering target (doc 5.3).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -93,13 +94,38 @@ pub struct Output {
 /// Partial output is never returned: any error fails the whole compilation.
 /// Warning-severity diagnostics ride along on [`Output::warnings`].
 pub fn compile(src: &str, opts: &Options) -> Result<Output, Vec<Diagnostic>> {
+    compile_with(src, opts, validate::builtin_rules())
+}
+
+/// Compile `.lintel.php` source with an explicit validation-rule registry.
+///
+/// The seam mirrors [`scan::scan_with`]'s lowering injection (doc 5.3):
+/// rules run in slice order over a depth-first walk — pass
+/// [`validate::builtin_rules`] to extend the default set with a custom
+/// policy, or a smaller slice to disable built-in lints. Parse diagnostics
+/// (`LNT01xx`) are scanner output and are never rule-selected; everything a
+/// rule pushes flows through the same severity split and
+/// `lintel-ignore-next` choke point as the built-in lints (see
+/// [`validate::ValidationRule`]).
+///
+/// # Errors
+///
+/// Same contract as [`compile`]: every error-severity [`Diagnostic`] found
+/// while scanning or validating fails the whole compilation, warnings ride
+/// along on [`Output::warnings`].
+pub fn compile_with(
+    src: &str,
+    opts: &Options,
+    rules: &[&dyn ValidationRule],
+) -> Result<Output, Vec<Diagnostic>> {
     let parsed = scan::scan_with(src, emit::lowering_for(opts.target));
     if !parsed.diagnostics.is_empty() {
         return Err(parsed.diagnostics);
     }
-    let (errors, warnings): (Vec<_>, Vec<_>) = validate::validate(&parsed.roots, &parsed.context)
-        .into_iter()
-        .partition(|problem| problem.severity == Severity::Error);
+    let (errors, warnings): (Vec<_>, Vec<_>) =
+        validate::validate_with(&parsed.roots, &parsed.context, rules)
+            .into_iter()
+            .partition(|problem| problem.severity == Severity::Error);
     if !errors.is_empty() {
         return Err(errors);
     }
