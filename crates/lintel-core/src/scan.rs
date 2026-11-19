@@ -76,6 +76,22 @@ pub struct Parsed {
 pub struct ScanContext {
     declared: Vec<String>,
     signatures: Vec<(String, Signature)>,
+    /// Source byte ranges covered by a `lintel-ignore-next` directive
+    /// (`docs/ignore-directives.md`); consulted by the validation pass.
+    suppressions: Vec<Suppression>,
+}
+
+/// A source byte range `[start, end)` in which validation diagnostics are
+/// dropped — the window recorded for a `// lintel-ignore-next` (or
+/// `# lintel-ignore-next`) line comment: the physical source line
+/// immediately after the directive's line. Byte offsets are absolute, like
+/// every other offset the scanner produces. See `docs/ignore-directives.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suppression {
+    /// First byte offset covered by the window (inclusive).
+    pub start: usize,
+    /// One past the last byte offset covered by the window (exclusive).
+    pub end: usize,
 }
 
 /// The declared parameter list of one PHP function (doc §17.1 signature
@@ -86,11 +102,18 @@ pub struct Signature {
     /// Parameter names as written (`string $title` → `"title"`), in order.
     /// Types never contain `$`, so the first `$identifier` of each
     /// comma-separated segment is the name; default-value expressions come
-    /// after it and are not recorded.
+    /// after it and are not recorded verbatim — but a segment carrying a
+    /// top-level `=` marks its parameter optional (see [`Signature::required`]).
     pub params: Vec<String>,
     /// Whether the list ends in a variadic `...$rest` parameter, which
     /// accepts arbitrary named arguments and disables prop checking.
     pub variadic: bool,
+    /// Parameter names declared **without** a default value, in declaration
+    /// order. PHP rejects a call that omits one with `Argument ... not
+    /// given`, so the validation pass reports a missing required prop as
+    /// `LNT0205`. Variadic parameters are optional by nature and never
+    /// listed here.
+    pub required: Vec<String>,
 }
 
 impl ScanContext {
@@ -130,6 +153,34 @@ impl ScanContext {
             .iter()
             .find(|(existing, _)| *existing == candidate)
             .map(|(_, signature)| signature)
+    }
+
+    /// Record a `lintel-ignore-next` suppression window: the byte range
+    /// `[start, end)` of the source line following the directive comment
+    /// (`docs/ignore-directives.md`). Empty ranges are ignored, so a
+    /// directive on the last line without a trailing newline registers
+    /// nothing.
+    pub fn add_suppression(&mut self, start: usize, end: usize) {
+        if end > start {
+            self.suppressions.push(Suppression { start, end });
+        }
+    }
+
+    /// Whether a diagnostic anchored at `offset` falls inside a recorded
+    /// [`Suppression`] window (start inclusive, end exclusive). The
+    /// validation pass filters its output with this, so a directive can only
+    /// silence lint-severity diagnostics, never parse errors.
+    #[must_use]
+    pub fn suppressed_at(&self, offset: usize) -> bool {
+        self.suppressions
+            .iter()
+            .any(|window| window.start <= offset && offset < window.end)
+    }
+
+    /// The recorded suppression windows, in source order.
+    #[must_use]
+    pub fn suppressions(&self) -> &[Suppression] {
+        &self.suppressions
     }
 
     /// Whether a function with this name is declared/imported. PHP function
@@ -480,12 +531,12 @@ impl<'s> Scanner<'s> {
                 }
             }
             b'/' if n1 == Some(b'/') => {
-                self.copy_line_comment();
+                self.copy_line_comment(s);
                 self.flush(out, s);
                 Compound::Copied { next_prev: None }
             }
             b'#' if n1 != Some(b'[') => {
-                self.copy_line_comment();
+                self.copy_line_comment(s);
                 self.flush(out, s);
                 Compound::Copied { next_prev: None }
             }
@@ -925,13 +976,42 @@ impl<'s> Scanner<'s> {
     }
 
     /// `//` / `#` comments end at the newline — or at `?>`, which ends PHP
-    /// mode in real PHP and therefore ends the comment here too.
-    fn copy_line_comment(&mut self) {
+    /// mode in real PHP and therefore ends the comment here too. A comment
+    /// carrying the `lintel-ignore-next` directive records a suppression
+    /// window covering the physical line after the comment's own line
+    /// (`docs/ignore-directives.md`); `start` is the comment's first byte.
+    fn copy_line_comment(&mut self, start: usize) {
         while self.pos < self.b.len()
             && self.b[self.pos] != b'\n'
             && !(self.b[self.pos] == b'?' && self.b.get(self.pos + 1) == Some(&b'>'))
         {
             self.pos += 1;
+        }
+        if Self::is_ignore_next(&self.src[start..self.pos]) {
+            let line_end = self.src[self.pos..]
+                .find('\n')
+                .map_or(self.b.len(), |rel| self.pos + rel);
+            let window_start = line_end + 1;
+            if window_start < self.b.len() {
+                let window_end = self.src[window_start..]
+                    .find('\n')
+                    .map_or(self.b.len(), |rel| window_start + rel);
+                self.context.add_suppression(window_start, window_end);
+            }
+        }
+    }
+
+    /// Whether a copied line comment carries the `lintel-ignore-next`
+    /// directive: the comment marker(s) stripped, leading whitespace trimmed,
+    /// then the directive word, then end-of-comment, whitespace, or a `:`
+    /// before the optional reason.
+    fn is_ignore_next(comment: &str) -> bool {
+        let body = comment.trim_start_matches(['/', '#']).trim_start();
+        match body.strip_prefix("lintel-ignore-next") {
+            Some(rest) => {
+                rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace)
+            }
+            None => false,
         }
     }
 
@@ -1003,24 +1083,69 @@ impl<'s> Scanner<'s> {
 /// Parse a captured PHP parameter list (the text between the parens) into a
 /// [`Signature`] (doc §17.1): the first `$identifier` of each top-level
 /// segment is the parameter name — types never contain `$`, and
-/// default-value expressions come after the name — and a segment containing
-/// `...` marks a variadic tail.
+/// default-value expressions come after the name — a segment containing
+/// `...` marks a variadic tail, and a segment carrying a top-level `=` marks
+/// its parameter optional (see [`Signature::required`]).
 fn parse_params(params_src: &str) -> Signature {
     let mut params: Vec<String> = vec![];
+    let mut required: Vec<String> = vec![];
     let mut variadic = false;
     for segment in split_top_level(params_src, b',') {
         let trimmed = segment.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.contains("...") {
+        let is_variadic_segment = trimmed.contains("...");
+        if is_variadic_segment {
             variadic = true;
         }
         if let Some(name) = first_dollar_identifier(trimmed) {
-            params.push(name);
+            params.push(name.clone());
+            // A variadic parameter is optional by nature; any other segment
+            // without a top-level `=` declares a required parameter.
+            if !is_variadic_segment && !segment_has_default(trimmed) {
+                required.push(name);
+            }
         }
     }
-    Signature { params, variadic }
+    Signature {
+        params,
+        variadic,
+        required,
+    }
+}
+
+/// Whether a parameter segment carries a default value: a top-level `=`
+/// after the parameter name. Quoted strings and bracket groups are skipped
+/// while scanning, so `'a=b'` or `[1, 2]` cannot hide or fake the `=` — and
+/// any `=` inside a default expression still proves the default exists.
+fn segment_has_default(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'=' if depth == 0 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Split on top-level `sep` bytes: parens/brackets/braces raise the depth and
