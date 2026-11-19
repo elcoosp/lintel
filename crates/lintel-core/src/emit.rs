@@ -11,6 +11,7 @@
 //! fold through full HTML escaping, and integer children fold to literals.
 
 use crate::ast::{is_void_element, Attr, Element, Node};
+use crate::Target;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Part {
@@ -37,13 +38,231 @@ const URL_ATTRS: &[&str] = &[
     "background",
 ];
 
-/// Lower a root node into `new \Lintel\Html(...)` PHP, padding with newlines
-/// until the emitted expression spans `total_lines` (the newline count of the
-/// source span it replaces).
-pub(crate) fn emit_root(node: &Node, total_lines: u32) -> String {
-    let mut parts = Parts::default();
-    lower(node, &mut parts);
-    format!("new \\Lintel\\Html({})", concat(parts, 0, total_lines))
+/// Lowering strategy for one compilation target (doc 5.3).
+///
+/// The scanner lowers each JSX root as it parses it, so a lowering is a
+/// synchronous transform of one parsed root into the PHP expression that
+/// replaces it in the source. New targets (e.g. the future `stream`
+/// generator lowering) implement this trait and are wired up through
+/// [`lowering_for`].
+pub trait Lowering {
+    /// Lower a parsed JSX root into the PHP expression that replaces it.
+    ///
+    /// `total_lines` is the number of newlines inside the replaced source
+    /// span; the returned expression must contain the same number so the
+    /// file's line numbers are preserved (doc 13.4).
+    fn emit_root(&self, node: &Node, total_lines: u32) -> String;
+}
+
+/// String-concat AOT lowering (default, doc 5.3): the root becomes one
+/// `new \Lintel\Html(...)` value built from merged literal parts and
+/// dynamic `\Lintel\*()` helper calls.
+#[derive(Debug, Default)]
+pub struct StringLowering;
+
+impl Lowering for StringLowering {
+    fn emit_root(&self, node: &Node, total_lines: u32) -> String {
+        let mut parts = Parts::default();
+        lower(node, &mut parts);
+        format!("new \\Lintel\\Html({})", concat(parts, 0, total_lines))
+    }
+}
+
+/// RFC-parity lowering (doc 5.3 `rfc`, §0.1/§4.9): markup lowers to
+/// `new \Markup\Element('tag', [attrs], [children])`; components become
+/// plain PHP calls with named arguments; a fragment root becomes a plain
+/// PHP array of children.
+///
+/// No `\Lintel\` runtime helpers are emitted: escaping under the RFC model
+/// is the runtime's contract (escape-by-default), so attribute values and
+/// text children pass through as raw PHP strings/expressions. The exact
+/// lowering names and this crate's documented deviations live in
+/// `docs/rfc-alignment.md`.
+#[derive(Debug, Default)]
+pub struct RfcLowering;
+
+impl Lowering for RfcLowering {
+    fn emit_root(&self, node: &Node, total_lines: u32) -> String {
+        let mut parts = Parts::default();
+        match node {
+            Node::Element(element) => rfc_node_value(element, &mut parts),
+            Node::Fragment { children, line, .. } => {
+                parts.items.push((*line, Part::Lit("[".into())));
+                let mut first = true;
+                for child in children {
+                    rfc_child(child, &mut parts, &mut first);
+                }
+                parts.items.push((*line, Part::Lit("]".into())));
+            }
+            Node::Text { text, line, .. } => {
+                parts.items.push((*line, Part::Lit(php_str(text))));
+            }
+            Node::Expr { php, line, .. } => {
+                parts.items.push((*line, rfc_expr_child(php)));
+            }
+        }
+        concat_rfc(parts, 0, total_lines)
+    }
+}
+
+/// The lowering strategy registered for a [`Target`] (doc 5.3).
+#[must_use]
+pub fn lowering_for(target: Target) -> &'static dyn Lowering {
+    match target {
+        Target::String => &StringLowering,
+        Target::Rfc => &RfcLowering,
+    }
+}
+
+/// Push one array/argument entry, inserting a `", "` separator before it
+/// unless it is the first entry of its list.
+fn rfc_entry(parts: &mut Parts, first: &mut bool, line: u32, part: Part) {
+    if !*first {
+        parts.items.push((line, Part::Lit(", ".into())));
+    }
+    *first = false;
+    parts.items.push((line, part));
+}
+
+/// RFC array entry for an attribute (or spread): `'name' => value` / `true`
+/// / raw expression / `...$spread`.
+fn rfc_attr(attr: &Attr, parts: &mut Parts, first: &mut bool) {
+    match attr {
+        Attr::Str {
+            name, value, line, ..
+        } => {
+            let entry = Part::Lit(format!("{} => {}", php_str(name), php_str(value)));
+            rfc_entry(parts, first, *line, entry);
+        }
+        Attr::Bool { name, line, .. } => {
+            let entry = Part::Lit(format!("{} => true", php_str(name)));
+            rfc_entry(parts, first, *line, entry);
+        }
+        Attr::Expr {
+            name, php, line, ..
+        } => {
+            let entry = Part::Dyn(format!("{} => {}", php_str(name), php.trim()));
+            rfc_entry(parts, first, *line, entry);
+        }
+        Attr::Spread { php, line, .. } => {
+            let entry = Part::Dyn(format!("...{}", php.trim()));
+            rfc_entry(parts, first, *line, entry);
+        }
+    }
+}
+
+/// RFC value for a child expression: folded literal (string/integer) or the
+/// raw PHP expression — never a `\Lintel\` helper call.
+fn rfc_expr_child(php: &str) -> Part {
+    let trimmed = php.trim();
+    if let Some(inner) = simple_single_quoted(trimmed) {
+        return Part::Lit(php_str(&inner));
+    }
+    if trimmed.parse::<i64>().is_ok() {
+        return Part::Lit(trimmed.to_string());
+    }
+    Part::Dyn(trimmed.to_string())
+}
+
+/// RFC children-list entries: text and expressions become array entries,
+/// fragments flatten, nested elements/components become values.
+fn rfc_child(node: &Node, parts: &mut Parts, first: &mut bool) {
+    match node {
+        Node::Fragment { children, .. } => {
+            for child in children {
+                rfc_child(child, parts, first);
+            }
+        }
+        Node::Text { text, line, .. } => {
+            rfc_entry(parts, first, *line, Part::Lit(php_str(text)));
+        }
+        Node::Expr { php, line, .. } => {
+            rfc_entry(parts, first, *line, rfc_expr_child(php));
+        }
+        Node::Element(element) => {
+            rfc_entry(parts, first, element.line, Part::Lit(String::new()));
+            rfc_node_value(element, parts);
+        }
+    }
+}
+
+/// Lower an element (HTML or component) as one RFC markup value.
+fn rfc_node_value(element: &Element, parts: &mut Parts) {
+    if element.is_component {
+        rfc_component(element, parts);
+    } else {
+        rfc_html_element(element, parts);
+    }
+}
+
+/// `new \Markup\Element('tag', [attrs], [children])` (doc 0.1).
+fn rfc_html_element(element: &Element, parts: &mut Parts) {
+    parts.items.push((
+        element.line,
+        Part::Lit(format!(
+            "new \\Markup\\Element({}, [",
+            php_str(&element.name)
+        )),
+    ));
+    let mut first = true;
+    for attr in &element.attrs {
+        rfc_attr(attr, parts, &mut first);
+    }
+    parts
+        .items
+        .push((element.end_line, Part::Lit("], [".into())));
+    let mut child_first = true;
+    for child in &element.children {
+        rfc_child(child, parts, &mut child_first);
+    }
+    parts.items.push((element.end_line, Part::Lit("])".into())));
+}
+
+/// `Component(arg: value, ..., children: [...])` — components are called
+/// with named arguments under the RFC model (doc 4.7).
+fn rfc_component(element: &Element, parts: &mut Parts) {
+    parts
+        .items
+        .push((element.line, Part::Lit(format!("{}(", element.name))));
+    let mut first = true;
+    for attr in &element.attrs {
+        match attr {
+            Attr::Str {
+                name, value, line, ..
+            } => {
+                let entry = Part::Lit(format!("{name}: {}", php_str(value)));
+                rfc_entry(parts, &mut first, *line, entry);
+            }
+            Attr::Bool { name, line, .. } => {
+                let entry = Part::Lit(format!("{name}: true"));
+                rfc_entry(parts, &mut first, *line, entry);
+            }
+            Attr::Expr {
+                name, php, line, ..
+            } => {
+                let entry = Part::Dyn(format!("{name}: {}", php.trim()));
+                rfc_entry(parts, &mut first, *line, entry);
+            }
+            Attr::Spread { php, line, .. } => {
+                let entry = Part::Dyn(format!("...{}", php.trim()));
+                rfc_entry(parts, &mut first, *line, entry);
+            }
+        }
+    }
+    if !element.children.is_empty() {
+        if !first {
+            parts.items.push((element.line, Part::Lit(", ".into())));
+        }
+        parts
+            .items
+            .push((element.line, Part::Lit("children: [".into())));
+        let mut child_first = true;
+        for child in &element.children {
+            rfc_child(child, parts, &mut child_first);
+        }
+        parts.items.push((element.end_line, Part::Lit("]".into())));
+    }
+    parts.items.push((element.end_line, Part::Lit(")".into())));
 }
 
 fn lower(node: &Node, parts: &mut Parts) {
@@ -185,6 +404,26 @@ fn component(element: &Element, parts: &mut Parts) {
 /// the source span (doc 6.5 `concat`, with the separator placed after the
 /// newline so lines start with ` . ` like the reference golden).
 fn concat(parts: Parts, base: u32, total: u32) -> String {
+    concat_parts(parts, base, total, " . ", true)
+}
+
+/// [`concat`] for the RFC lowering: the RFC emitters build final PHP text
+/// (already string-quoted where needed) and carry their own list separators,
+/// so parts are emitted verbatim with no inter-part separator.
+fn concat_rfc(parts: Parts, base: u32, total: u32) -> String {
+    concat_parts(parts, base, total, "", false)
+}
+
+/// Shared line-preserving concat: merge adjacent literals, interleave
+/// newlines, and either PHP-quote literal parts (`quote_literals`, string
+/// target) or emit them verbatim (RFC target).
+fn concat_parts(
+    parts: Parts,
+    base: u32,
+    total: u32,
+    separator: &str,
+    quote_literals: bool,
+) -> String {
     let mut merged: Vec<(u32, Part)> = vec![];
     for (line, part) in parts.items {
         match (merged.last_mut(), &part) {
@@ -205,12 +444,16 @@ fn concat(parts: Parts, base: u32, total: u32) -> String {
             cur += 1;
         }
         if !first {
-            out.push_str(" . ");
+            out.push_str(separator);
         }
         match part {
             Part::Lit(text) => {
                 cur += u32::try_from(text.matches('\n').count()).unwrap_or(u32::MAX);
-                out.push_str(&php_str(&text));
+                if quote_literals {
+                    out.push_str(&php_str(&text));
+                } else {
+                    out.push_str(&text);
+                }
             }
             Part::Dyn(code) => {
                 cur += u32::try_from(code.matches('\n').count()).unwrap_or(u32::MAX);
