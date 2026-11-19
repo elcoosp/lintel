@@ -1,9 +1,9 @@
 //! Consumer example: component signature validation (architecture doc
 //! §17.1). The scanner records declared `function Name(...)` parameter
 //! lists, and the validation pass rejects props that are not parameters
-//! (`LNT0203`) and children passed to a signature without a `children`
-//! parameter (`LNT0204`) — both would fatal at runtime with PHP's
-//! `Unknown named parameter`.
+//! (`LNT0203`), children passed to a signature without a `children`
+//! parameter (`LNT0204`) and invocations that omit a parameter declared
+//! without a default value (`LNT0205`) — all guaranteed PHP runtime fatals.
 //!
 //! Run:
 //!
@@ -20,8 +20,12 @@ function Card(string $heading, iterable $children = []): Html {
 function Panel(string $title): Html {
     return <section>{$title}</section>;
 }
+function Field(string $label, string $name): Html {
+    return <label>{$label}</label>;
+}
 return <Card tittel="Hi">Body</Card>;
 return <Panel title="Go">Body</Panel>;
+return <Field name="email" />;
 "#;
 
 fn main() {
