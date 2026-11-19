@@ -30,6 +30,12 @@
 //! panicking; each has a stable `LNTxxxx` code, a [`Severity`], a source
 //! offset and an optional help line. Warnings (e.g. the static `on*` handler
 //! lint) ride along on [`Output::warnings`] without failing the compilation.
+//!
+//! Validation diagnostics anchored on a line preceded by a
+//! `// lintel-ignore-next` (or `# lintel-ignore-next`) line comment are
+//! dropped — see `docs/ignore-directives.md` and
+//! [`scan::ScanContext::suppressed_at`]. Parse diagnostics (`LNT01xx`) are
+//! never suppressible.
 
 pub mod ast;
 pub mod emit;
