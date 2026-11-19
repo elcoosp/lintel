@@ -10,6 +10,12 @@
 //! inline-HTML interleave and `?>` transitions without rewriting any of them:
 //! non-JSX bytes are copied 1:1, which the golden tests assert byte-for-byte.
 //!
+//! The scanner also tracks the enclosing function scope for each JSX root
+//! (doc §7.3 escape elision): every declared function's or braced closure's
+//! body pushes a [`FunctionScope`] carrying its non-nullable `string`
+//! parameter names, rebinding constructs unprove names, and the innermost
+//! scope rides along to [`Lowering::emit_root_scoped`].
+//!
 //! Known, deliberate v0.1 limitations (documented, safe): `<?` short open
 //! tags are not recognized (deprecated upstream) and `<\Namespaced>` tags
 //! written with a leading backslash are treated as operators.
@@ -132,6 +138,57 @@ pub struct Signature {
     /// `LNT0205`. Variadic parameters are optional by nature and never
     /// listed here.
     pub required: Vec<String>,
+    /// Parameter names declared with a non-nullable `string` type (doc §7.3
+    /// escape elision: "direct `htmlspecialchars` when the expression is a
+    /// typed parameter of the enclosing function"). Recorded by
+    /// [`parse_params`] from the segment text before the `$name` —
+    /// visibility-promotion modifiers (`public`/`private`/`protected`/
+    /// `readonly`) and a trailing `&` are stripped, the remaining type must
+    /// be exactly `string` (case-insensitively), and nullable (`?string`),
+    /// union (`string|int`), qualified (`\App\Name`) and variadic
+    /// (`string ...$rest`) declarations do not qualify. The emit side folds
+    /// bare `$name` children against this set (`docs/escape-elision.md`).
+    pub typed_strings: Vec<String>,
+}
+
+/// The enclosing PHP function scope a JSX root lowers within (doc §7.3
+/// escape elision). The scanner maintains a stack of these while it scans:
+/// each declared function's (or braced closure's) body pushes one scope
+/// carrying the parameter names the function declares as non-nullable
+/// `string`, and each scope loses a name the moment the body can rebind it
+/// (an assignment, `global`/`static`/`unset`/`list` binding, destructuring)
+/// or clears entirely under a dynamic-binding construct (`extract`,
+/// variable variables, `include`/`require`, `eval`) or an untracked arrow
+/// function. The emit side folds bare `$name` children against
+/// [`FunctionScope::typed_strings`] — `docs/escape-elision.md` records the
+/// exact contract.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FunctionScope {
+    /// The scope's proven string-typed names, with the internal
+    /// brace-bookkeeping the scanner needs to pop the scope.
+    pub(crate) typed_strings: Vec<String>,
+    /// The depth value the scope's closing `}` returns the scanner to.
+    pub(crate) close_depth: usize,
+    /// Whether the next `$name` word rebinds (`global $x`, `static $x`,
+    /// `unset($x)`, `list($x)`, `foreach (… as $x)`).
+    pub(crate) rebind_armed: bool,
+}
+
+impl FunctionScope {
+    /// The scope-less root context: JSX lowered outside any tracked
+    /// function body has no proven names, so nothing elides.
+    pub const EMPTY: FunctionScope = FunctionScope {
+        typed_strings: Vec::new(),
+        close_depth: 0,
+        rebind_armed: false,
+    };
+
+    /// The parameter names this scope proves are non-nullable `string`
+    /// right now — the set a bare `$name` child folds against.
+    #[must_use]
+    pub fn typed_strings(&self) -> &[String] {
+        &self.typed_strings
+    }
 }
 
 impl ScanContext {
@@ -282,6 +339,15 @@ struct Scanner<'s> {
     pending_use: bool,
     /// Inside `use function …;` — every identifier is an imported name.
     import_mode: bool,
+    /// Enclosing-function scope stack (doc §7.3): each tracked body pushes
+    /// one [`FunctionScope`]; JSX roots lower against the innermost scope.
+    scopes: Vec<FunctionScope>,
+    /// A declared function's (or closure's) parameter scope armed for its
+    /// upcoming `{` body — armed by [`Scanner::capture_signature`] and the
+    /// anonymous-`(` arm, consumed by the next `{`. A declaration without a
+    /// body (`abstract`/interface `;`) clears it, and a stale armed scope is
+    /// harmless: an empty scope shadows correctly and pops at its own brace.
+    pending_body: Option<FunctionScope>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -300,6 +366,8 @@ impl<'s> Scanner<'s> {
             pending_function: FunctionPending::default(),
             pending_use: false,
             import_mode: false,
+            scopes: vec![],
+            pending_body: None,
             diagnostics: vec![],
         }
     }
@@ -360,10 +428,7 @@ impl<'s> Scanner<'s> {
             match c {
                 b'<' if prev == Prev::Start && self.looks_like_tag() => {
                     let start = self.pos;
-                    let node = self.parse_element_or_fragment(start)?;
-                    let total = self.newline_count(start);
-                    out.push_str(&self.lowering.emit_root(&node, total));
-                    self.roots.push(node);
+                    self.lower_root(out, start)?;
                     prev = Prev::Operand;
                 }
                 b'?' if n1 == Some(b'>') && stop == Stop::Eof => {
@@ -373,6 +438,7 @@ impl<'s> Scanner<'s> {
                     return Ok(()); // back to inline HTML
                 }
                 b'{' => {
+                    self.open_brace(depth);
                     depth += 1;
                     let s = self.pos;
                     self.pos += 1;
@@ -384,6 +450,7 @@ impl<'s> Scanner<'s> {
                         return Ok(()); // caller consumes the closing '}'
                     }
                     depth = depth.saturating_sub(1);
+                    self.close_brace(depth);
                     let s = self.pos;
                     self.pos += 1;
                     self.flush(out, s);
@@ -393,7 +460,7 @@ impl<'s> Scanner<'s> {
                     let s = self.pos;
                     let word = self.take_word();
                     self.flush(out, s);
-                    self.track_functions(word);
+                    self.track_word(word);
                     prev = Self::prev_after_word(word);
                 }
                 b'0'..=b'9' => {
@@ -418,20 +485,20 @@ impl<'s> Scanner<'s> {
                     let s = self.pos;
                     self.pos += 1;
                     self.flush(out, s);
+                    self.end_group();
                     prev = Prev::Operand;
                 }
                 _ => {
                     let s = self.pos;
+                    if c == b'=' && n1 == Some(b'>') {
+                        self.arrow(out, s);
+                        prev = Prev::Start;
+                        continue;
+                    }
                     self.advance_char();
                     self.flush(out, s);
                     if c == b'(' {
-                        let pending = std::mem::take(&mut self.pending_function);
-                        match pending {
-                            FunctionPending::Signature(name) => self.capture_signature(out, &name),
-                            // anonymous `function (` or an unrelated `(`:
-                            // nothing to capture
-                            FunctionPending::None | FunctionPending::Name => {}
-                        }
+                        self.open_paren(out);
                     } else {
                         self.reset_pending(c);
                     }
@@ -442,11 +509,96 @@ impl<'s> Scanner<'s> {
         Ok(())
     }
 
+    /// Parse the JSX root at `start` (an expression-start `<`) and splice
+    /// its lowering into the output: the root lowers against the innermost
+    /// enclosing [`FunctionScope`] (root-level context proves nothing).
+    fn lower_root(&mut self, out: &mut String, start: usize) -> Result<(), Diagnostic> {
+        let node = self.parse_element_or_fragment(start)?;
+        let total = self.newline_count(start);
+        let scopeless = &FunctionScope::EMPTY;
+        let scope = self.scopes.last().unwrap_or(scopeless);
+        out.push_str(&self.lowering.emit_root_scoped(&node, total, scope));
+        self.roots.push(node);
+        Ok(())
+    }
+
+    /// `{`: the first `{` after a declaration's parameter list is the body,
+    /// so push the armed scope at this depth (a stale armed scope is
+    /// harmless — an empty scope shadows and pops at its own brace).
+    fn open_brace(&mut self, depth: usize) {
+        if let Some(mut scope) = self.pending_body.take() {
+            scope.close_depth = depth;
+            self.scopes.push(scope);
+        }
+    }
+
+    /// `}`: pop the innermost scope when its body closes (the depth this
+    /// `}` returns to matches the depth the body's `{` was entered at).
+    fn close_brace(&mut self, depth: usize) {
+        if self
+            .scopes
+            .last()
+            .is_some_and(|scope| scope.close_depth == depth)
+        {
+            self.scopes.pop();
+        }
+    }
+
+    /// `)` (or `]`) ends every named-rebinding construct in flight
+    /// (`unset($x)`, `list($x)`, `foreach (… as $k => $v)`).
+    fn end_group(&mut self) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.rebind_armed = false;
+        }
+    }
+
+    /// `=>` — for a `fn(...) =>` arrow function the body is a braceless
+    /// expression: the armed declaration scope is never braced, and the
+    /// arrow's untracked parameters may shadow anything, so the enclosing
+    /// scope's proven set is cleared (conservative; a plain
+    /// `foreach (… as $k => $v)` arrow arrives with nothing armed and
+    /// clears nothing).
+    fn arrow(&mut self, out: &mut String, s: usize) {
+        self.pos += 2;
+        self.flush(out, s);
+        if self.pending_body.take().is_some() {
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.typed_strings.clear();
+            }
+        }
+    }
+
+    /// `(` after a word: a declared function's parameter list is captured
+    /// into the context (arming its body [`FunctionScope`]), and an
+    /// anonymous `function (` / `fn (` has its parameters parsed into a
+    /// body scope too — a closure's parameters still shadow the enclosing
+    /// scope, but the closure registers no name, so nothing lands in the
+    /// context's signature table.
+    fn open_paren(&mut self, out: &mut String) {
+        let pending = std::mem::take(&mut self.pending_function);
+        match pending {
+            FunctionPending::Signature(name) => self.capture_signature(out, &name),
+            FunctionPending::Name => {
+                let signature = self.copy_param_list(out);
+                self.pending_body = Some(FunctionScope {
+                    typed_strings: signature.typed_strings,
+                    close_depth: 0,
+                    rebind_armed: false,
+                });
+            }
+            FunctionPending::None => {}
+        }
+    }
+
     /// Track function declarations and imports for the validation pass
-    /// (doc §17.1): `function` arms a name capture, the declared name arms a
-    /// signature capture, and `use function` lists record imports name-only
-    /// (they carry no visible parameter list).
-    fn track_functions(&mut self, word: &str) {
+    /// (doc §17.1): `function`/`fn` arm a name capture, the declared name
+    /// arms a signature capture, and `use function` lists record imports
+    /// name-only (they carry no visible parameter list). Also tracks the
+    /// scope-taint words of the typed-elision contract
+    /// (`docs/escape-elision.md`): constructs that can rebind *arbitrary*
+    /// names (`extract`, variable variables via `$$`, `include`/`require`,
+    /// `eval`) clear the innermost scope's proven string set outright.
+    fn track_word(&mut self, word: &str) {
         let lower = word.to_lowercase();
         if self.import_mode {
             if lower == "as" || lower == "function" {
@@ -466,7 +618,26 @@ impl<'s> Scanner<'s> {
             self.pending_use = true;
             return;
         }
-        if lower == "function" {
+        if matches!(
+            lower.as_str(),
+            "extract" | "include" | "include_once" | "require" | "require_once" | "eval"
+        ) {
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.typed_strings.clear();
+            }
+        }
+        if matches!(
+            lower.as_str(),
+            "global" | "static" | "unset" | "list" | "as"
+        ) {
+            // A named-rebinding construct is in flight (`global $a, $b`,
+            // `unset($x)`, `list($x) = …`, `foreach (… as $k => $v)`): the
+            // next `$name` words are unproven until the construct's `;`/`)`.
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.rebind_armed = true;
+            }
+        }
+        if lower == "function" || lower == "fn" {
             if matches!(self.pending_function, FunctionPending::None) {
                 self.pending_function = FunctionPending::Name;
             }
@@ -477,17 +648,108 @@ impl<'s> Scanner<'s> {
             let last = word.rsplit('\\').next().unwrap_or(word).to_string();
             self.pending_function = FunctionPending::Signature(last);
         }
+        if word.starts_with('$') {
+            self.track_rebinding(word);
+        }
+    }
+
+    /// Rebinding tracking for a `$name` word (doc §7.3 conservatism). While
+    /// a named-rebinding construct is in flight the name is unconditionally
+    /// unproven; otherwise an assignment-shaped token after the word —
+    /// `=`, a compound assignment (`+=`, `.=`…), `??=`, shift assignment,
+    /// or `[` (a `$title[0] = …` write is indistinguishable from a read) —
+    /// unproves just that name. A lone `$` word is a `$$name`
+    /// variable-variable and clears the whole scope. Every rule errs toward
+    /// *removing* proven names: a false negative costs one `\Lintel\c()`
+    /// call at render time, a false elision would fold a rebound value.
+    fn track_rebinding(&mut self, word: &str) {
+        let name = &word[1..];
+        // The lookahead reads `self`, so it runs before the scope borrow.
+        let assigns = if name.is_empty() {
+            true
+        } else {
+            let b = self.b;
+            let mut i = self.pos;
+            while i < b.len() && b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            match b.get(i) {
+                Some(b'=') => !matches!(b.get(i + 1), Some(b'=' | b'>')),
+                Some(b'[') => true,
+                // Destructuring/list assignment (`[$title, $label] = $pair;`):
+                // the `[` sits before the name and the `=` after the list's
+                // `]`, so scan (bounded by the statement's `;`) for a `]`
+                // followed by an assignment `=`. Reads end in `];` and never
+                // match.
+                Some(b']' | b',') => self.list_assign_ahead(i),
+                Some(c1 @ (b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'.')) => {
+                    matches!(b.get(i + 1), Some(b'='))
+                        || (*c1 == b'*'
+                            && matches!(b.get(i + 1), Some(b'*'))
+                            && matches!(b.get(i + 2), Some(b'=')))
+                }
+                Some(b'?') => {
+                    matches!(b.get(i + 1), Some(b'?')) && matches!(b.get(i + 2), Some(b'='))
+                }
+                Some(shift @ (b'<' | b'>')) => {
+                    matches!(b.get(i + 1), Some(c2) if c2 == shift)
+                        && matches!(b.get(i + 2), Some(b'='))
+                }
+                _ => false,
+            }
+        };
+        if let Some(scope) = self.scopes.last_mut() {
+            if name.is_empty() {
+                // `$$name` variable-variable: rebinding is untrackable, so
+                // the whole proven set is dropped.
+                scope.typed_strings.clear();
+                scope.rebind_armed = false;
+                return;
+            }
+            if scope.rebind_armed {
+                scope.typed_strings.retain(|proven| proven != name);
+            } else if assigns {
+                scope.typed_strings.retain(|proven| proven != name);
+            }
+        }
+    }
+
+    /// Whether a `]` followed by an assignment `=` appears before the
+    /// statement ends (`;`, `{`, `}`) — the shape of
+    /// `[$title, $label] = $pair;` destructuring seen from inside the list.
+    fn list_assign_ahead(&self, mut i: usize) -> bool {
+        let b = self.b;
+        while i < b.len() {
+            match b[i] {
+                b';' | b'{' | b'}' => return false,
+                b']' => {
+                    let mut j = i + 1;
+                    while j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    return matches!(b.get(j), Some(b'='))
+                        && !matches!(b.get(j + 1), Some(b'=' | b'>'));
+                }
+                _ => i += 1,
+            }
+        }
+        false
     }
 
     /// Punctuation that ends a pending declaration/import context: `;` ends
-    /// `use` lists, `(` closes an anonymous `function (`, anything else but
-    /// `&` (name-by-reference) also cancels a pending declaration. Armed
-    /// signature captures are consumed by [`Scanner::capture_signature`]
-    /// before this runs.
+    /// `use` lists and closes body-less `abstract`/interface declarations
+    /// (clearing the armed [`FunctionScope`]), `(` closes an anonymous
+    /// `function (`, anything else but `&` (name-by-reference) also cancels
+    /// a pending declaration. Armed signature captures are consumed by
+    /// [`Scanner::capture_signature`] before this runs.
     fn reset_pending(&mut self, c: u8) {
         if c == b';' {
             self.import_mode = false;
             self.pending_use = false;
+            self.pending_body = None;
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.rebind_armed = false;
+            }
         }
         if c != b'&' {
             self.pending_function = FunctionPending::None;
@@ -498,8 +760,25 @@ impl<'s> Scanner<'s> {
     /// as a [`Signature`] (doc §17.1). `self.pos` sits just past the opening
     /// `(`; compound tokens (strings, comments, attributes) pass through
     /// byte-identically like the main scan, so the parameter list is parsed
-    /// from the exact source span that was copied.
+    /// from the exact source span that was copied. Arms the function body's
+    /// [`FunctionScope`] (`docs/escape-elision.md`) for the upcoming `{`.
     fn capture_signature(&mut self, out: &mut String, name: &str) {
+        let signature = self.copy_param_list(out);
+        let typed_strings = signature.typed_strings.clone();
+        self.context.declare_signature(name, signature);
+        self.pending_body = Some(FunctionScope {
+            typed_strings,
+            close_depth: 0,
+            rebind_armed: false,
+        });
+    }
+
+    /// Copy a parameter list verbatim (through the closing `)`) and parse it
+    /// into a [`Signature`]. Shared by named declarations
+    /// ([`Scanner::capture_signature`]) and anonymous closures, whose
+    /// parameters shadow the enclosing scope but are not registered in the
+    /// context (they carry no name to look components up by).
+    fn copy_param_list(&mut self, out: &mut String) -> Signature {
         let start = self.pos;
         let mut depth = 0usize;
         while self.pos < self.b.len() {
@@ -532,11 +811,11 @@ impl<'s> Scanner<'s> {
         }
         let params_src = &self.src[start.min(self.pos)..self.pos];
         let signature = parse_params(params_src);
-        self.context.declare_signature(name, signature);
         if self.pos < self.b.len() && self.b[self.pos] == b')' {
             out.push(')');
             self.pos += 1;
         }
+        signature
     }
 
     /// Strings, comments and heredocs are compound tokens; copies one and
@@ -1172,14 +1451,17 @@ impl<'s> Scanner<'s> {
 }
 
 /// Parse a captured PHP parameter list (the text between the parens) into a
-/// [`Signature`] (doc §17.1): the first `$identifier` of each top-level
+/// [`Signature`] (doc §17.1): the first `$name` identifier of each top-level
 /// segment is the parameter name — types never contain `$`, and
 /// default-value expressions come after the name — a segment containing
-/// `...` marks a variadic tail, and a segment carrying a top-level `=` marks
-/// its parameter optional (see [`Signature::required`]).
+/// `...` marks a variadic tail, a segment carrying a top-level `=` marks
+/// its parameter optional (see [`Signature::required`]), and a segment
+/// typed exactly `string` records its name in
+/// [`Signature::typed_strings`] (doc §7.3, `docs/escape-elision.md`).
 fn parse_params(params_src: &str) -> Signature {
     let mut params: Vec<String> = vec![];
     let mut required: Vec<String> = vec![];
+    let mut typed_strings: Vec<String> = vec![];
     let mut variadic = false;
     for segment in split_top_level(params_src, b',') {
         let trimmed = segment.trim();
@@ -1198,12 +1480,67 @@ fn parse_params(params_src: &str) -> Signature {
                 required.push(name);
             }
         }
+        if let Some(name) = typed_string_param(trimmed) {
+            typed_strings.push(name);
+        }
     }
     Signature {
         params,
         variadic,
         required,
+        typed_strings,
     }
+}
+
+/// The parameter name of a segment typed exactly `string` (doc §7.3 escape
+/// elision): the type text before the first `$name` — visibility-promotion
+/// modifiers (`public`/`private`/`protected`/`static`/`readonly`) and a
+/// trailing `&` stripped, matched case-insensitively like every PHP keyword
+/// — must be exactly `string`. Nullable (`?string`), union
+/// (`string|int`), qualified (`\App\Name`) and variadic (`string ...$rest`)
+/// segments do not qualify, nor does a segment whose type text carries a
+/// comment (the stripped text no longer proves the type).
+fn typed_string_param(segment: &str) -> Option<String> {
+    if segment.contains("...") {
+        return None;
+    }
+    let bytes = segment.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            let s = i + 1;
+            let mut e = s;
+            while e < bytes.len() && (bytes[e].is_ascii_alphanumeric() || bytes[e] == b'_') {
+                e += 1;
+            }
+            if e > s {
+                let name = &segment[s..e];
+                let mut prefix = segment[..i].trim().to_ascii_lowercase();
+                loop {
+                    let stripped = prefix
+                        .strip_prefix("public")
+                        .or_else(|| prefix.strip_prefix("private"))
+                        .or_else(|| prefix.strip_prefix("protected"))
+                        .or_else(|| prefix.strip_prefix("static"))
+                        .or_else(|| prefix.strip_prefix("readonly"))
+                        .map(str::trim_start);
+                    match stripped {
+                        Some(next) if !next.is_empty() && next != prefix => {
+                            prefix = next.to_string();
+                        }
+                        _ => break,
+                    }
+                }
+                let prefix = prefix.trim_end_matches('&').trim_end();
+                if prefix == "string" {
+                    return Some(name.to_string());
+                }
+                return None;
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Whether a parameter segment carries a default value: a top-level `=`
