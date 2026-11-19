@@ -19,6 +19,11 @@ use crate::emit::{Lowering, StringLowering};
 use crate::text::normalize_jsx_text;
 use lintel_diag::{Code, Diagnostic};
 
+/// The PHP open tags the scanner recognizes; `<?` short open tags are
+/// deliberately not (deprecated upstream, doc §21.3).
+const OPEN_TAG_PHP: &str = "<?php";
+const OPEN_TAG_ECHO: &str = "<?=";
+
 /// Keywords after which `<` starts an expression (doc 4.1).
 const START_KEYWORDS: &[&str] = &[
     "return", "echo", "print", "yield", "and", "or", "xor", "case", "else", "throw", "match", "fn",
@@ -70,6 +75,22 @@ pub struct Parsed {
 #[derive(Debug, Default, Clone)]
 pub struct ScanContext {
     declared: Vec<String>,
+    signatures: Vec<(String, Signature)>,
+}
+
+/// The declared parameter list of one PHP function (doc §17.1 signature
+/// scanning). Recorded verbatim from `function Name(...)` declarations; the
+/// validation pass checks component invocations against it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Signature {
+    /// Parameter names as written (`string $title` → `"title"`), in order.
+    /// Types never contain `$`, so the first `$identifier` of each
+    /// comma-separated segment is the name; default-value expressions come
+    /// after it and are not recorded.
+    pub params: Vec<String>,
+    /// Whether the list ends in a variadic `...$rest` parameter, which
+    /// accepts arbitrary named arguments and disables prop checking.
+    pub variadic: bool,
 }
 
 impl ScanContext {
@@ -81,6 +102,34 @@ impl ScanContext {
         if !self.declared.contains(&candidate) {
             self.declared.push(candidate);
         }
+    }
+
+    /// Record a declared function's parameter list (doc §17.1). Also feeds
+    /// [`ScanContext::declare`] so builtin-shadow resolution sees the
+    /// declaration. Only `function Name(...)` declarations carry a visible
+    /// parameter list; `use function` imports are recorded name-only.
+    pub fn declare_signature(&mut self, name: &str, signature: Signature) {
+        self.declare(name);
+        let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
+        if !self
+            .signatures
+            .iter()
+            .any(|(existing, _)| *existing == candidate)
+        {
+            self.signatures.push((candidate, signature));
+        }
+    }
+
+    /// The recorded parameter list of a function declared in this file,
+    /// looked up case-insensitively by its last path segment (PHP function
+    /// calls are case-insensitive).
+    #[must_use]
+    pub fn signature_of(&self, name: &str) -> Option<&Signature> {
+        let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
+        self.signatures
+            .iter()
+            .find(|(existing, _)| *existing == candidate)
+            .map(|(_, signature)| signature)
     }
 
     /// Whether a function with this name is declared/imported. PHP function
@@ -114,6 +163,23 @@ pub fn scan_with(src: &str, lowering: &dyn Lowering) -> Parsed {
     }
 }
 
+/// Function-declaration tracking (doc §17.1): `function` seen → declared
+/// name seen → parameter list armed for capture. One state machine instead
+/// of loose flags: only a declared name (not a `use function` import) arms a
+/// signature capture, because only declarations carry a visible parameter
+/// list.
+#[derive(Default)]
+enum FunctionPending {
+    /// No declaration in flight.
+    #[default]
+    None,
+    /// Saw `function`; the next word is the declared name (or `(` closes an
+    /// anonymous function).
+    Name,
+    /// The declared name is recorded; the next `(` starts its parameter list.
+    Signature(String),
+}
+
 struct Scanner<'s> {
     src: &'s str,
     b: &'s [u8],
@@ -123,8 +189,8 @@ struct Scanner<'s> {
     context: ScanContext,
     /// Lowering strategy applied to every JSX root as it is parsed (doc 5.3).
     lowering: &'s dyn Lowering,
-    /// Saw `function` and expect the declared name next.
-    pending_function: bool,
+    /// Function-declaration state machine (see [`FunctionPending`]).
+    pending_function: FunctionPending,
     /// Saw `use` and expect the import list next.
     pending_use: bool,
     /// Inside `use function …;` — every identifier is an imported name.
@@ -144,7 +210,7 @@ impl<'s> Scanner<'s> {
             roots: vec![],
             context: ScanContext::default(),
             lowering,
-            pending_function: false,
+            pending_function: FunctionPending::default(),
             pending_use: false,
             import_mode: false,
             diagnostics: vec![],
@@ -171,10 +237,14 @@ impl<'s> Scanner<'s> {
     fn copy_inline_html(&mut self, out: &mut String) {
         let start = self.pos;
         let rest = &self.src[self.pos..];
-        let target = match (find_open_tag(rest, "<?php"), rest.find("<?=")) {
-            (Some(p), Some(e)) => Some(if p <= e { (p, 5) } else { (e, 3) }),
-            (Some(p), None) => Some((p, 5)),
-            (None, Some(e)) => Some((e, 3)),
+        let target = match (find_open_tag(rest, OPEN_TAG_PHP), rest.find(OPEN_TAG_ECHO)) {
+            (Some(p), Some(e)) => Some(if p <= e {
+                (p, OPEN_TAG_PHP.len())
+            } else {
+                (e, OPEN_TAG_ECHO.len())
+            }),
+            (Some(p), None) => Some((p, OPEN_TAG_PHP.len())),
+            (None, Some(e)) => Some((e, OPEN_TAG_ECHO.len())),
             (None, None) => None,
         };
         match target {
@@ -267,7 +337,17 @@ impl<'s> Scanner<'s> {
                     let s = self.pos;
                     self.advance_char();
                     self.flush(out, s);
-                    self.reset_pending(c);
+                    if c == b'(' {
+                        let pending = std::mem::take(&mut self.pending_function);
+                        match pending {
+                            FunctionPending::Signature(name) => self.capture_signature(out, &name),
+                            // anonymous `function (` or an unrelated `(`:
+                            // nothing to capture
+                            FunctionPending::None | FunctionPending::Name => {}
+                        }
+                    } else {
+                        self.reset_pending(c);
+                    }
                     prev = Prev::Start;
                 }
             }
@@ -275,7 +355,10 @@ impl<'s> Scanner<'s> {
         Ok(())
     }
 
-    /// Track function declarations and imports for the validation pass.
+    /// Track function declarations and imports for the validation pass
+    /// (doc §17.1): `function` arms a name capture, the declared name arms a
+    /// signature capture, and `use function` lists record imports name-only
+    /// (they carry no visible parameter list).
     fn track_functions(&mut self, word: &str) {
         let lower = word.to_lowercase();
         if self.import_mode {
@@ -297,25 +380,75 @@ impl<'s> Scanner<'s> {
             return;
         }
         if lower == "function" {
-            self.pending_function = true;
+            if matches!(self.pending_function, FunctionPending::None) {
+                self.pending_function = FunctionPending::Name;
+            }
             return;
         }
-        if self.pending_function {
-            self.pending_function = false;
-            self.context.declare(word);
+        // The word right after `function` is the declared name (doc §17.1).
+        if matches!(self.pending_function, FunctionPending::Name) {
+            let last = word.rsplit('\\').next().unwrap_or(word).to_string();
+            self.pending_function = FunctionPending::Signature(last);
         }
     }
 
     /// Punctuation that ends a pending declaration/import context: `;` ends
-    /// `use` lists, `(` ends an anonymous `function (`, anything else but `&`
-    /// (name-by-reference) also cancels a pending function name.
+    /// `use` lists, `(` closes an anonymous `function (`, anything else but
+    /// `&` (name-by-reference) also cancels a pending declaration. Armed
+    /// signature captures are consumed by [`Scanner::capture_signature`]
+    /// before this runs.
     fn reset_pending(&mut self, c: u8) {
         if c == b';' {
             self.import_mode = false;
             self.pending_use = false;
-            self.pending_function = false;
-        } else if c != b'&' {
-            self.pending_function = false;
+        }
+        if c != b'&' {
+            self.pending_function = FunctionPending::None;
+        }
+    }
+
+    /// Copy a just-declared function's parameter list verbatim and record it
+    /// as a [`Signature`] (doc §17.1). `self.pos` sits just past the opening
+    /// `(`; compound tokens (strings, comments, attributes) pass through
+    /// byte-identically like the main scan, so the parameter list is parsed
+    /// from the exact source span that was copied.
+    fn capture_signature(&mut self, out: &mut String, name: &str) {
+        let start = self.pos;
+        let mut depth = 0usize;
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            let n1 = self.b.get(self.pos + 1).copied();
+            match self.copy_compound(out, c, n1) {
+                Compound::Copied { next_prev: _ } => continue,
+                Compound::None => {}
+            }
+            match c {
+                b'(' => {
+                    depth += 1;
+                    let s = self.pos;
+                    self.pos += 1;
+                    self.flush(out, s);
+                }
+                b')' if depth == 0 => break, // caller consumes the closing ')'
+                b')' => {
+                    depth -= 1;
+                    let s = self.pos;
+                    self.pos += 1;
+                    self.flush(out, s);
+                }
+                _ => {
+                    let s = self.pos;
+                    self.advance_char();
+                    self.flush(out, s);
+                }
+            }
+        }
+        let params_src = &self.src[start.min(self.pos)..self.pos];
+        let signature = parse_params(params_src);
+        self.context.declare_signature(name, signature);
+        if self.pos < self.b.len() && self.b[self.pos] == b')' {
+            out.push(')');
+            self.pos += 1;
         }
     }
 
@@ -865,6 +998,87 @@ impl<'s> Scanner<'s> {
         }
         self.pos = self.b.len();
     }
+}
+
+/// Parse a captured PHP parameter list (the text between the parens) into a
+/// [`Signature`] (doc §17.1): the first `$identifier` of each top-level
+/// segment is the parameter name — types never contain `$`, and
+/// default-value expressions come after the name — and a segment containing
+/// `...` marks a variadic tail.
+fn parse_params(params_src: &str) -> Signature {
+    let mut params: Vec<String> = vec![];
+    let mut variadic = false;
+    for segment in split_top_level(params_src, b',') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains("...") {
+            variadic = true;
+        }
+        if let Some(name) = first_dollar_identifier(trimmed) {
+            params.push(name);
+        }
+    }
+    Signature { params, variadic }
+}
+
+/// Split on top-level `sep` bytes: parens/brackets/braces raise the depth and
+/// quoted strings (with `\` escapes) are skipped, so default values like
+/// `[1, 2]` or `'a,b'` never split a parameter.
+fn split_top_level(src: &str, sep: u8) -> Vec<&str> {
+    let mut parts: Vec<&str> = vec![];
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            c if c == sep && depth == 0 => {
+                parts.push(&src[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(&src[start..]);
+    parts
+}
+
+/// The first `$name` identifier in a parameter segment: the parameter name.
+fn first_dollar_identifier(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            let s = i + 1;
+            let mut e = s;
+            while e < bytes.len() && (bytes[e].is_ascii_alphanumeric() || bytes[e] == b'_') {
+                e += 1;
+            }
+            if e > s {
+                return Some(segment[s..e].to_string());
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Find `tag` in `rest` where the match is followed by whitespace or EOF
