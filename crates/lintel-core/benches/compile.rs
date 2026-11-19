@@ -473,12 +473,122 @@ fn inventory_bench(c: &mut Criterion) {
     group.finish();
 }
 
+/// The rule-registry listing (`docs/rule-registry.md` seam): the
+/// machine-readable identities behind `lintel rules` — the built-in
+/// listing's JSON emission, and `registry_metas` over a synthetic
+/// 128-rule classified registry (the docs-site/editor-consumer listing
+/// cost, linear in registry size).
+struct ClassifiedBenchRule;
+
+impl lintel_core::ValidationRule for ClassifiedBenchRule {
+    fn check(
+        &self,
+        _: &lintel_core::ast::Node,
+        _: &lintel_core::scan::ScanContext,
+        _: &mut Vec<lintel_core::Diagnostic>,
+    ) {
+    }
+    fn meta(&self) -> Option<lintel_core::RuleMeta> {
+        Some(lintel_core::RuleMeta {
+            id: "bench-policy",
+            codes: &[lintel_core::Code::VoidChildren],
+            summary: "a synthetic classified policy for the listing bench",
+        })
+    }
+}
+
+fn rules_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rules");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("builtin_registry_json", |b| {
+        // Path drift-check (the §21.2 lesson): the listing must cover all
+        // eight built-in rules, or the bench silently measures a stub.
+        assert_eq!(lintel_core::builtin_rule_metas().count(), 8);
+        b.iter(|| {
+            let mut out = String::new();
+            for meta in lintel_core::builtin_rule_metas() {
+                let _ = writeln!(out, "{}", meta.to_json());
+            }
+            black_box(out)
+        });
+    });
+
+    group.bench_function("classified_registry_metas_128", |b| {
+        let rules: Vec<&dyn lintel_core::ValidationRule> =
+            std::iter::repeat(&ClassifiedBenchRule as &dyn lintel_core::ValidationRule)
+                .take(128)
+                .collect();
+        b.iter(|| {
+            let metas = lintel_core::registry_metas(black_box(&rules));
+            assert_eq!(metas.len(), 128, "one entry per rule");
+            black_box(metas)
+        });
+    });
+
+    group.finish();
+}
+
+/// The foreign declarations file for the cross-file bench (`docs/cross-file-signatures.md`
+/// seam): declares the base file's `Section` with a `children` parameter
+/// (accepted) and its `Row` without one (each invocation with children
+/// reports LNT0204 once merged).
+fn cross_file_foreign_source() -> String {
+    String::from(
+        "<?php\nfunction PageShell(string $user, array $items = [], $children = null) {}\n\
+         function Section(string $title, bool $open = false, $children = null) {}\n\
+         function Row(int $key, bool $active) {}\n",
+    )
+}
+
+fn cross_file_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cross_file");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("merged_context_validate", |b| {
+        let foreign = lintel_core::scan::scan(&cross_file_foreign_source());
+        let base_src = component_source();
+        let base = lintel_core::scan::scan(black_box(&base_src));
+        assert!(
+            foreign.diagnostics.is_empty() && base.diagnostics.is_empty(),
+            "both files parse cleanly"
+        );
+        // Path drift-check (the §21.2 lesson): without the merge the base
+        // file's `PageShell`/`Section`/`Row` invocations are cross-file and
+        // unchecked; with it, the nine `Row` children violations report.
+        let plain =
+            lintel_core::validate::validate_with(&base.roots, &base.context, builtin_rules());
+        assert!(
+            plain.is_empty(),
+            "the plain context checks nothing: {plain:?}"
+        );
+        let merged = base.context.merged_with(&foreign.context);
+        let found = lintel_core::validate::validate_with(&base.roots, &merged, builtin_rules());
+        assert_eq!(found.len(), 9, "nine `Row` children violations: {found:?}");
+        b.iter(|| {
+            lintel_core::validate::validate_with(
+                black_box(&base.roots),
+                black_box(&merged),
+                builtin_rules(),
+            )
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench,
     sourcemap_bench,
     json_bench,
     visitor_bench,
-    inventory_bench
+    inventory_bench,
+    rules_bench,
+    cross_file_bench
 );
 criterion_main!(benches);
