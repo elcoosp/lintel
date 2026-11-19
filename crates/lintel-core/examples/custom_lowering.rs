@@ -23,10 +23,15 @@ use lintel_core::emit::{Lowering, StringLowering};
 use lintel_core::scan::scan_with;
 
 /// Wraps the default string lowering and records one observation per root.
-/// `Lowering::emit_root` takes `&self` (that is what makes the built-in
-/// strategies `Sync` and shareable behind `lowering_for`), so an observer
-/// uses interior mutability — here a `Mutex`, the same shape a tracing or
-/// metrics hook would take.
+/// `Lowering::emit_root_scoped` takes `&self` (that is what makes the
+/// built-in strategies `Sync` and shareable behind `lowering_for`), so an
+/// observer uses interior mutability — here a `Mutex`, the same shape a
+/// tracing or metrics hook would take. Delegating through the scope-aware
+/// method (not plain `emit_root`) keeps the wrapper byte-identical to the
+/// default compile, including the scanner's typed-parameter folds
+/// (`docs/escape-elision.md`); a wrapper that only implements `emit_root`
+/// receives the root-level [`lintel_core::scan::FunctionScope::EMPTY`]
+/// context and opts out of them.
 struct TimedLowering {
     inner: StringLowering,
     log: Mutex<Vec<(&'static str, u128)>>,
@@ -34,8 +39,17 @@ struct TimedLowering {
 
 impl Lowering for TimedLowering {
     fn emit_root(&self, node: &lintel_core::ast::Node, total_lines: u32) -> String {
+        self.emit_root_scoped(node, total_lines, &lintel_core::scan::FunctionScope::EMPTY)
+    }
+
+    fn emit_root_scoped(
+        &self,
+        node: &lintel_core::ast::Node,
+        total_lines: u32,
+        scope: &lintel_core::scan::FunctionScope,
+    ) -> String {
         let start = Instant::now();
-        let php = self.inner.emit_root(node, total_lines);
+        let php = self.inner.emit_root_scoped(node, total_lines, scope);
         self.log
             .lock()
             .expect("observer log mutex")
