@@ -5,8 +5,10 @@
 //! The engine lives in the library target so integration tests (and
 //! embedders) drive the exact code path `src/main.rs` runs: argument
 //! parsing returns [`CliError`] usage errors, diagnostics render through
-//! [`lintel_diag::Diagnostic::render`], and every sink is an injected
-//! [`std::io::Write`] instead of hard-coded stdout/stderr.
+//! [`lintel_diag::Diagnostic::render`] — or, with `--format=json`, as one
+//! [`lintel_diag::Diagnostic::to_json`] object per line for CI/LSP-style
+//! consumers — and every sink is an injected [`std::io::Write`] instead of
+//! hard-coded stdout/stderr.
 //!
 //! # Errors
 //!
@@ -19,17 +21,18 @@
 use std::fmt;
 use std::fs;
 use std::io::Write;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use lintel_core::{compile, Options, Target};
+use lintel_core::{compile, Diagnostic, Options, Target};
 
 /// The usage text `lintel --help` prints and usage errors point at.
 pub const USAGE: &str = "\
 lintel — the JSX-for-PHP compiler CLI (architecture doc §6.7 subset)
 
 USAGE:
-    lintel build <paths>... [--target=string|stream|rfc] [--out DIR | --in-place]
-    lintel check <paths>... [--target=string|stream|rfc]
+    lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place]
+    lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
     lintel --help | --version
 
 ARGS:
@@ -41,6 +44,8 @@ COMMANDS:
 
 FLAGS:
     --target=<t>    lowering target: string (default), stream or rfc
+    --format=<f>    diagnostic format: text (default) or json (one JSON object
+                    per diagnostic on stderr; exit codes unchanged)
     --out <dir>     write each source as <dir>/<name>.php instead of stdout
     --in-place      write each source as <name>.php next to it
     --help, -h      print this help
@@ -80,17 +85,44 @@ enum Destination {
     InPlace,
 }
 
+/// How diagnostics (errors and warnings) are rendered to the error sink
+/// (doc §6.7): [`Format::Text`] draws [`Diagnostic::render`] snippets;
+/// [`Format::Json`] emits one [`Diagnostic::to_json`] object per line for
+/// machine-readable consumers. The exit-code contract is identical — only
+/// the rendering changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum Format {
+    /// Human-rendered snippets (default, back-compat).
+    #[default]
+    Text,
+    /// One JSON object per diagnostic, JSON Lines style.
+    Json,
+}
+
+/// The diagnostic format named by a `--format` value.
+fn parse_format(value: &str) -> Result<Format, CliError> {
+    match value {
+        "text" => Ok(Format::Text),
+        "json" => Ok(Format::Json),
+        other => Err(CliError(format!(
+            "unknown format `{other}`: expected text or json"
+        ))),
+    }
+}
+
 /// One parsed invocation: a command, its paths and its flags.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Invocation {
     Build {
         paths: Vec<PathBuf>,
         target: Target,
+        format: Format,
         destination: Destination,
     },
     Check {
         paths: Vec<PathBuf>,
         target: Target,
+        format: Format,
     },
     Help,
     Version,
@@ -117,22 +149,122 @@ pub fn run(
             Ok(0)
         }
         Invocation::Version => {
-            let _ = writeln!(stdout, "lintel {}", env!("CARGO_PKG_VERSION"));
+            // Write errors propagate like `Help`'s: a broken/injected sink
+            // must fail the run instead of reporting a bogus exit 0.
+            writeln!(stdout, "lintel {}", env!("CARGO_PKG_VERSION"))?;
             Ok(0)
         }
         Invocation::Build {
             paths,
             target,
+            format,
             destination,
         } => {
             let sources = collect_sources(&paths)?;
-            Ok(build(&sources, target, &destination, stdout, stderr))
+            Ok(build(
+                &sources,
+                target,
+                format,
+                &destination,
+                stdout,
+                stderr,
+            ))
         }
-        Invocation::Check { paths, target } => {
+        Invocation::Check {
+            paths,
+            target,
+            format,
+        } => {
             let sources = collect_sources(&paths)?;
-            Ok(check(&sources, target, stderr))
+            Ok(check(&sources, target, format, stderr))
         }
     }
+}
+
+/// Flags and paths collected after the command word (see [`parse_args`]).
+struct ParsedArgs {
+    paths: Vec<PathBuf>,
+    target: Target,
+    format: Format,
+    destination: Destination,
+    out_seen: bool,
+    in_place_seen: bool,
+}
+
+/// Consume the flags and paths following the command word. Flags and paths
+/// interleave freely, but `--in-place`/`--out` are `build`-only. Breaks
+/// with a short-circuiting `--help`/`--version` [`Invocation`].
+///
+/// # Errors
+///
+/// Returns [`CliError`] for unknown flags, missing flag values, unknown
+/// targets/formats, or a `build`-only flag under `check`.
+fn parse_args(
+    args: &[String],
+    is_build: bool,
+) -> Result<ControlFlow<Invocation, ParsedArgs>, CliError> {
+    let mut parsed = ParsedArgs {
+        paths: vec![],
+        target: Target::default(),
+        format: Format::default(),
+        destination: Destination::Stdout,
+        out_seen: false,
+        in_place_seen: false,
+    };
+    let mut index = 1;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--help" | "-h" => return Ok(ControlFlow::Break(Invocation::Help)),
+            "--version" => return Ok(ControlFlow::Break(Invocation::Version)),
+            "--in-place" if is_build => {
+                parsed.in_place_seen = true;
+                parsed.destination = Destination::InPlace;
+            }
+            "--in-place" => return Err(CliError("--in-place is a `build` flag".into())),
+            s if s.starts_with("--target=") => {
+                parsed.target = parse_target(&s["--target=".len()..])?;
+            }
+            "--target" => {
+                let Some(value) = args.get(index) else {
+                    return Err(CliError(
+                        "--target needs a value: string, stream or rfc".into(),
+                    ));
+                };
+                index += 1;
+                parsed.target = parse_target(value)?;
+            }
+            s if s.starts_with("--format=") => {
+                parsed.format = parse_format(&s["--format=".len()..])?;
+            }
+            "--format" => {
+                let Some(value) = args.get(index) else {
+                    return Err(CliError("--format needs a value: text or json".into()));
+                };
+                index += 1;
+                parsed.format = parse_format(value)?;
+            }
+            s if s.starts_with("--out=") => {
+                parsed.out_seen = true;
+                parsed.destination = Destination::Dir(PathBuf::from(&s["--out=".len()..]));
+            }
+            "--out" if is_build => {
+                let Some(value) = args.get(index) else {
+                    return Err(CliError("--out needs a directory argument".into()));
+                };
+                index += 1;
+                parsed.out_seen = true;
+                parsed.destination = Destination::Dir(PathBuf::from(value));
+            }
+            "--out" => return Err(CliError("--out is a `build` flag".into())),
+            s if s.starts_with('-') => {
+                return Err(CliError(format!("unknown flag `{s}`: see `lintel --help`")))
+            }
+            path => parsed.paths.push(PathBuf::from(path)),
+        }
+    }
+    Ok(ControlFlow::Continue(parsed))
 }
 
 /// Parse `args` (the program name is already stripped) into an
@@ -153,78 +285,38 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
         }
     }
     let is_build = command == "build";
-
-    let mut paths: Vec<PathBuf> = vec![];
-    let mut target = Target::default();
-    let mut destination = Destination::Stdout;
-    let mut out_seen = false;
-    let mut in_place_seen = false;
-    let mut index = 1;
-    while index < args.len() {
-        let arg = args[index].as_str();
-        index += 1;
-        match arg {
-            "--help" | "-h" => return Ok(Invocation::Help),
-            "--version" => return Ok(Invocation::Version),
-            "--in-place" if is_build => {
-                in_place_seen = true;
-                destination = Destination::InPlace;
-            }
-            "--in-place" => return Err(CliError("--in-place is a `build` flag".into())),
-            s if s.starts_with("--target=") => {
-                target = parse_target(&s["--target=".len()..])?;
-            }
-            "--target" => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError(
-                        "--target needs a value: string, stream or rfc".into(),
-                    ));
-                };
-                index += 1;
-                target = parse_target(value)?;
-            }
-            s if s.starts_with("--out=") => {
-                out_seen = true;
-                destination = Destination::Dir(PathBuf::from(&s["--out=".len()..]));
-            }
-            "--out" if is_build => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError("--out needs a directory argument".into()));
-                };
-                index += 1;
-                out_seen = true;
-                destination = Destination::Dir(PathBuf::from(value));
-            }
-            "--out" => return Err(CliError("--out is a `build` flag".into())),
-            s if s.starts_with('-') => {
-                return Err(CliError(format!("unknown flag `{s}`: see `lintel --help`")))
-            }
-            path => paths.push(PathBuf::from(path)),
-        }
-    }
-    if paths.is_empty() {
+    let parsed = match parse_args(args, is_build)? {
+        ControlFlow::Break(invocation) => return Ok(invocation),
+        ControlFlow::Continue(parsed) => parsed,
+    };
+    if parsed.paths.is_empty() {
         return Err(CliError(format!(
             "`lintel {command}` needs at least one path"
         )));
     }
-    if in_place_seen && out_seen {
+    if parsed.in_place_seen && parsed.out_seen {
         return Err(CliError(
             "--out and --in-place are mutually exclusive".into(),
         ));
     }
-    for path in &paths {
+    for path in &parsed.paths {
         if !path.exists() {
             return Err(CliError(format!("no such path: {}", path.display())));
         }
     }
     if is_build {
         Ok(Invocation::Build {
-            paths,
-            target,
-            destination,
+            paths: parsed.paths,
+            target: parsed.target,
+            format: parsed.format,
+            destination: parsed.destination,
         })
     } else {
-        Ok(Invocation::Check { paths, target })
+        Ok(Invocation::Check {
+            paths: parsed.paths,
+            target: parsed.target,
+            format: parsed.format,
+        })
     }
 }
 
@@ -291,13 +383,15 @@ fn walk_dir(dir: &Path, sources: &mut Vec<PathBuf>) -> Result<(), CliError> {
 
 /// Compile every source with `build` semantics: PHP goes to the
 /// destination (stdout, `--out` directory, or `--in-place` sibling), a
-/// failed file writes nothing and is rendered to `stderr`, and warnings
-/// render without failing the build. Returns 0 when every file compiled,
-/// 1 when at least one did not. (The return is a plain code: per-file
-/// failures are reported in-band, never propagated as `Err`.)
+/// failed file writes nothing and is rendered to `stderr` in the requested
+/// [`Format`], and warnings render without failing the build. Returns 0
+/// when every file compiled, 1 when at least one did not. (The return is a
+/// plain code: per-file failures are reported in-band, never propagated as
+/// `Err`.)
 fn build(
     sources: &[PathBuf],
     target: Target,
+    format: Format,
     destination: &Destination,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -315,7 +409,7 @@ fn build(
         match compile(&src, &Options { target }) {
             Ok(out) => {
                 for warning in &out.warnings {
-                    let _ = write!(stderr, "{}", warning.render(&src));
+                    emit_diagnostic(warning, &src, format, stderr);
                 }
                 if let Err(e) = write_output(source, &out.php, destination, stdout) {
                     let _ = writeln!(stderr, "lintel: cannot write {}: {e}", source.display());
@@ -324,13 +418,29 @@ fn build(
             }
             Err(problems) => {
                 for problem in &problems {
-                    let _ = write!(stderr, "{}", problem.render(&src));
+                    emit_diagnostic(problem, &src, format, stderr);
                 }
                 failed = true;
             }
         }
     }
     i32::from(failed)
+}
+
+/// Emit one diagnostic to the error sink in the requested [`Format`]:
+/// [`Format::Text`] draws the human [`Diagnostic::render`] snippet,
+/// [`Format::Json`] writes one [`Diagnostic::to_json`] object per line.
+/// Like every error-sink write in the engine, a failing sink is best-effort
+/// here (the per-file exit code, not `Err`, reports failures).
+fn emit_diagnostic(problem: &Diagnostic, src: &str, format: Format, stderr: &mut dyn Write) {
+    match format {
+        Format::Text => {
+            let _ = write!(stderr, "{}", problem.render(src));
+        }
+        Format::Json => {
+            let _ = writeln!(stderr, "{}", problem.to_json(src));
+        }
+    }
 }
 
 /// Write one compiled file to its [`Destination`].
@@ -367,10 +477,10 @@ fn write_output(
 }
 
 /// Compile every source with `check` semantics: diagnostics render to
-/// `stderr` (both severities), nothing is written, and the exit code fails
-/// only on error-severity diagnostics — a warning-severity file passes the
-/// CI gate (doc 4.4).
-fn check(sources: &[PathBuf], target: Target, stderr: &mut dyn Write) -> i32 {
+/// `stderr` (both severities) in the requested [`Format`], nothing is
+/// written, and the exit code fails only on error-severity diagnostics — a
+/// warning-severity file passes the CI gate (doc 4.4).
+fn check(sources: &[PathBuf], target: Target, format: Format, stderr: &mut dyn Write) -> i32 {
     let mut failed = false;
     for source in sources {
         let src = match fs::read_to_string(source) {
@@ -384,12 +494,12 @@ fn check(sources: &[PathBuf], target: Target, stderr: &mut dyn Write) -> i32 {
         match compile(&src, &Options { target }) {
             Ok(out) => {
                 for warning in &out.warnings {
-                    let _ = write!(stderr, "{}", warning.render(&src));
+                    emit_diagnostic(warning, &src, format, stderr);
                 }
             }
             Err(problems) => {
                 for problem in &problems {
-                    let _ = write!(stderr, "{}", problem.render(&src));
+                    emit_diagnostic(problem, &src, format, stderr);
                 }
                 failed = true;
             }
