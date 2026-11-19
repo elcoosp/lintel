@@ -8,7 +8,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use lintel_core::{compile, Options, Target};
+use lintel_core::{builtin_rules, compile, compile_with, Options, Target};
 
 /// ~200 lines of plain PHP with strings, comments, heredocs and no JSX.
 fn passthrough_source() -> String {
@@ -140,6 +140,36 @@ fn required_missing_source() -> String {
     src
 }
 
+/// A policy rule for the `custom_rule` scenario: every `<img>` must carry
+/// an `alt` attribute (reuses the closest stable class, `LNT0103`, per the
+/// `ValidationRule` trait docs). Holds no state, so it is `Sync` and can
+/// live in the static registry slice.
+struct RequireAltBench;
+
+impl lintel_core::ValidationRule for RequireAltBench {
+    fn check(
+        &self,
+        node: &lintel_core::ast::Node,
+        _context: &lintel_core::scan::ScanContext,
+        out: &mut Vec<lintel_core::Diagnostic>,
+    ) {
+        let lintel_core::ast::Node::Element(element) = node else {
+            return;
+        };
+        if element.name == "img"
+            && !element.attrs.iter().any(
+                |attr| matches!(attr, lintel_core::ast::Attr::Str { name, .. } if name == "alt"),
+            )
+        {
+            out.push(lintel_core::Diagnostic::new(
+                lintel_core::Code::BadAttr,
+                "`<img>` is missing its `alt` attribute",
+                element.offset,
+            ));
+        }
+    }
+}
+
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("compile");
     group.sample_size(30);
@@ -192,9 +222,57 @@ fn bench(c: &mut Criterion) {
         let src = required_missing_source();
         b.iter(|| compile(black_box(&src), black_box(&Options::default())));
     });
+    // The rule seam: same component tree through `compile_with` with the
+    // built-in registry plus one extra custom rule — measures the injected
+    // registry cost against the hardcoded `component_tree` path.
+    group.bench_function("custom_rule", |b| {
+        let src = component_source();
+        let rules: Vec<&dyn lintel_core::ValidationRule> = builtin_rules()
+            .iter()
+            .copied()
+            .chain([&RequireAltBench as &dyn lintel_core::ValidationRule])
+            .collect();
+        b.iter(|| {
+            compile_with(
+                black_box(&src),
+                black_box(&Options::default()),
+                black_box(&rules),
+            )
+        });
+    });
 
     group.finish();
 }
 
-criterion_group!(benches, bench);
+/// `SourceMap` position-lookup bench (the offset→line:col seam behind every
+/// rendered diagnostic): one map over the component tree source, resolving
+/// the offset of every tag-open in the file — the per-diagnostic work a CLI
+/// or LSP consumer does.
+fn sourcemap_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sourcemap");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("line_col_lookup", |b| {
+        let src = component_source();
+        let offsets: Vec<usize> = src
+            .match_indices('<')
+            .filter(
+                |(at, _)| matches!(src.as_bytes().get(at + 1), Some(c) if c.is_ascii_alphabetic()),
+            )
+            .map(|(at, _)| at)
+            .collect();
+        b.iter(|| {
+            let map = lintel_diag::SourceMap::new(black_box(&src));
+            for offset in &offsets {
+                black_box(map.line_col(*offset));
+            }
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench, sourcemap_bench);
 criterion_main!(benches);
