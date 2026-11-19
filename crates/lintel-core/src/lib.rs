@@ -49,15 +49,22 @@
 //! doc generators — use the [`NodeVisitor`] seam ([`visit_node`]/[`visit_roots`]):
 //! the exact top-down, depth-first, source-ordered traversal the validation
 //! pass runs, as a read-only visitor contract (`docs/node-visitor.md`).
+//! Consumers that describe a file instead of walking it — outlines, dashboards,
+//! the CLI's `stats` command — use the [`inventory`] seam
+//! ([`collect_inventory`]): every declared component with its signature and
+//! every invocation site with its position and props, in one read-only
+//! report (`docs/component-inventory.md`).
 
 pub mod ast;
 pub mod emit;
+pub mod inventory;
 pub mod scan;
 pub mod text;
 pub mod validate;
 
 pub use ast::{visit_node, visit_roots, NodeVisitor};
-pub use lintel_diag::{Code, Diagnostic, Severity, SourceMap};
+pub use inventory::{collect_inventory, DeclaredComponent, FileInventory, Invocation};
+pub use lintel_diag::{json_escape, Code, Diagnostic, Severity, SourceMap};
 pub use validate::{builtin_rules, ValidationRule};
 
 /// Output lowering target (doc 5.3).
