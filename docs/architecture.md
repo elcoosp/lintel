@@ -1247,24 +1247,26 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 
 ## 21. Implementation status (agent-maintained; drift fixes live here)
 
-> Updated 2026-11-19 after the first execution pass, and again after the
-> second pass (stream target + signature scanning). This section reconciles
-> the plan above with what the repository actually contains, so readers do
-> not treat §5–§6 as an inventory of shipped code.
+> Updated 2026-11-19 after the first execution pass, again after the
+> second pass (stream target + signature scanning), and again after the
+> third pass (ignore directives + required-parameter signature checks).
+> This section reconciles the plan above with what the repository actually
+> contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
 ### 21.1 What exists
 
 | Plan item | Status | Where |
 |---|---|---|
 | T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` only; `lintel-cli`/`lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1). CI clippy gate uses the renamed `-W clippy::pedantic` lint: the bare `-W pedantic` name is a `renamed-and-removed-lints` hard error on current stable toolchains |
-| T-02 diagnostics crate | **done (with severities)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401), `Severity` (`Error`/`Warning`), `Diagnostic`, dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
+| T-02 diagnostics crate | **done (with severities)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401 plus `LNT0205`), `Severity` (`Error`/`Warning`), `Diagnostic` (implements `std::error::Error` for CLI/LSP consumers), dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
 | T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested; lowering is injected via `scan_with(src, &dyn Lowering)` instead of being hardcoded |
 | T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
 | T-05 parse + emit (string target) | **done** | `crates/lintel-core/src/{ast,scan,emit}.rs`, `compile()` contract in `lib.rs` |
-| T-08 validation pass | **done (v0.1 subset + warnings + signatures)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0203/0204/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`; "did you mean" close-tag suggestions remain open |
+| T-08 validation pass | **done (v0.1 subset + warnings + signatures)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0203/0204/0205/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`; "did you mean" close-tag suggestions remain open |
+| `// lintel-ignore-next` (doc §17 mitigation) | **done (compiler subset)** | the scanner records one-line suppression windows into `ScanContext` (`scan::Suppression`, `add_suppression`/`suppressed_at`/`suppressions()`), and `validate` drops diagnostics inside them; parse diagnostics (`LNT01xx`) are never suppressible. The exact contract is recorded in `docs/ignore-directives.md` and tested by `tests/suppressions.rs` |
 | `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` |
 | `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol and runtime adapters are future work |
-| §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop and `LNT0204` unexpected children for components declared in the same file (PHP named arguments are case-sensitive); typed-parameter escape elision and required-parameter checks remain open |
+| §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop, `LNT0204` unexpected children and `LNT0205` missing required parameter (a parameter declared without a default; spreads satisfy it, JSX children satisfy a `children` parameter) for components declared in the same file (PHP named arguments are case-sensitive); typed-parameter escape elision remains open |
 | T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
 | T-09+ differential/fuzz/CLI/daemon/WASM | **not started** | — |
@@ -1272,10 +1274,12 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion): the
 four compiler-throughput scenarios plus `rfc_component_tree` (RFC-parity
 lowering), `stream_component_tree` (streaming generator lowering),
-`warned_handlers` (warn-and-continue validation path) and `signature_checked`
-(in-file signature validation path). They measure compiler throughput only;
-the §9.2 PHP rendering harness is future work, so no perf claims beyond
-these numbers are made anywhere.
+`warned_handlers` (warn-and-continue validation path), `signature_checked`
+(in-file signature validation path), `suppressed_handlers` (the
+`lintel-ignore-next` window capture and per-diagnostic lookup path) and
+`required_missing` (the LNT0205 required-parameter rejection path). They
+measure compiler throughput only; the §9.2 PHP rendering harness is future
+work, so no perf claims beyond these numbers are made anywhere.
 
 ### 21.2 Drift corrections baked into the executable goldens
 
