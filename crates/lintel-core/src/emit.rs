@@ -11,11 +11,15 @@
 //! fold through full HTML escaping, integer children fold to literals, and
 //! provably-scalar children (`(int)`/`(float)` casts and `count()` calls —
 //! doc §7.3 "escape elision, honest version") fold to the raw PHP
-//! expression, dropping the `\Lintel\c()` call.
+//! expression, dropping the `\Lintel\c()` call. Children that are exactly a
+//! parameter the enclosing function declares as a non-nullable `string` —
+//! proven by the scanner's [`crate::scan::FunctionScope`] tracking — fold
+//! to a direct `\htmlspecialchars(...)` call (`docs/escape-elision.md`).
 
 use std::fmt::Write as _;
 
 use crate::ast::{is_void_element, Attr, Element, Node};
+use crate::scan::FunctionScope;
 use crate::Target;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +67,22 @@ pub trait Lowering {
     /// span; the returned expression must contain the same number so the
     /// file's line numbers are preserved (doc 13.4).
     fn emit_root(&self, node: &Node, total_lines: u32) -> String;
+
+    /// Scope-aware variant of [`Lowering::emit_root`] (doc §7.3 escape
+    /// elision): `scope` is the enclosing PHP function the root lowers
+    /// within — the scanner tracks one [`FunctionScope`] per declared
+    /// function or braced closure body, carrying the parameter names the
+    /// scope proves are non-nullable `string` right now. A strategy may use
+    /// it to fold children the scope proves safe
+    /// (`docs/escape-elision.md`); the root-level context is
+    /// [`FunctionScope::EMPTY`], which proves nothing.
+    ///
+    /// The default delegates to [`Lowering::emit_root`], ignoring the
+    /// scope: existing strategies keep compiling and keep their exact
+    /// behavior, and only override this method to opt into the fold.
+    fn emit_root_scoped(&self, node: &Node, total_lines: u32, _scope: &FunctionScope) -> String {
+        self.emit_root(node, total_lines)
+    }
 }
 
 /// String-concat AOT lowering (default, doc 5.3): the root becomes one
@@ -73,8 +93,12 @@ pub struct StringLowering;
 
 impl Lowering for StringLowering {
     fn emit_root(&self, node: &Node, total_lines: u32) -> String {
+        self.emit_root_scoped(node, total_lines, &FunctionScope::EMPTY)
+    }
+
+    fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
         let mut parts = Parts::default();
-        lower(node, &mut parts);
+        lower(node, scope, &mut parts);
         format!("new \\Lintel\\Html({})", concat(parts, 0, total_lines))
     }
 }
@@ -92,17 +116,23 @@ pub struct StreamLowering;
 
 impl Lowering for StreamLowering {
     fn emit_root(&self, node: &Node, total_lines: u32) -> String {
+        self.emit_root_scoped(node, total_lines, &FunctionScope::EMPTY)
+    }
+
+    fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
         let mut parts = Parts::default();
         match node {
-            Node::Element(element) if element.is_component => stream_component(element, &mut parts),
-            Node::Element(element) => html_element(element, &mut parts),
+            Node::Element(element) if element.is_component => {
+                stream_component(element, scope, &mut parts);
+            }
+            Node::Element(element) => html_element(element, scope, &mut parts),
             Node::Fragment { children, .. } => {
                 for child in children {
-                    lower_stream(child, &mut parts);
+                    lower_stream(child, scope, &mut parts);
                 }
             }
             Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-            Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php))),
+            Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
         }
         stream_closure(&concat_stream(parts, 0, total_lines))
     }
@@ -306,17 +336,17 @@ fn rfc_component(element: &Element, parts: &mut Parts) {
     parts.items.push((element.end_line, Part::Lit(")".into())));
 }
 
-fn lower(node: &Node, parts: &mut Parts) {
+fn lower(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
     match node {
         Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php))),
+        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
         Node::Fragment { children, .. } => {
             for child in children {
-                lower(child, parts);
+                lower(child, scope, parts);
             }
         }
-        Node::Element(element) if element.is_component => component(element, parts),
-        Node::Element(element) => html_element(element, parts),
+        Node::Element(element) if element.is_component => component(element, scope, parts),
+        Node::Element(element) => html_element(element, scope, parts),
     }
 }
 
@@ -324,23 +354,38 @@ fn lower(node: &Node, parts: &mut Parts) {
 /// dynamic children emit the same parts — but component invocations keep
 /// their children argument as a generator closure instead of an
 /// `new \Lintel\Html(...)` value (doc 5.3 `stream`).
-fn lower_stream(node: &Node, parts: &mut Parts) {
+fn lower_stream(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
     match node {
         Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php))),
+        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
         Node::Fragment { children, .. } => {
             for child in children {
-                lower_stream(child, parts);
+                lower_stream(child, scope, parts);
             }
         }
-        Node::Element(element) if element.is_component => stream_component(element, parts),
-        Node::Element(element) => html_element(element, parts),
+        Node::Element(element) if element.is_component => stream_component(element, scope, parts),
+        Node::Element(element) => html_element(element, scope, parts),
     }
 }
 
 /// Fold trivially-literal child expressions at compile time.
-fn dyn_child(php: &str) -> Part {
+///
+/// The typed-parameter fold (doc §7.3): a child that is *exactly* one
+/// `$name` the scope proves is a non-nullable `string` parameter (the
+/// scanner recorded the declaration, see [`crate::scan::FunctionScope`])
+/// becomes a direct `\htmlspecialchars(...)` call — the declaration already
+/// proves the value is a string, so the generic `\Lintel\c()` wrapper's
+/// runtime check is pure overhead. Everything the scope cannot prove keeps
+/// the wrapper, conservative by design (`docs/escape-elision.md`).
+fn dyn_child(php: &str, scope: &FunctionScope) -> Part {
     let trimmed = php.trim();
+    if let Some(name) = bare_var(trimmed) {
+        if scope.typed_strings().iter().any(|proven| proven == name) {
+            return Part::Dyn(format!(
+                "\\htmlspecialchars(${name}, \\ENT_QUOTES | \\ENT_SUBSTITUTE | \\ENT_HTML5)"
+            ));
+        }
+    }
     if let Some(inner) = simple_single_quoted(trimmed) {
         return Part::Lit(html_escape(&inner));
     }
@@ -353,6 +398,20 @@ fn dyn_child(php: &str) -> Part {
         return Part::Dyn(trimmed.to_string());
     }
     Part::Dyn(format!("\\Lintel\\c({trimmed})"))
+}
+
+/// Whether the trimmed expression is exactly one `$name` variable — no
+/// accessors, no operators, nothing after the identifier — and returns the
+/// name. Byte-oriented like the scanner, which slices only at
+/// ASCII-delimited boundaries; `\` is deliberately excluded so
+/// `$const\Foo::X` shapes never read as a bare variable.
+fn bare_var(trimmed: &str) -> Option<&str> {
+    let rest = trimmed.strip_prefix('$')?;
+    let end = rest
+        .bytes()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        .count();
+    (end > 0 && end == rest.len()).then_some(&rest[..end])
 }
 
 /// Whether a dynamic child expression is provably a non-string scalar at
@@ -547,7 +606,7 @@ fn balanced_prefix(src: &str, open: u8, close: u8) -> Option<&str> {
     None
 }
 
-fn html_element(element: &Element, parts: &mut Parts) {
+fn html_element(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
     let tag = element.name.as_str();
     parts
         .items
@@ -567,7 +626,7 @@ fn html_element(element: &Element, parts: &mut Parts) {
     }
     parts.items.push((element.line, Part::Lit(">".into())));
     for child in &element.children {
-        lower(child, parts);
+        lower(child, scope, parts);
     }
     parts
         .items
@@ -620,13 +679,13 @@ fn push_attr(attr: &Attr, parts: &mut Parts) {
     }
 }
 
-fn component(element: &Element, parts: &mut Parts) {
+fn component(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
     let children = if element.children.is_empty() {
         None
     } else {
         let mut inner = Parts::default();
         for child in &element.children {
-            lower(child, &mut inner);
+            lower(child, scope, &mut inner);
         }
         Some(format!(
             "new \\Lintel\\Html({})",
@@ -640,13 +699,13 @@ fn component(element: &Element, parts: &mut Parts) {
 /// generator closure yielding the children chunks, so a component body can
 /// iterate/`yield from` it (doc 5.3 `stream`); the call itself stays wrapped
 /// in `\Lintel\c()` so returning `\Generator` or `\Lintel\Html` both render.
-fn stream_component(element: &Element, parts: &mut Parts) {
+fn stream_component(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
     let children = if element.children.is_empty() {
         None
     } else {
         let mut inner = Parts::default();
         for child in &element.children {
-            lower_stream(child, &mut inner);
+            lower_stream(child, scope, &mut inner);
         }
         Some(stream_closure(&concat_stream(
             inner,
