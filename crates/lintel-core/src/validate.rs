@@ -1,7 +1,12 @@
 //! Compile-time validation pass (architecture doc task T-08).
 //!
 //! Checks that need the whole tree or the file's declared-function context
-//! run here, after scanning, before the compiled PHP is returned:
+//! run here, after scanning, before the compiled PHP is returned. The pass
+//! is a **registry of rules**: every lint is a [`ValidationRule`] strategy
+//! that walks the same AST the emitter does, and the default set is
+//! injectable — [`crate::compile_with`] swaps it for a consumer's rules the
+//! way [`crate::scan_with`] swaps the lowering target (doc 5.3). The
+//! built-in lints:
 //!
 //! - **`LNT0201` builtin shadow** — a component whose name resolves to a PHP
 //!   builtin function (`<Header>` → `header()`) unless the file declares or
@@ -27,7 +32,8 @@
 //! Diagnostics anchored inside a `lintel-ignore-next` suppression window
 //! (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
 //! here; parse diagnostics never reach this pass, so a directive cannot
-//! hide a misparse.
+//! hide a misparse. The filter sits in the shared walk ([`validate_with`]),
+//! so custom rules inherit it — no rule sees suppression at all.
 //!
 //! The pass is pure: `validate` maps roots + context → diagnostics, and
 //! [`crate::compile`] splits them by severity — errors fail the compilation,
@@ -36,6 +42,41 @@
 use crate::ast::{is_void_element, Attr, Element, Node};
 use crate::scan::{ScanContext, Signature};
 use lintel_diag::{Code, Diagnostic, Severity};
+
+/// One compile-time validation rule (doc T-08): a strategy consulted for
+/// every AST node the walk visits, in registry order.
+///
+/// A rule receives each [`Node`] top-down, depth-first, exactly once, and
+/// pushes any [`Diagnostic`] it wants to report onto `out`. Contract:
+///
+/// - **Codes are stable classes.** `Code` is a closed, documented enum
+///   (`LNT0101`–`LNT0401`); a custom rule reuses the closest existing class
+///   for its policy (the message and `help:` lines carry the specifics).
+///   New first-party rules land new codes in the standard ranges; the
+///   `LNTxxxx` docs-URL contract stays total.
+/// - **Severity is the rule's choice.** [`Severity::Error`] diagnostics
+///   fail [`crate::compile_with`]; [`Severity::Warning`] diagnostics ride
+///   on [`crate::Output::warnings`] (doc 4.4).
+/// - **No suppression knowledge.** Diagnostics anchored inside a
+///   `lintel-ignore-next` window are dropped by the shared walk
+///   ([`validate_with`]) after rules run — a rule cannot opt out of, or
+///   observe, suppression.
+/// - **Rules see every node.** Filter by [`Node`] variant (elements,
+///   fragments, text, expressions) and by `Element::is_component`; pushing
+///   nothing is a valid rule.
+///
+/// The registry order is the diagnostic order: rules run in the order of
+/// the slice they were given ([`builtin_rules`] for the default compile),
+/// and the walk is depth-first, so a rule appended last reports after the
+/// built-in lints on the same node.
+pub trait ValidationRule: Sync {
+    /// Inspect one AST node and push diagnostics onto `out`.
+    ///
+    /// `context` carries the file's declared functions and signatures (doc
+    /// §17.1) plus the recorded suppression windows; `out` is the shared
+    /// diagnostic list for the whole pass, in walk order.
+    fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>);
+}
 
 /// PHP builtin function names a component call could shadow.
 ///
@@ -304,106 +345,129 @@ const BUILTINS: &[&str] = &[
     "wordwrap",
 ];
 
-/// Validate every root (top-level and nested) against the scan context.
+/// The built-in registry, in diagnostic order for every element kind: a
+/// component emits `LNT0201` → `LNT0202` → `LNT0203` → `LNT0205` →
+/// `LNT0204`, an HTML element emits `LNT0301` → `LNT0302` → `LNT0401`.
+const BUILTIN_RULES: &[&dyn ValidationRule] = &[
+    &ShadowRule,
+    &HyphenArgRule,
+    &UnknownPropRule,
+    &MissingRequiredPropRule,
+    &UnexpectedChildrenRule,
+    &DynamicHandlerRule,
+    &StaticHandlerRule,
+    &VoidChildrenRule,
+];
+
+/// The default validation registry, in built-in diagnostic order.
 ///
-/// Diagnostics anchored inside a `lintel-ignore-next` suppression window
-/// (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
-/// here — the single choke point through which every validation diagnostic
-/// flows. Parse diagnostics (`LNT01xx`) never reach this pass, so a
-/// directive cannot suppress them.
+/// Pass it back through [`validate_with`] (or [`crate::compile_with`]) to
+/// extend or reorder the set: a slice of `&[&ShadowRule, &my_rule]` keeps
+/// the shadow lint and appends a custom policy after it. The zero-rules
+/// slice disables built-in validation entirely; parse diagnostics
+/// (`LNT01xx`) are scanner output and are never rule-selected.
 #[must_use]
-pub fn validate(roots: &[Node], context: &ScanContext) -> Vec<Diagnostic> {
-    let mut problems: Vec<Diagnostic> = vec![];
-    for root in roots {
-        check_node(root, context, &mut problems);
-    }
-    problems.retain(|problem| !context.suppressed_at(problem.offset));
-    problems
+pub fn builtin_rules() -> &'static [&'static dyn ValidationRule] {
+    BUILTIN_RULES
 }
 
-fn check_node(node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>) {
-    match node {
-        Node::Element(element) => {
-            check_element(element, context, out);
-            for child in &element.children {
-                check_node(child, context, out);
-            }
-        }
-        Node::Fragment { children, .. } => {
-            for child in children {
-                check_node(child, context, out);
-            }
-        }
-        Node::Text { .. } | Node::Expr { .. } => {}
-    }
-}
+/// `LNT0201` — a component whose name resolves to a PHP builtin function
+/// (`<Header>` → `header()`) unless the file declares or imports that
+/// function (doc 4.7).
+pub struct ShadowRule;
 
-fn check_element(element: &Element, context: &ScanContext, out: &mut Vec<Diagnostic>) {
-    if element.is_component {
-        check_component(element, context, out);
-    } else {
-        check_html_element(element, out);
-    }
-}
-
-fn check_component(element: &Element, context: &ScanContext, out: &mut Vec<Diagnostic>) {
-    let bare = last_segment(&element.name);
-    let lower = bare.to_lowercase();
-    if !context.declares_function(&lower) && BUILTINS.contains(&lower.as_str()) {
-        out.push(
-            Diagnostic::new(
-                Code::BuiltinShadow,
-                format!(
-                    "component `{}` shadows the PHP builtin function `{}()`",
-                    element.name, lower
-                ),
-                element.offset,
-            )
-            .with_help(format!(
-                "declare `function {bare}()` in this file or add `use function {lower};` \
-                 so the call resolves to your component"
-            )),
-        );
-    }
-    for attr in &element.attrs {
-        let Some(name) = attr_name(attr) else {
-            continue; // spreads bypass named-argument rules
+impl ValidationRule for ShadowRule {
+    fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
         };
-        if !is_php_identifier(name) {
+        if !element.is_component {
+            return;
+        }
+        let bare = last_segment(&element.name);
+        let lower = bare.to_lowercase();
+        if !context.declares_function(&lower) && BUILTINS.contains(&lower.as_str()) {
             out.push(
                 Diagnostic::new(
-                    Code::HyphenArg,
-                    format!("component attribute `{name}` cannot become a PHP named argument"),
-                    attr_offset(attr),
+                    Code::BuiltinShadow,
+                    format!(
+                        "component `{}` shadows the PHP builtin function `{}()`",
+                        element.name, lower
+                    ),
+                    element.offset,
                 )
                 .with_help(format!(
-                    "pass it through a spread instead: `<{bare} {{...['{name}' => value]}} />`"
+                    "declare `function {bare}()` in this file or add `use function {lower};` \
+                     so the call resolves to your component"
                 )),
             );
         }
     }
-    // Signature checks only fire for components declared in this file: that
-    // is the only place the parameter list is knowable (doc §17.1).
-    if let Some(signature) = context.signature_of(&element.name) {
-        check_signature(element, bare, signature, out);
+}
+
+/// `LNT0202` — a component attribute that cannot become a PHP named argument
+/// (e.g. `data-x`), with a spread suggestion.
+pub struct HyphenArgRule;
+
+impl ValidationRule for HyphenArgRule {
+    fn check(&self, node: &Node, _context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if !element.is_component {
+            return;
+        }
+        for attr in &element.attrs {
+            let Some(name) = attr_name(attr) else {
+                continue; // spreads bypass named-argument rules
+            };
+            if !is_php_identifier(name) {
+                out.push(
+                    Diagnostic::new(
+                        Code::HyphenArg,
+                        format!("component attribute `{name}` cannot become a PHP named argument"),
+                        attr_offset(attr),
+                    )
+                    .with_help(format!(
+                        "pass it through a spread instead: `<{} {{...['{name}' => value]}} />`",
+                        last_segment(&element.name)
+                    )),
+                );
+            }
+        }
     }
 }
 
-/// Check a component invocation against its declared in-file signature
-/// (doc §17.1): an unknown prop and JSX children without a `children`
-/// parameter are guaranteed runtime fatals (PHP rejects the call with
-/// `Unknown named parameter`), so both fail the compile like `LNT0202`.
-/// PHP named arguments are case-sensitive (unlike function calls), so the
-/// parameter comparison is too.
-fn check_signature(
-    element: &Element,
-    bare: &str,
-    signature: &Signature,
-    out: &mut Vec<Diagnostic>,
-) {
-    if signature.variadic {
-        return; // `...$rest` accepts arbitrary named arguments
+/// `LNT0203` — a named prop that does not match a declared parameter of the
+/// in-file component signature; PHP rejects the call at runtime with
+/// `Unknown named parameter`. Signature checks only fire for components
+/// declared in this file: that is the only place the parameter list is
+/// knowable (doc §17.1). A variadic signature accepts arbitrary named
+/// arguments, so every signature check is disabled for it.
+pub struct UnknownPropRule;
+
+impl ValidationRule for UnknownPropRule {
+    fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if !element.is_component {
+            return;
+        }
+        let Some(signature) = context.signature_of(&element.name) else {
+            return;
+        };
+        if signature.variadic {
+            return; // `...$rest` accepts arbitrary named arguments
+        }
+        check_unknown_props(element, signature, out);
     }
+}
+
+/// The `LNT0203` loop shared by the rule: unknown named props, in
+/// attribute order. Spreads bypass named-argument rules and non-identifier
+/// props are `LNT0202`'s report already.
+fn check_unknown_props(element: &Element, signature: &Signature, out: &mut Vec<Diagnostic>) {
     for attr in &element.attrs {
         let Some(name) = attr_name(attr) else {
             continue; // spreads bypass named-argument rules
@@ -412,6 +476,7 @@ fn check_signature(
             continue; // non-identifier props are LNT0202's report already
         }
         if !signature.params.iter().any(|param| param == name) {
+            let bare = last_segment(&element.name);
             out.push(
                 Diagnostic::new(
                     Code::UnknownProp,
@@ -422,49 +487,251 @@ fn check_signature(
             );
         }
     }
-    // Required parameters (declared without a default) that the invocation
-    // does not supply are guaranteed PHP runtime fatals (`Argument ... not
-    // given`), so they fail the compile like the other signature checks. A
-    // spread may supply anything, so its presence disables the check rather
-    // than risk a false positive; JSX children satisfy a `children`
-    // parameter, and a named `children` prop satisfies it too.
+}
+
+/// `LNT0205` — a parameter declared without a default value that the
+/// invocation does not supply (a spread counts as supplying, JSX children
+/// satisfy a `children` parameter); omitting one is the guaranteed
+/// `Argument ... not given` runtime fatal.
+pub struct MissingRequiredPropRule;
+
+impl ValidationRule for MissingRequiredPropRule {
+    fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if !element.is_component {
+            return;
+        }
+        let Some(signature) = context.signature_of(&element.name) else {
+            return;
+        };
+        check_missing_required(element, signature, out);
+    }
+}
+
+/// The `LNT0205` loop: required parameters the invocation omits, in
+/// declaration order. A spread may supply anything, so its presence
+/// disables the check rather than risk a false positive; JSX children
+/// satisfy a `children` parameter, and a named `children` prop satisfies
+/// it too.
+fn check_missing_required(element: &Element, signature: &Signature, out: &mut Vec<Diagnostic>) {
+    if signature.variadic {
+        return; // `...$rest` accepts arbitrary named arguments
+    }
     let has_spread = element
         .attrs
         .iter()
         .any(|attr| matches!(attr, Attr::Spread { .. }));
-    if !has_spread {
-        for param in &signature.required {
-            let supplied = element
-                .attrs
-                .iter()
-                .any(|attr| attr_name(attr).is_some_and(|name| name == param))
-                || (param == "children" && !element.children.is_empty());
-            if !supplied {
-                out.push(
-                    Diagnostic::new(
-                        Code::MissingRequiredProp,
-                        format!("component `{bare}` is missing required parameter `${param}`"),
-                        element.offset,
-                    )
-                    .with_help(format!(
-                        "pass `{param}: value` on `<{bare}>` or give the parameter a \
-                         default value in `function {bare}(...)`"
-                    )),
-                );
+    if has_spread {
+        return;
+    }
+    for param in &signature.required {
+        let supplied = element
+            .attrs
+            .iter()
+            .any(|attr| attr_name(attr).is_some_and(|name| name == param))
+            || (param == "children" && !element.children.is_empty());
+        if !supplied {
+            let bare = last_segment(&element.name);
+            out.push(
+                Diagnostic::new(
+                    Code::MissingRequiredProp,
+                    format!("component `{bare}` is missing required parameter `${param}`"),
+                    element.offset,
+                )
+                .with_help(format!(
+                    "pass `{param}: value` on `<{bare}>` or give the parameter a \
+                     default value in `function {bare}(...)`"
+                )),
+            );
+        }
+    }
+}
+
+/// `LNT0204` — JSX children passed to a component whose declared signature
+/// has no `children` parameter; PHP rejects the call at runtime with
+/// `Unknown named parameter`.
+pub struct UnexpectedChildrenRule;
+
+impl ValidationRule for UnexpectedChildrenRule {
+    fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if !element.is_component {
+            return;
+        }
+        let Some(signature) = context.signature_of(&element.name) else {
+            return;
+        };
+        if element.children.is_empty() || signature.variadic {
+            return;
+        }
+        if !signature.params.iter().any(|param| param == "children") {
+            let bare = last_segment(&element.name);
+            out.push(
+                Diagnostic::new(
+                    Code::UnexpectedChildren,
+                    format!("component `{bare}` does not accept children"),
+                    element.offset,
+                )
+                .with_help(format!(
+                    "add a `children` parameter to `function {bare}(...)` or remove the JSX children"
+                )),
+            );
+        }
+    }
+}
+
+/// `LNT0301` — a dynamic event-handler attribute (`onclick={expr}` and
+/// friends), a compile error; static strings stay author-trusted (doc 4.4).
+pub struct DynamicHandlerRule;
+
+impl ValidationRule for DynamicHandlerRule {
+    fn check(&self, node: &Node, _context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if element.is_component {
+            return;
+        }
+        for attr in &element.attrs {
+            if let Attr::Expr { name, .. } = attr {
+                if name.to_ascii_lowercase().starts_with("on") {
+                    out.push(
+                        Diagnostic::new(
+                            Code::DynamicHandler,
+                            format!("dynamic event-handler attribute `{name}` is not allowed"),
+                            attr_offset(attr),
+                        )
+                        .with_help(
+                            "use `data-action={...}` (or an `hx-*` / `x-on:*` binding) \
+                             and attach behaviour in JavaScript",
+                        ),
+                    );
+                }
             }
         }
     }
-    if !element.children.is_empty() && !signature.params.iter().any(|param| param == "children") {
-        out.push(
-            Diagnostic::new(
-                Code::UnexpectedChildren,
-                format!("component `{bare}` does not accept children"),
-                element.offset,
-            )
-            .with_help(format!(
-                "add a `children` parameter to `function {bare}(...)` or remove the JSX children"
-            )),
-        );
+}
+
+/// `LNT0302` — a static event-handler string: allowed but discouraged, so it
+/// compiles with a [`Severity::Warning`] (doc 4.4).
+pub struct StaticHandlerRule;
+
+impl ValidationRule for StaticHandlerRule {
+    fn check(&self, node: &Node, _context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if element.is_component {
+            return;
+        }
+        for attr in &element.attrs {
+            if let Attr::Str { name, .. } = attr {
+                if name.to_ascii_lowercase().starts_with("on") {
+                    out.push(
+                        Diagnostic::new(
+                            Code::StaticHandler,
+                            format!("static event-handler attribute `{name}` is discouraged"),
+                            attr_offset(attr),
+                        )
+                        .with_severity(Severity::Warning)
+                        .with_help(
+                            "inline JS strings bypass CSP nonces and cannot be tree-shaken: \
+                             use `data-action={...}` and attach the listener in JavaScript \
+                             (or an `hx-*` / `x-on:*` binding)",
+                        ),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `LNT0401` — a void element given children (architecture doc 4.2).
+pub struct VoidChildrenRule;
+
+impl ValidationRule for VoidChildrenRule {
+    fn check(&self, node: &Node, _context: &ScanContext, out: &mut Vec<Diagnostic>) {
+        let Node::Element(element) = node else {
+            return;
+        };
+        if element.is_component {
+            return;
+        }
+        if is_void_element(&element.name) && !element.children.is_empty() {
+            out.push(
+                Diagnostic::new(
+                    Code::VoidChildren,
+                    format!("void element `<{}>` cannot have children", element.name),
+                    element.offset,
+                )
+                .with_help("remove the children or switch to a non-void element"),
+            );
+        }
+    }
+}
+
+/// Validate every root (top-level and nested) against the scan context with
+/// the built-in rule registry ([`builtin_rules`]).
+///
+/// Diagnostics anchored inside a `lintel-ignore-next` suppression window
+/// (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
+/// here — the single choke point through which every validation diagnostic
+/// flows. Parse diagnostics (`LNT01xx`) never reach this pass, so a
+/// directive cannot suppress them.
+#[must_use]
+pub fn validate(roots: &[Node], context: &ScanContext) -> Vec<Diagnostic> {
+    validate_with(roots, context, BUILTIN_RULES)
+}
+
+/// Validate with an explicit rule registry (doc T-08 seam).
+///
+/// Rules run in slice order over a depth-first walk, then the
+/// `lintel-ignore-next` filter applies to the combined output. Pass
+/// [`builtin_rules`] for the default set, or a custom slice to extend,
+/// reorder or replace it ([`crate::compile_with`] wires the same choice
+/// into a full compile).
+#[must_use]
+pub fn validate_with(
+    roots: &[Node],
+    context: &ScanContext,
+    rules: &[&dyn ValidationRule],
+) -> Vec<Diagnostic> {
+    let mut problems: Vec<Diagnostic> = vec![];
+    for root in roots {
+        walk(root, rules, context, &mut problems);
+    }
+    problems.retain(|problem| !context.suppressed_at(problem.offset));
+    problems
+}
+
+/// Depth-first walk: every rule inspects the node, then the children are
+/// visited in source order — the traversal the built-in pass has always
+/// used, now shared with injected rules.
+fn walk(
+    node: &Node,
+    rules: &[&dyn ValidationRule],
+    context: &ScanContext,
+    out: &mut Vec<Diagnostic>,
+) {
+    for rule in rules {
+        rule.check(node, context, out);
+    }
+    match node {
+        Node::Element(element) => {
+            for child in &element.children {
+                walk(child, rules, context, out);
+            }
+        }
+        Node::Fragment { children, .. } => {
+            for child in children {
+                walk(child, rules, context, out);
+            }
+        }
+        Node::Text { .. } | Node::Expr { .. } => {}
     }
 }
 
@@ -485,52 +752,6 @@ fn signature_help(bare: &str, signature: &Signature, name: &str) -> String {
         "`function {bare}()` declares: {params}; pass unknown keys through a \
          spread instead: `<{bare} {{...['{name}' => value]}} />`"
     )
-}
-
-fn check_html_element(element: &Element, out: &mut Vec<Diagnostic>) {
-    for attr in &element.attrs {
-        match attr {
-            Attr::Expr { name, .. } if name.to_ascii_lowercase().starts_with("on") => {
-                out.push(
-                    Diagnostic::new(
-                        Code::DynamicHandler,
-                        format!("dynamic event-handler attribute `{name}` is not allowed"),
-                        attr_offset(attr),
-                    )
-                    .with_help(
-                        "use `data-action={...}` (or an `hx-*` / `x-on:*` binding) \
-                         and attach behaviour in JavaScript",
-                    ),
-                );
-            }
-            Attr::Str { name, .. } if name.to_ascii_lowercase().starts_with("on") => {
-                out.push(
-                    Diagnostic::new(
-                        Code::StaticHandler,
-                        format!("static event-handler attribute `{name}` is discouraged"),
-                        attr_offset(attr),
-                    )
-                    .with_severity(Severity::Warning)
-                    .with_help(
-                        "inline JS strings bypass CSP nonces and cannot be tree-shaken: \
-                         use `data-action={...}` and attach the listener in JavaScript \
-                         (or an `hx-*` / `x-on:*` binding)",
-                    ),
-                );
-            }
-            _ => {}
-        }
-    }
-    if is_void_element(&element.name) && !element.children.is_empty() {
-        out.push(
-            Diagnostic::new(
-                Code::VoidChildren,
-                format!("void element `<{}>` cannot have children", element.name),
-                element.offset,
-            )
-            .with_help("remove the children or switch to a non-void element"),
-        );
-    }
 }
 
 fn last_segment(name: &str) -> &str {
@@ -565,7 +786,7 @@ fn is_php_identifier(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_php_identifier, last_segment};
+    use super::{attr_name, is_php_identifier, last_segment};
 
     #[test]
     fn last_segment_takes_the_namespace_tail() {
@@ -581,5 +802,15 @@ mod tests {
         assert!(!is_php_identifier("xlink:href"));
         assert!(!is_php_identifier("@click"));
         assert!(!is_php_identifier(""));
+    }
+
+    #[test]
+    fn attr_name_reads_named_attrs_only() {
+        let spread = crate::ast::Attr::Spread {
+            php: "$props".to_string(),
+            line: 0,
+            offset: 0,
+        };
+        assert!(attr_name(&spread).is_none());
     }
 }
