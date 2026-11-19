@@ -1,197 +1,198 @@
-<div align="center">
-  <img src="https://cdn.jsdelivr.net/gh/elcoosp/lintel@main/docs/logo.png" alt="Lintel logo" width="300"/>
-  <p>
-    <strong>Markup is an expression: an ahead-of-time JSX compiler for PHP, written in Rust.</strong><br/>
-    Write components as JSX inside ordinary PHP and compile <code>.lintel.php</code> sources to plain PHP:
-    string concatenation by default, generators for streaming SSR, or <code>\Markup\Element</code> calls aligned
-    with the native PHP markup RFC. Non-JSX bytes pass through verbatim and every line keeps its number, so
-    Xdebug, PHPStan and stack traces point at the code you wrote. Pre-1.0: the compiler core and the
-    <code>lintel</code> CLI ship today; the PHP runtime helpers are the next milestone.
-  </p>
-  <p>
-    <a href="https://github.com/elcoosp/lintel/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/elcoosp/lintel/ci.yml?style=flat-square&label=CI" alt="CI status"/></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/rustc-1.80%2B-orange?style=flat-square" alt="Minimum supported Rust version: 1.80"/></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue?style=flat-square" alt="License: MIT OR Apache-2.0"/></a>
-    <a href="docs/architecture.md"><img src="https://img.shields.io/badge/docs-architecture-blue?style=flat-square" alt="Documentation"/></a>
-  </p>
-  <p>
-    <a href="#quickstart">Quickstart</a> •
-    <a href="#features">Features</a> •
-    <a href="#usage">Usage</a> •
-    <a href="#status">Status</a> •
-    <a href="docs/architecture.md">Docs</a>
-  </p>
-</div>
+# Lintel
 
-## Demo
+**Markup is an expression.** A Rust-powered, ahead-of-time JSX compiler for
+PHP: `.lintel.php` sources scan, parse and lower to plain, vendor-free PHP
+that runs under OPcache with the author's line numbers preserved.
 
-A component compiled by the default `string` target — the executable golden in [`tests/golden.rs`](crates/lintel-core/tests/golden.rs):
+> This repository is the compiler core. The full product plan, language spec
+> and roadmap live in [`docs/architecture.md`](docs/architecture.md); the
+> shipped-versus-planned reconciliation lives in its §21.
 
-```php
-<?php
-function Badge(string $label, bool $verified = false): Html {
-    return (
-        <span class="badge">
-            {$label}
-            {$verified && <i class="icon-check" />}
-        </span>
-    );
-}
+## What works today (v0.1/0.2 core)
+
+- **PHP-aware scanner** — strings, heredocs/nowdocs, comments, `#[…]
+  attributes`, inline-HTML interleave and `?>` transitions pass through
+  byte-identical; JSX is recognized only in expression-start position.
+- **JSX parser** — elements, fragments, attribute forms (static, dynamic,
+  boolean, spread), raw-text `<script>`/`<style>` bodies.
+- **Three lowering targets** ([`Target`](crates/lintel-core/src/lib.rs)):
+  - `String` (default) — `new \Lintel\Html(...)` string-concat AOT with the
+    context-aware `\Lintel\c/a/u/cls/sty/srcset/attrs` runtime helpers.
+  - `Stream` — streaming SSR: the root becomes an immediately-invoked
+    `static function (): \Generator` closure yielding markup one chunk at a
+    time; see [`docs/stream-alignment.md`](docs/stream-alignment.md).
+  - `Rfc` — parity lowering to `new \Markup\Element(...)` constructor calls
+    and named-argument component calls; see
+    [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
+- **Compile-time validation** with stable `LNTxxxx` diagnostics:
+  builtin-shadow (`LNT0201`), invalid component prop (`LNT0202`), signature
+  checks for in-file components — unknown props (`LNT0203`), children
+  without a `children` parameter (`LNT0204`), parameters declared without a
+  default that the invocation omits (`LNT0205`) — dynamic event handlers
+  (`LNT0301`), static handler warning (`LNT0302`), void children
+  (`LNT0401`). Errors fail the compile; warnings ride along on
+  [`Output::warnings`]. A mismatched close tag that near-misses the open
+  tag in scope (`</sapn>` for `</span>`) gets a "did you mean" help line.
+- **`ValidationRule` seam** — the validation pass is a registry of rule
+  strategies ([`ValidationRule`](crates/lintel-core/src/validate.rs)):
+  `compile_with` runs consumer rules alongside (or instead of) the built-in
+  set, flowing through the same severity split and `lintel-ignore-next`
+  choke point as the built-in lints.
+- **`SourceMap` positions** — every diagnostic's byte offset maps to a
+  1-based line/column through the public, renderer-parity
+  [`SourceMap`](crates/lintel-diag/src/lib.rs) — the offset→position
+  converter CLI/LSP consumers previously had to re-implement.
+- **Machine-readable diagnostics** — `lintel check --format=json` (and the
+  same flag on `build`) emits one JSON object per diagnostic on stderr —
+  stable `LNTxxxx` code, severity, message, byte offset, 1-based line/col,
+  optional `help:` line and the docs URL — built on the dependency-free
+  [`Diagnostic::to_json`](crates/lintel-diag/src/lib.rs) seam; exit codes
+  are identical to text format. The exact contract lives in
+  [`docs/diagnostics-json.md`](docs/diagnostics-json.md).
+- **`NodeVisitor` traversal** — a read-only visitor
+  ([`NodeVisitor`](crates/lintel-core/src/ast.rs) +
+  `visit_node`/`visit_roots`) walks the compiler's AST top-down,
+  depth-first, children in source order — the exact sequence the
+  validation pass walks — so LSP features, metrics and doc generators do
+  not re-implement the recursion. The contract lives in
+  [`docs/node-visitor.md`](docs/node-visitor.md).
+- **Component inventory** — a read-only shape report
+  ([`collect_inventory`](crates/lintel-core/src/inventory.rs)) over one
+  scanned file: every declared component with its parameter list and every
+  invocation site with its byte offset, prop names and children/spread/
+  in-file flags, plus a one-line JSON emitter under the same contract as
+  the diagnostics. Outlines, metrics and dashboards consume the compiler's
+  own data instead of re-walking the roots; the contract lives in
+  [`docs/component-inventory.md`](docs/component-inventory.md).
+- **Rule registry** — a self-describing validation registry
+  ([`RuleMeta`](crates/lintel-core/src/validate.rs) +
+  `builtin_rule_metas`/`registry_metas`): every rule's stable kebab-case
+  id, the `LNTxxxx` codes it emits and a one-line summary, as JSON Lines
+  or text — the machine-readable error-index seed for docs-site
+  generators, editor integrations and CI reporters; `lintel rules` ships
+  the built-in listing. The contract lives in
+  [`docs/rule-registry.md`](docs/rule-registry.md).
+- **Cross-file signatures** — a declaration-merge seam
+  ([`ScanContext::merged_with`](crates/lintel-core/src/scan.rs)): union
+  two files' declaration tables (base wins collisions, suppression state
+  never merges) so a file's invocations validate against components
+  declared in *other* files — `LNT0201`/`LNT0203`/`LNT0204`/`LNT0205`
+  become project-wide checks; opt-in, zero default behavior change. The
+  contract lives in
+  [`docs/cross-file-signatures.md`](docs/cross-file-signatures.md).
+- **`lintel-ignore-next` suppression** — a `// lintel-ignore-next` line
+  comment drops the validation diagnostics anchored on the following line,
+  and the file-level `// lintel-ignore-file` drops every validation
+  diagnostic in the file (the rule walk short-circuits); parse errors are
+  never suppressible. See
+  [`docs/ignore-directives.md`](docs/ignore-directives.md).
+- **Escape elision** — dynamic children that are provably safe at compile
+  time fold without the generic `\Lintel\c()` helper, on both markup
+  targets: provably-scalar children (`(int)`/`(integer)`/`(float)`/`(double)`
+  casts spanning the whole expression, `count()` calls) fold to the raw PHP
+  expression, and children that are exactly a parameter the enclosing
+  function declares as a non-nullable `string` fold to a direct
+  `\htmlspecialchars(...)` call (the scanner tracks the enclosing function
+  scope and unproves any name the body can rebind, conservative by design —
+  doc §7.3 "honest version"). See
+  [`docs/escape-elision.md`](docs/escape-elision.md).
+- **`lintel` CLI (T-10 subset)** — `lintel init [DIR]` scaffolds a runnable
+  demo page and compiles it in the same command (no clobber); `lintel
+  build` compiles files/directories to stdout, `--out DIR` or
+  `--in-place`; `lintel check` is the diagnostics-only CI gate (exit 1 on
+  errors, warnings advisory); `lintel stats` reports each file's component
+  shape (declared + invoked, text or `--format=json`) without compiling
+  PHP — exit 1 only on parse errors. Sources are collected in deterministic
+  sorted-path order; diagnostics render through the same
+  [`Diagnostic::render`](crates/lintel-diag/src/lib.rs) snippets.
+
+## Quick start
+
+```sh
+cargo test --workspace --all-features          # test suite
+cargo test --workspace --benches               # bench smoke
+cargo bench -p lintel-core                     # criterion throughput benches
+cargo run -p lintel-core --example compile_demo    # compile a component
+cargo run -p lintel-core --example stream_target   # generator streaming target
+cargo run -p lintel-core --example rfc_target      # both lowering targets
+cargo run -p lintel-core --example security_lint   # rendered diagnostics
+cargo run -p lintel-core --example warnings_lint   # warning diagnostics
+cargo run -p lintel-core --example signature_lint  # signature validation
+cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next directives
+cargo run -p lintel-core --example ignore_file       # lintel-ignore-file directive
+cargo run -p lintel-core --example srcset_attr       # srcset per-URL attribute routing
+cargo run -p lintel-core --example elision          # escape elision of scalar children
+cargo run -p lintel-core --example typed_elision    # typed-parameter direct-escape fold
+cargo run -p lintel-core --example parse_errors     # parse diagnostics + did-you-mean
+cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
+cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
+cargo run -p lintel-core --example custom_visitor   # NodeVisitor seam: walk the AST
+cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
+cargo run -p lintel-core --example inventory        # component inventory: declared + invoked
+cargo run -p lintel-core --example rule_registry    # self-describing rule registry listing
+cargo run -p lintel-core --example cross_file       # cross-file signature validation
+cargo run -p lintel-core --example passthrough     # pass-through + line preservation
+cargo run -p lintel-cli --example build_library    # the CLI engine as a library
+cargo run -p lintel-cli --example json_diagnostics # --format=json machine-readable diagnostics
+cargo run -p lintel-cli --example init_demo        # `lintel init`: scaffold + compile a runnable demo
+cargo run -p lintel-cli --example stats_library    # `lintel stats`: the component shape report as a library
+cargo run -p lintel-cli --example rules_library    # `lintel rules`: the rule registry as a library
+cargo install --path crates/lintel-cli             # install the `lintel` binary
+lintel init my-demo                                # scaffold + compile a runnable demo page
+lintel build page.lintel.php                       # compile to stdout
+lintel check src/                                  # diagnostics-only CI gate
+lintel stats src/                                  # per-file component shape report (text or --format=json)
+lintel rules                                       # the built-in validation registry (text or --format=json)
 ```
-
-compiles to:
-
-```php
-<?php
-function Badge(string $label, bool $verified = false): Html {
-    return (
-        new \Lintel\Html('<span class="badge">'
- . \htmlspecialchars($label, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5)
- . \Lintel\c($verified && new \Lintel\Html('<i class="icon-check"></i>'))
- . '</span>')
-    );
-}
-```
-
-Both files are ten lines: every token after the JSX keeps its line number. Static markup folds into string literals, the `string`-typed `$label` escapes directly without the generic helper, and the nested `<i>` inside the child expression is transpiled recursively.
-
-## Quickstart
-
-Requires Rust 1.80+; no PHP is needed to compile. The crates are not published yet, so install from a clone:
-
-```bash
-git clone https://github.com/elcoosp/lintel
-cd lintel
-cargo install --path crates/lintel-cli
-```
-
-Scaffold a demo page and compile it in the same command:
-
-```bash
-lintel init my-demo
-```
-
-```text
-wrote my-demo/hello.lintel.php (20 lines of .lintel.php)
-compiled my-demo/hello.php — edit the source and run `lintel build my-demo/hello.lintel.php` to rebuild
-```
-
-Edit `my-demo/hello.lintel.php`, then rebuild or run the diagnostics-only CI gate:
-
-```bash
-lintel build my-demo/hello.lintel.php   # compiled PHP to stdout
-lintel check my-demo/                   # exit 1 on errors, warnings advisory
-```
-
-## Features
-
-- **Plain PHP out, your line numbers intact.** The output keeps the source's exact line count and non-JSX bytes are byte-identical, so Xdebug breakpoints, PHPStan results and stack traces stay on the author's lines ([line-preservation](crates/lintel-core/tests/line_preservation.rs) and [pass-through](crates/lintel-core/tests/passthrough.rs) tests).
-- **Escaped by default, unsafe markup rejected at compile time.** Dynamic children and attributes route through context-aware helpers (`c`, `a`, `u`, `srcset`, `cls`, `sty`, `attrs`); a dynamic `on*` handler is a hard error (`LNT0301`), a static one a warning (`LNT0302`).
-- **Typed component checks before PHP would fatal.** In-file signatures catch unknown props (`LNT0203`), children passed to a component with no `children` parameter (`LNT0204`) and omitted required parameters (`LNT0205`).
-- **Three lowering targets from one source.** String concatenation, streaming generators, or RFC-parity `\Markup\Element` calls — the last is the migration rehearsal for the native PHP markup RFC.
-- **Provably-safe escape elision.** `(int)`/`(float)` casts, `count()` calls and non-nullable `string` parameters fold without the generic helper; anything the body can rebind keeps it ([contract](docs/escape-elision.md)).
-- **Diagnostics machines can read.** `--format=json` emits JSON Lines with stable codes and 1-based positions; `SourceMap` exposes the same offset-to-line/column math the renderer uses.
-- **Extensible seams.** Inject custom `ValidationRule` lints, wrap the `Lowering` emit, or walk the AST with `NodeVisitor` — each has a runnable [example](crates/lintel-core/examples/).
-
-## How it works
-
-`lintel-core` is a pure function — no I/O, no PHP invocation. A PHP-aware scanner copies every non-JSX byte verbatim and recognizes JSX only where an expression can start (after `return`, `echo`, `=`, `=>`, operators — never after an operand, so `$a < $b` stays a comparison). It parses elements, fragments, attributes and children into an AST, a registry of validation rules walks the tree, and a target-specific lowering emits line-preserving PHP.
-
-```mermaid
-flowchart LR
-  A[".lintel.php"] --> B["scan: PHP-aware, verbatim pass-through"]
-  B --> C["parse: JSX at expression start"]
-  C --> D["validate: LNT rules + suppressions"]
-  D --> E["emit: string | stream | rfc"]
-  E --> F["plain .php, line-preserving"]
-```
-
-| Crate                                | Role                                                                         |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| [`lintel-core`](crates/lintel-core/) | Scanner, parser, validation pass and line-preserving emitter (pure, no I/O)  |
-| [`lintel-diag`](crates/lintel-diag/) | Stable `LNTxxxx` codes, dependency-free text and JSON renderers, `SourceMap` |
-| [`lintel-cli`](crates/lintel-cli/)   | The `lintel` binary and an embeddable engine (`lintel_cli::run`)             |
-
-The three targets lower the same source differently:
-
-| Target             | Output                                                                             | Contract                                     |
-| ------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------- |
-| `string` (default) | `new \Lintel\Html(…)` built from merged literals and helper calls                  | escape-by-default helpers                    |
-| `stream`           | An immediately-invoked `static function (): \Generator` closure yielding chunks    | [stream-alignment](docs/stream-alignment.md) |
-| `rfc`              | `new \Markup\Element(…)` and named-argument component calls, no `\Lintel\` helpers | [rfc-alignment](docs/rfc-alignment.md)       |
-
-## Usage
-
-### CLI
-
-| Command                 | What it does                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------ |
-| `lintel init [DIR]`     | Scaffold `hello.lintel.php` and compile it to `hello.php`; refuses to clobber an existing source |
-| `lintel build <paths>…` | Compile to stdout, `--out DIR`, or `--in-place` (`Page.lintel.php` → `Page.php`)                 |
-| `lintel check <paths>…` | Diagnostics-only CI gate; nothing is written                                                     |
-
-Paths are files or directories (walked recursively in sorted order). Flags: `--target=string|stream|rfc` and `--format=text|json` on both `build` and `check`. Exit codes: `0` clean (warnings advisory), `1` at least one file failed, `2` usage error. Run `lintel --help` for the full usage text.
-
-### From Rust
 
 ```rust
 use lintel_core::{compile, Options, Target};
 
 let src = "<?php\nreturn <b class=\"x\">{$name}</b>;\n";
-let out = compile(src, &Options::default()).unwrap();      // string target
-assert!(out.php.contains("new \\Lintel\\Html("));
-
-let stream = compile(src, &Options { target: Target::Stream }).unwrap();
+let out = compile(src, &Options::default()).unwrap();        // string target
 let rfc = compile(src, &Options { target: Target::Rfc }).unwrap();
 ```
 
-`compile` returns every error-severity diagnostic instead of panicking; warnings ride along on `out.warnings`. `compile_with` swaps the validation registry, and `scan_with` swaps the lowering — the same seams the CLI uses.
+## Guarantees
 
-### Diagnostics
+1. **Verbatim pass-through** — PHP without JSX is emitted byte-for-byte
+   identical (asserted across both targets).
+2. **Line preservation** — output has exactly as many lines as the source,
+   so Xdebug/PHPStan/Ignition report the author's line numbers.
+3. **Escape-by-default** — only provably literal text folds into the
+   output; dynamic values go through the runtime helpers (string target).
 
-A dynamic event handler fails the compile with a stable code, a caret snippet and an actionable help line:
+## Layout
 
-```text
-error[LNT0301]: dynamic event-handler attribute `onclick` is not allowed
-  ┌─ input:2:16
-  │
-2 │ return <button onclick={$handler}>go</button>;
-  ·                ^
-  = help: use `data-action={...}` (or an `hx-*` / `x-on:*` binding) and attach behaviour in JavaScript
-  = docs: https://lintel.sh/e/LNT0301
 ```
-
-`lintel check --format=json` emits the same diagnostic as one JSON object per line on stderr (exit codes unchanged):
-
-```json
-{
-	"code": "LNT0301",
-	"severity": "error",
-	"message": "dynamic event-handler attribute `onclick` is not allowed",
-	"offset": 21,
-	"line": 2,
-	"col": 16,
-	"help": "use `data-action={...}` (or an `hx-*` / `x-on:*` binding) and attach behaviour in JavaScript",
-	"docs": "https://lintel.sh/e/LNT0301"
-}
+crates/lintel-core   scan → parse → validate → emit (pure, no I/O)
+crates/lintel-diag   stable LNT codes, miette-style renderer, severities
+crates/lintel-cli    the `lintel` binary: build/check over the core (T-10 subset)
+docs/architecture.md master plan + §21 implementation status
+docs/rfc-alignment.md  exact `rfc` lowering contract
+docs/stream-alignment.md  exact `stream` lowering contract
+docs/srcset-alignment.md  exact `srcset` attribute routing contract
+docs/escape-elision.md  exact provably-scalar child folding contract
+docs/ignore-directives.md  exact suppression directive contracts
+docs/diagnostics-json.md  exact machine-readable diagnostic contract
+docs/node-visitor.md  exact read-only AST traversal contract
+docs/component-inventory.md  exact component shape-report contract
+docs/rule-registry.md  exact self-describing rule-registry contract
+docs/cross-file-signatures.md  exact declaration-merge contract
 ```
-
-Thirteen stable `LNTxxxx` codes cover parse errors, component/attribute validation, security and content-model checks. A `// lintel-ignore-next` comment suppresses validation diagnostics on the following line and `// lintel-ignore-file` silences a whole file; parse errors are never suppressible ([contract](docs/ignore-directives.md)).
-
-### Going further
-
-Every seam has a runnable example under [`crates/lintel-core/examples/`](crates/lintel-core/examples/) and [`crates/lintel-cli/examples/`](crates/lintel-cli/examples/): custom rules, custom lowering, the AST visitor, `SourceMap`, escape elision, suppressions, the streaming and RFC targets, and the CLI engine as a library. Run one with `cargo run -p lintel-core --example <name>`.
 
 ## Status
 
-> [!NOTE]
-> Lintel is pre-1.0 (v0.1). The scanner, parser, validation pass, all three lowering targets, escape elision, suppression directives, JSON diagnostics, the `NodeVisitor` seam and the `lintel init/build/check` CLI are implemented and tested. CI runs `cargo fmt --check`, pedantic Clippy with `-D warnings`, and the full test and bench suite on every push. The PHP runtime (`\Lintel\Html` and the `c/a/u/cls/sty/srcset/attrs` helpers), watch/daemon mode, the WASM playground, LSP and the rendering benchmarks are not built yet — emitted helper calls are forward references until the runtime lands. The [implementation status table](docs/architecture.md) (§21) reconciles shipped versus planned.
-
-Questions and bugs: [GitHub issues](https://github.com/elcoosp/lintel/issues).
-
-## Learn more
-
-- [Architecture and roadmap](docs/architecture.md) — master plan, language spec and §21 status table
-- [RFC alignment](docs/rfc-alignment.md) · [Streaming](docs/stream-alignment.md) · [srcset routing](docs/srcset-alignment.md)
-- [Escape elision](docs/escape-elision.md) · [Ignore directives](docs/ignore-directives.md)
-- [JSON diagnostics](docs/diagnostics-json.md) · [Node visitor](docs/node-visitor.md)
+The compiler core, the three lowering targets, the validation pass, the
+`lintel-ignore-*` directives, escape elision (scalar folds and the
+typed-parameter direct escape), the machine-readable JSON diagnostics, the
+`NodeVisitor` read traversal, the component-inventory shape report, the
+self-describing rule registry (tenth pass), the cross-file signature
+merge (eleventh pass) and the minimal `lintel`
+init/build/check/stats/rules CLI run today. The remaining CLI surface (watch/daemon),
+WASM playground, LSP, PHP runtime and the PHP rendering benchmark harness
+(§9.2) are future milestones (see `docs/architecture.md` §15 task cards and
+§21 status table) — the criterion compiler-throughput benches in
+`crates/lintel-core/benches/` already run today. The clippy gate is
+`cargo clippy --workspace --all-targets --all-features --
+-D warnings -W clippy::pedantic` with zero warnings.
