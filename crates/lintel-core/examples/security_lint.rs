@@ -1,5 +1,6 @@
-//! Consumer example: the validation pass (M2 seam) turning unsafe markup
-//! into stable, rendered LNT diagnostics.
+//! Consumer example: the compile-time validation pass turning unsafe markup
+//! into stable, rendered LNT diagnostics (builtin shadow, dynamic handler,
+//! void children).
 //!
 //! Run:
 //!
