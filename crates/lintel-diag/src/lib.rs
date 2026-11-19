@@ -1,16 +1,17 @@
 //! Stable-coded diagnostics for the Lintel JSX-for-PHP compiler.
 //!
 //! Every diagnostic carries a stable `LNTxxxx` code (see the error index at
-//! `https://lintel.sh/e/LNTxxxx`), a human message, a byte offset into the
-//! source and an optional `help:` line. The crate has no dependencies: the
-//! compiler core (and later the WASM playground) can render diagnostics
-//! without pulling in `miette`. The CLI crate may still choose to re-render
-//! diagnostics with `miette` for fancy output; [`Diagnostic::render`] is the
-//! dependency-free fallback that guarantees a stable, testable shape.
+//! `https://lintel.sh/e/LNTxxxx`), a [`Severity`], a human message, a byte
+//! offset into the source and an optional `help:` line. The crate has no
+//! dependencies: the compiler core (and later the WASM playground) can render
+//! diagnostics without pulling in `miette`. The CLI crate may still choose to
+//! re-render diagnostics with `miette` for fancy output; [`Diagnostic::render`]
+//! is the dependency-free fallback that guarantees a stable, testable shape.
 //!
 //! # Layout
 //!
 //! - [`Code`] enumerates every stable error class.
+//! - [`Severity`] distinguishes hard failures from advisory warnings.
 //! - [`Diagnostic`] is the data type shared by CLI, daemon, LSP and WASM.
 //! - [`Diagnostic::render`] draws a miette-style snippet with a caret.
 
@@ -40,6 +41,8 @@ pub enum Code {
     HyphenArg,
     /// A dynamic event-handler attribute was rejected (`LNT0301`).
     DynamicHandler,
+    /// A static event-handler string is allowed but discouraged (`LNT0302`).
+    StaticHandler,
     /// A void element was given children (`LNT0401`).
     VoidChildren,
 }
@@ -57,6 +60,7 @@ impl Code {
             Self::BuiltinShadow => "LNT0201",
             Self::HyphenArg => "LNT0202",
             Self::DynamicHandler => "LNT0301",
+            Self::StaticHandler => "LNT0302",
             Self::VoidChildren => "LNT0401",
         }
     }
@@ -73,6 +77,7 @@ impl Code {
             Self::BuiltinShadow => "component shadows a PHP builtin function",
             Self::HyphenArg => "attribute cannot become a named argument",
             Self::DynamicHandler => "dynamic event-handler attributes are not allowed",
+            Self::StaticHandler => "static event-handler strings are discouraged",
             Self::VoidChildren => "void elements cannot have children",
         }
     }
@@ -90,6 +95,31 @@ impl fmt::Display for Code {
     }
 }
 
+/// How hard a diagnostic fails the compilation.
+///
+/// [`Severity::Error`] diagnostics fail [`lintel_core::compile`]; warnings
+/// are returned on the compiled output without failing it (doc 4.4: static
+/// `on*` strings are "allowed with a lint warning").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Severity {
+    /// A hard failure: the compilation returns `Err` (default).
+    #[default]
+    Error,
+    /// An advisory diagnostic: the compilation succeeds and carries it.
+    Warning,
+}
+
+impl Severity {
+    /// The prefix shown before the code when rendering (`error`/`warning`).
+    #[must_use]
+    pub const fn prefix(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
 /// A single compiler diagnostic with a stable [`Code`].
 ///
 /// `offset` is a byte offset into the scanned source; it always points at an
@@ -99,6 +129,8 @@ impl fmt::Display for Code {
 pub struct Diagnostic {
     /// Stable error class.
     pub code: Code,
+    /// How hard this diagnostic fails the compilation.
+    pub severity: Severity,
     /// Human-readable description of the problem.
     pub message: String,
     /// Byte offset into the source the diagnostic points at.
@@ -108,10 +140,11 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Create a diagnostic without a `help:` line.
+    /// Create an [`Severity::Error`] diagnostic without a `help:` line.
     pub fn new(code: Code, message: impl Into<String>, offset: usize) -> Self {
         Self {
             code,
+            severity: Severity::Error,
             message: message.into(),
             offset,
             help: None,
@@ -125,10 +158,22 @@ impl Diagnostic {
         self
     }
 
-    /// `error[LNTxxxx]: message`, as shown on the first render line.
+    /// Change the severity (warnings are returned on the output, not raised).
+    #[must_use]
+    pub fn with_severity(mut self, severity: Severity) -> Self {
+        self.severity = severity;
+        self
+    }
+
+    /// `` `error|warning[LNTxxxx]: message` ``, as shown on the first render line.
     #[must_use]
     pub fn headline(&self) -> String {
-        format!("error[{}]: {}", self.code.lnt(), self.message)
+        format!(
+            "{}[{}]: {}",
+            self.severity.prefix(),
+            self.code.lnt(),
+            self.message
+        )
     }
 
     /// Render a miette-style snippet with a caret under the offending byte.
@@ -200,7 +245,7 @@ fn line_text(src: &str, offset: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Code, Diagnostic};
+    use super::{Code, Diagnostic, Severity};
 
     #[test]
     fn lnt_codes_are_stable() {
@@ -208,7 +253,23 @@ mod tests {
         assert_eq!(Code::BuiltinShadow.lnt(), "LNT0201");
         assert_eq!(Code::HyphenArg.lnt(), "LNT0202");
         assert_eq!(Code::DynamicHandler.lnt(), "LNT0301");
+        assert_eq!(Code::StaticHandler.lnt(), "LNT0302");
         assert_eq!(Code::VoidChildren.lnt(), "LNT0401");
+    }
+
+    #[test]
+    fn warnings_render_with_the_warning_prefix() {
+        let problem = Diagnostic::new(Code::StaticHandler, "static handler", 0)
+            .with_severity(Severity::Warning);
+        let rendered = problem.render("x");
+        assert!(
+            rendered.starts_with("warning[LNT0302]: static handler\n"),
+            "{rendered}"
+        );
+        assert_eq!(
+            problem.to_string(),
+            "warning[LNT0302]: static handler at offset 0"
+        );
     }
 
     #[test]
