@@ -389,7 +389,10 @@ impl ValidationRule for ShadowRule {
         }
         let bare = last_segment(&element.name);
         let lower = bare.to_lowercase();
-        if !context.declares_function(&lower) && BUILTINS.contains(&lower.as_str()) {
+        // `BUILTINS` is sorted, so the lookup is a binary search (see the
+        // `builtins_are_sorted_for_binary_search` unit test that keeps it
+        // true as names are appended).
+        if !context.declares_function(&lower) && BUILTINS.binary_search(&lower.as_str()).is_ok() {
             out.push(
                 Diagnostic::new(
                     Code::BuiltinShadow,
@@ -795,7 +798,15 @@ fn is_php_identifier(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{attr_name, is_php_identifier, last_segment};
+    use super::{attr_name, is_php_identifier, last_segment, BUILTINS};
+
+    #[test]
+    fn builtins_are_sorted_for_binary_search() {
+        // `ShadowRule` looks builtins up with `binary_search`, which silently
+        // misses names when the table stops being sorted; keep the table and
+        // the lookup in lockstep.
+        assert!(BUILTINS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 
     #[test]
     fn last_segment_takes_the_namespace_tail() {
