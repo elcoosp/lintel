@@ -45,7 +45,11 @@ fn dynamic_event_handler_still_fails_with_error_severity() {
 #[test]
 fn warning_diagnostics_come_from_every_target() {
     let src = "<?php\nreturn <button onclick=\"track()\">Go</button>;\n";
-    for target in [lintel_core::Target::String, lintel_core::Target::Rfc] {
+    for target in [
+        lintel_core::Target::String,
+        lintel_core::Target::Stream,
+        lintel_core::Target::Rfc,
+    ] {
         let opts = Options { target };
         let out = compile(src, &opts).expect("warns, does not fail");
         assert_eq!(out.warnings.len(), 1, "target {target:?}");
