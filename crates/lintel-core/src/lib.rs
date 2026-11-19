@@ -39,12 +39,17 @@ pub mod validate;
 
 pub use lintel_diag::{Code, Diagnostic, Severity};
 
-/// Output lowering target (doc 5.3). `stream` arrives with later milestones.
+/// Output lowering target (doc 5.3).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Target {
     /// String-concat AOT (default): functions return one `Html` value.
     #[default]
     String,
+    /// Streaming lowering (doc 5.3 `stream`, §10): the JSX root becomes an
+    /// immediately-invoked `static function (): \Generator` closure that
+    /// yields the markup one chunk at a time. The exact lowering contract
+    /// is recorded in `docs/stream-alignment.md`.
+    Stream,
     /// RFC-parity lowering (doc 5.3, §0.1): markup becomes
     /// `new \Markup\Element(...)` constructor calls / named-argument
     /// component calls; no `\Lintel\` runtime helpers are emitted.
