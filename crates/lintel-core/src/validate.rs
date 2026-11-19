@@ -424,7 +424,7 @@ impl ValidationRule for HyphenArgRule {
             return;
         }
         for attr in &element.attrs {
-            let Some(name) = attr_name(attr) else {
+            let Some(name) = attr.name() else {
                 continue; // spreads bypass named-argument rules
             };
             if !is_php_identifier(name) {
@@ -475,7 +475,7 @@ impl ValidationRule for UnknownPropRule {
 /// props are `LNT0202`'s report already.
 fn check_unknown_props(element: &Element, signature: &Signature, out: &mut Vec<Diagnostic>) {
     for attr in &element.attrs {
-        let Some(name) = attr_name(attr) else {
+        let Some(name) = attr.name() else {
             continue; // spreads bypass named-argument rules
         };
         if !is_php_identifier(name) {
@@ -536,7 +536,7 @@ fn check_missing_required(element: &Element, signature: &Signature, out: &mut Ve
         let supplied = element
             .attrs
             .iter()
-            .any(|attr| attr_name(attr).is_some_and(|name| name == param))
+            .any(|attr| attr.name().is_some_and(|name| name == param))
             || (param == "children" && !element.children.is_empty());
         if !supplied {
             let bare = last_segment(&element.name);
@@ -770,13 +770,6 @@ fn last_segment(name: &str) -> &str {
     name.rsplit('\\').next().unwrap_or(name)
 }
 
-fn attr_name(attr: &Attr) -> Option<&str> {
-    match attr {
-        Attr::Str { name, .. } | Attr::Bool { name, .. } | Attr::Expr { name, .. } => Some(name),
-        Attr::Spread { .. } => None,
-    }
-}
-
 fn attr_offset(attr: &Attr) -> usize {
     match attr {
         Attr::Str { offset, .. }
@@ -798,7 +791,7 @@ fn is_php_identifier(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{attr_name, is_php_identifier, last_segment, BUILTINS};
+    use super::{is_php_identifier, last_segment, BUILTINS};
 
     #[test]
     fn builtins_are_sorted_for_binary_search() {
@@ -825,12 +818,21 @@ mod tests {
     }
 
     #[test]
-    fn attr_name_reads_named_attrs_only() {
+    fn spreads_have_no_name_but_named_attrs_do() {
+        // The rules read names through the public `Attr::name` accessor
+        // (`ast.rs`); the spread-is-nameless half of the contract is pinned
+        // here because every named-argument rule depends on it.
         let spread = crate::ast::Attr::Spread {
             php: "$props".to_string(),
             line: 0,
             offset: 0,
         };
-        assert!(attr_name(&spread).is_none());
+        assert!(spread.name().is_none());
+        let named = crate::ast::Attr::Bool {
+            name: "open".to_string(),
+            line: 0,
+            offset: 0,
+        };
+        assert_eq!(named.name(), Some("open"));
     }
 }
