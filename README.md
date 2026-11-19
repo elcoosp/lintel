@@ -12,18 +12,24 @@ that runs under OPcache with the author's line numbers preserved.
 
 - **PHP-aware scanner** — strings, heredocs/nowdocs, comments, `#[…]
   attributes`, inline-HTML interleave and `?>` transitions pass through
-  byte-identical; JSX is recognized only in expression-start position.- **JSX parser** — elements, fragments, attribute forms (static, dynamic,
+  byte-identical; JSX is recognized only in expression-start position.
+- **JSX parser** — elements, fragments, attribute forms (static, dynamic,
   boolean, spread), raw-text `<script>`/`<style>` bodies.
-- **Two lowering targets** ([`Target`](crates/lintel-core/src/lib.rs)):
+- **Three lowering targets** ([`Target`](crates/lintel-core/src/lib.rs)):
   - `String` (default) — `new \Lintel\Html(...)` string-concat AOT with the
     context-aware `\Lintel\c/a/u/cls/sty/attrs` runtime helpers.
+  - `Stream` — streaming SSR: the root becomes an immediately-invoked
+    `static function (): \Generator` closure yielding markup one chunk at a
+    time; see [`docs/stream-alignment.md`](docs/stream-alignment.md).
   - `Rfc` — parity lowering to `new \Markup\Element(...)` constructor calls
     and named-argument component calls; see
     [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
 - **Compile-time validation** with stable `LNTxxxx` diagnostics:
-  builtin-shadow (`LNT0201`), invalid component prop (`LNT0202`), dynamic
-  event handlers (`LNT0301`), static handler warning (`LNT0302`), void
-  children (`LNT0401`). Errors fail the compile; warnings ride along on
+  builtin-shadow (`LNT0201`), invalid component prop (`LNT0202`), signature
+  checks for in-file components — unknown props (`LNT0203`) and children
+  without a `children` parameter (`LNT0204`) — dynamic event handlers
+  (`LNT0301`), static handler warning (`LNT0302`), void children
+  (`LNT0401`). Errors fail the compile; warnings ride along on
   [`Output::warnings`].
 
 ## Quick start
@@ -33,9 +39,12 @@ cargo test --workspace --all-features          # test suite
 cargo test --workspace --benches               # bench smoke
 cargo bench -p lintel-core                     # criterion throughput benches
 cargo run -p lintel-core --example compile_demo    # compile a component
+cargo run -p lintel-core --example stream_target   # generator streaming target
 cargo run -p lintel-core --example rfc_target      # both lowering targets
 cargo run -p lintel-core --example security_lint   # rendered diagnostics
 cargo run -p lintel-core --example warnings_lint   # warning diagnostics
+cargo run -p lintel-core --example signature_lint  # signature validation
+cargo run -p lintel-core --example passthrough     # pass-through + line preservation
 ```
 
 ```rust
@@ -62,6 +71,7 @@ crates/lintel-core   scan → parse → validate → emit (pure, no I/O)
 crates/lintel-diag   stable LNT codes, miette-style renderer, severities
 docs/architecture.md master plan + §21 implementation status
 docs/rfc-alignment.md  exact `rfc` lowering contract
+docs/stream-alignment.md  exact `stream` lowering contract
 ```
 
 ## Status
