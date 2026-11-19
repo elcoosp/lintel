@@ -498,3 +498,85 @@ fn stats_usage_errors_follow_the_shared_contract() {
     assert!(usage_error(&["stats", "--out", "dist", "x"]).contains("is a `build` flag"));
     assert!(usage_error(&["stats", "--format=yaml", "x"]).contains("unknown format"));
 }
+
+// ---------------------------------------------------------------------------
+// `lintel rules` — the self-describing rule-registry listing
+// (`docs/rule-registry.md`): compile-time knowledge, no paths, exit 0.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rules_lists_the_builtin_registry_as_text() {
+    let (code, stdout, stderr) = run_cli(&["rules"]);
+    assert_eq!(code, 0, "the registry listing never fails: {stderr}");
+    assert_eq!(stderr, "");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 8, "one line per built-in rule: {stdout}");
+    assert!(
+        lines[0].starts_with("builtin-shadow LNT0201 "),
+        "registry order, `<id> <codes> <summary>`: {stdout}"
+    );
+    assert!(stdout.contains("void-children LNT0401 "), "{stdout}");
+}
+
+#[test]
+fn rules_json_emits_one_stable_object_per_rule() {
+    let (code, stdout, stderr) = run_cli(&["rules", "--format=json"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stderr, "");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 8, "one JSON object per rule: {stdout}");
+    assert!(
+        lines[0].starts_with("{\"id\":\"builtin-shadow\",\"codes\":[\"LNT0201\"],\"summary\":"),
+        "stable field order, registry order: {stdout}"
+    );
+    assert!(lines[7].contains("void-children"), "{stdout}");
+}
+
+#[test]
+fn rules_rejects_paths_unknown_flags_and_bad_formats() {
+    let message = usage_error(&["rules", "src/"]);
+    assert!(message.contains("takes no paths"), "{message}");
+    let message = usage_error(&["rules", "--target=stream"]);
+    assert!(message.contains("unknown flag"), "{message}");
+    let message = usage_error(&["rules", "--format=xml"]);
+    assert!(message.contains("unknown format"), "{message}");
+}
+
+#[test]
+fn inline_out_flags_follow_the_build_only_guard() {
+    // The `--out=DIR` spelling must reject exactly like the space form:
+    // both are `build`-only, under every command (the inline form used to
+    // slip past the guard and be silently ignored by check/stats).
+    assert!(
+        usage_error(&["check", "--out=dist", "x"]).contains("is a `build` flag"),
+        "check rejects the inline form"
+    );
+    assert!(
+        usage_error(&["stats", "--out=dist", "x"]).contains("is a `build` flag"),
+        "stats rejects the inline form"
+    );
+    assert!(
+        usage_error(&["check", "--out", "dist", "x"]).contains("is a `build` flag"),
+        "check rejects the space form"
+    );
+}
+
+#[test]
+fn build_accepts_both_out_spellings() {
+    // The guard fix must not disturb `build`: both spellings write the
+    // compiled file into the target directory.
+    let dir = scratch("out-spellings");
+    let out = dir.join("dist");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        &format!("--out={}", out.display()),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "", "no stdout when writing to --out");
+    let written = out.join("Page.php");
+    let php = fs::read_to_string(&written).expect("the inline form wrote the file");
+    assert!(php.contains("new \\Lintel\\Html("), "{php}");
+    let _ = fs::remove_dir_all(&dir);
+}
