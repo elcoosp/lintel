@@ -14,13 +14,18 @@
 //!   carry a [`Severity::Warning`] (doc 4.4: "static strings allowed with a
 //!   lint warning"); the compiler still returns output.
 //! - **`LNT0401` void children** — void elements cannot take children.
+//! - **`LNT0203`/`LNT0204` signature checks** — for components declared in
+//!   the same file (doc §17.1 signature scanning), every named prop must
+//!   match a declared parameter (`LNT0203`) and JSX children require a
+//!   `children` parameter (`LNT0204`); both situations are guaranteed PHP
+//!   runtime fatals (`Unknown named parameter`).
 //!
 //! The pass is pure: `validate` maps roots + context → diagnostics, and
 //! [`crate::compile`] splits them by severity — errors fail the compilation,
 //! warnings ride along on the output.
 
 use crate::ast::{is_void_element, Attr, Element, Node};
-use crate::scan::ScanContext;
+use crate::scan::{ScanContext, Signature};
 use lintel_diag::{Code, Diagnostic, Severity};
 
 /// PHP builtin function names a component call could shadow.
@@ -361,6 +366,77 @@ fn check_component(element: &Element, context: &ScanContext, out: &mut Vec<Diagn
             );
         }
     }
+    // Signature checks only fire for components declared in this file: that
+    // is the only place the parameter list is knowable (doc §17.1).
+    if let Some(signature) = context.signature_of(&element.name) {
+        check_signature(element, bare, signature, out);
+    }
+}
+
+/// Check a component invocation against its declared in-file signature
+/// (doc §17.1): an unknown prop and JSX children without a `children`
+/// parameter are guaranteed runtime fatals (PHP rejects the call with
+/// `Unknown named parameter`), so both fail the compile like `LNT0202`.
+/// PHP named arguments are case-sensitive (unlike function calls), so the
+/// parameter comparison is too.
+fn check_signature(
+    element: &Element,
+    bare: &str,
+    signature: &Signature,
+    out: &mut Vec<Diagnostic>,
+) {
+    if signature.variadic {
+        return; // `...$rest` accepts arbitrary named arguments
+    }
+    for attr in &element.attrs {
+        let Some(name) = attr_name(attr) else {
+            continue; // spreads bypass named-argument rules
+        };
+        if !is_php_identifier(name) {
+            continue; // non-identifier props are LNT0202's report already
+        }
+        if !signature.params.iter().any(|param| param == name) {
+            out.push(
+                Diagnostic::new(
+                    Code::UnknownProp,
+                    format!("component `{bare}` declares no parameter `${name}`"),
+                    attr_offset(attr),
+                )
+                .with_help(signature_help(bare, signature, name)),
+            );
+        }
+    }
+    if !element.children.is_empty() && !signature.params.iter().any(|param| param == "children") {
+        out.push(
+            Diagnostic::new(
+                Code::UnexpectedChildren,
+                format!("component `{bare}` does not accept children"),
+                element.offset,
+            )
+            .with_help(format!(
+                "add a `children` parameter to `function {bare}(...)` or remove the JSX children"
+            )),
+        );
+    }
+}
+
+/// The `help:` line for an unknown prop: the declared parameter list plus the
+/// spread escape hatch, mirroring [`Code::HyphenArg`]'s advice.
+fn signature_help(bare: &str, signature: &Signature, name: &str) -> String {
+    let params = if signature.params.is_empty() {
+        "none".to_string()
+    } else {
+        signature
+            .params
+            .iter()
+            .map(|param| format!("${param}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "`function {bare}()` declares: {params}; pass unknown keys through a \
+         spread instead: `<{bare} {{...['{name}' => value]}} />`"
+    )
 }
 
 fn check_html_element(element: &Element, out: &mut Vec<Diagnostic>) {
