@@ -26,7 +26,7 @@ fn component_shadowing_a_builtin_is_rejected() {
 
 #[test]
 fn declaring_the_component_suppresses_builtin_shadow() {
-    let src = "<?php\nfunction Header(string $t): Html { return <h1>{$t}</h1>; }\nreturn <Header title=\"x\" />;\n";
+    let src = "<?php\nfunction Header(string $title): Html { return <h1>{$title}</h1>; }\nreturn <Header title=\"x\" />;\n";
     match compile(src, &Options::default()) {
         Ok(_) => {}
         Err(problems) => panic!("declared component must compile: {problems:?}"),
