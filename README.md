@@ -48,6 +48,17 @@ that runs under OPcache with the author's line numbers preserved.
   diagnostic in the file (the rule walk short-circuits); parse errors are
   never suppressible. See
   [`docs/ignore-directives.md`](docs/ignore-directives.md).
+- **Escape elision** — dynamic children that are provably scalar at compile
+  time (`(int)`/`(integer)`/`(float)`/`(double)` casts spanning the whole
+  expression, `count()` calls) fold to the raw PHP expression instead of
+  the `\Lintel\c()` helper, on both markup targets; everything else keeps
+  the helper, conservative by design (doc §7.3 "honest version"). See
+  [`docs/escape-elision.md`](docs/escape-elision.md).
+- **`lintel` CLI (T-10 subset)** — `lintel build` compiles files/directories
+  to stdout, `--out DIR` or `--in-place`; `lintel check` is the
+  diagnostics-only CI gate (exit 1 on errors, warnings advisory). Sources
+  walk in path order; diagnostics render through the same
+  [`Diagnostic::render`](crates/lintel-diag/src/lib.rs) snippets.
 
 ## Quick start
 
@@ -64,10 +75,16 @@ cargo run -p lintel-core --example signature_lint  # signature validation
 cargo run -p lintel-core --example suppressions_lint  # lintel-ignore-next directives
 cargo run -p lintel-core --example ignore_file       # lintel-ignore-file directive
 cargo run -p lintel-core --example srcset_attr       # srcset per-URL attribute routing
+cargo run -p lintel-core --example elision          # escape elision of scalar children
+cargo run -p lintel-core --example parse_errors     # parse diagnostics + did-you-mean
 cargo run -p lintel-core --example custom_rule      # ValidationRule seam: custom lints
 cargo run -p lintel-core --example custom_lowering  # Lowering seam: wrap the emit
 cargo run -p lintel-core --example sourcemap        # SourceMap offset → line/col
 cargo run -p lintel-core --example passthrough     # pass-through + line preservation
+cargo run -p lintel-cli --example build_library    # the CLI engine as a library
+cargo install --path crates/lintel-cli             # install the `lintel` binary
+lintel build page.lintel.php                       # compile to stdout
+lintel check src/                                  # diagnostics-only CI gate
 ```
 
 ```rust
@@ -92,18 +109,23 @@ let rfc = compile(src, &Options { target: Target::Rfc }).unwrap();
 ```
 crates/lintel-core   scan → parse → validate → emit (pure, no I/O)
 crates/lintel-diag   stable LNT codes, miette-style renderer, severities
+crates/lintel-cli    the `lintel` binary: build/check over the core (T-10 subset)
 docs/architecture.md master plan + §21 implementation status
 docs/rfc-alignment.md  exact `rfc` lowering contract
 docs/stream-alignment.md  exact `stream` lowering contract
 docs/srcset-alignment.md  exact `srcset` attribute routing contract
+docs/escape-elision.md  exact provably-scalar child folding contract
 docs/ignore-directives.md  exact suppression directive contracts
 ```
 
 ## Status
 
-CLI, WASM playground, LSP, PHP runtime and the PHP rendering benchmark
-harness (§9.2) are future milestones (see `docs/architecture.md` §15 task
-cards and §21 status table) — the criterion compiler-throughput benches in
+The compiler core, the three lowering targets, the validation pass, the
+`lintel-ignore-*` directives, escape elision and the minimal `lintel`
+build/check CLI run today. The remaining CLI surface (watch/init/daemon),
+WASM playground, LSP, PHP runtime and the PHP rendering benchmark harness
+(§9.2) are future milestones (see `docs/architecture.md` §15 task cards and
+§21 status table) — the criterion compiler-throughput benches in
 `crates/lintel-core/benches/` already run today. The clippy gate is
 `cargo clippy --workspace --all-targets --all-features --
 -D warnings -W clippy::pedantic` with zero warnings.
