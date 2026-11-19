@@ -24,7 +24,7 @@ const BADGE_EXPECTED: &str = "\
 function Badge(string $label, bool $verified = false): Html {
     return (
         new \\Lintel\\Html('<span class=\"badge\">'
- . \\Lintel\\c($label)
+ . \\htmlspecialchars($label, \\ENT_QUOTES | \\ENT_SUBSTITUTE | \\ENT_HTML5)
  . \\Lintel\\c($verified && new \\Lintel\\Html('<i class=\"icon-check\"></i>'))
  . '</span>')
     );
