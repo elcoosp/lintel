@@ -19,6 +19,15 @@
 //!   match a declared parameter (`LNT0203`) and JSX children require a
 //!   `children` parameter (`LNT0204`); both situations are guaranteed PHP
 //!   runtime fatals (`Unknown named parameter`).
+//! - **`LNT0205` required parameter** — a parameter declared without a
+//!   default value must be supplied by the invocation (a spread counts as
+//!   supplying, JSX children satisfy a `children` parameter); omitting one
+//!   is the guaranteed `Argument ... not given` runtime fatal.
+//!
+//! Diagnostics anchored inside a `lintel-ignore-next` suppression window
+//! (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
+//! here; parse diagnostics never reach this pass, so a directive cannot
+//! hide a misparse.
 //!
 //! The pass is pure: `validate` maps roots + context → diagnostics, and
 //! [`crate::compile`] splits them by severity — errors fail the compilation,
@@ -296,12 +305,19 @@ const BUILTINS: &[&str] = &[
 ];
 
 /// Validate every root (top-level and nested) against the scan context.
+///
+/// Diagnostics anchored inside a `lintel-ignore-next` suppression window
+/// (recorded by the scanner, see `docs/ignore-directives.md`) are dropped
+/// here — the single choke point through which every validation diagnostic
+/// flows. Parse diagnostics (`LNT01xx`) never reach this pass, so a
+/// directive cannot suppress them.
 #[must_use]
 pub fn validate(roots: &[Node], context: &ScanContext) -> Vec<Diagnostic> {
     let mut problems: Vec<Diagnostic> = vec![];
     for root in roots {
         check_node(root, context, &mut problems);
     }
+    problems.retain(|problem| !context.suppressed_at(problem.offset));
     problems
 }
 
@@ -404,6 +420,38 @@ fn check_signature(
                 )
                 .with_help(signature_help(bare, signature, name)),
             );
+        }
+    }
+    // Required parameters (declared without a default) that the invocation
+    // does not supply are guaranteed PHP runtime fatals (`Argument ... not
+    // given`), so they fail the compile like the other signature checks. A
+    // spread may supply anything, so its presence disables the check rather
+    // than risk a false positive; JSX children satisfy a `children`
+    // parameter, and a named `children` prop satisfies it too.
+    let has_spread = element
+        .attrs
+        .iter()
+        .any(|attr| matches!(attr, Attr::Spread { .. }));
+    if !has_spread {
+        for param in &signature.required {
+            let supplied = element
+                .attrs
+                .iter()
+                .any(|attr| attr_name(attr).is_some_and(|name| name == param))
+                || (param == "children" && !element.children.is_empty());
+            if !supplied {
+                out.push(
+                    Diagnostic::new(
+                        Code::MissingRequiredProp,
+                        format!("component `{bare}` is missing required parameter `${param}`"),
+                        element.offset,
+                    )
+                    .with_help(format!(
+                        "pass `{param}: value` on `<{bare}>` or give the parameter a \
+                         default value in `function {bare}(...)`"
+                    )),
+                );
+            }
         }
     }
     if !element.children.is_empty() && !signature.params.iter().any(|param| param == "children") {
