@@ -43,7 +43,59 @@
 
 use crate::ast::{is_void_element, Attr, Element, Node};
 use crate::scan::{ScanContext, Signature};
-use lintel_diag::{Code, Diagnostic, Severity};
+use lintel_diag::{json_escape, Code, Diagnostic, Severity};
+
+/// The stable, machine-readable identity of one validation rule
+/// (`docs/rule-registry.md`): consumers — docs-site generators, editor
+/// integrations, CI reporters — list what a registry enforces without
+/// re-documenting it, the way [`crate::inventory::FileInventory`] lists a
+/// file's shape without re-walking it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleMeta {
+    /// The rule's stable identifier (kebab-case, e.g. `"builtin-shadow"`):
+    /// the machine key a docs page or editor integration addresses the rule
+    /// by. Unique across a registry; built-in ids never change once
+    /// shipped.
+    pub id: &'static str,
+    /// The stable `LNTxxxx` codes the rule can emit, in emission order —
+    /// the same order a single node's diagnostics arrive in (built-in
+    /// rules emit exactly one code today; the slice leaves room for
+    /// multi-code policies). Parse classes (`LNT01xx`) never appear here:
+    /// they are scanner output, not rule-selected.
+    pub codes: &'static [Code],
+    /// One-line summary of the policy, shown after the id in a registry
+    /// listing (the `help:` lines on the diagnostics carry the specifics).
+    pub summary: &'static str,
+}
+
+impl RuleMeta {
+    /// Render the meta as a single-line JSON object (JSON Lines), the same
+    /// machine contract as [`lintel_diag::Diagnostic::to_json`] and
+    /// [`crate::inventory::FileInventory::to_json`]: no trailing newline,
+    /// stable field order (`id`, `codes`, `summary`) and the shared
+    /// [`lintel_diag::json_escape`] escaping, so a registry listing is
+    /// snapshot-able like every other machine-readable emitter in the
+    /// workspace.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut out = String::with_capacity(128);
+        out.push_str("{\"id\":\"");
+        json_escape(self.id, &mut out);
+        out.push_str("\",\"codes\":[");
+        for (index, code) in self.codes.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(code.lnt());
+            out.push('"');
+        }
+        out.push_str("],\"summary\":\"");
+        json_escape(self.summary, &mut out);
+        out.push_str("\"}");
+        out
+    }
+}
 
 /// One compile-time validation rule (doc T-08): a strategy consulted for
 /// every AST node the walk visits, in registry order.
@@ -79,6 +131,16 @@ pub trait ValidationRule: Sync {
     /// §17.1) plus the recorded suppression windows; `out` is the shared
     /// diagnostic list for the whole pass, in walk order.
     fn check(&self, node: &Node, context: &ScanContext, out: &mut Vec<Diagnostic>);
+
+    /// The rule's stable identity ([`RuleMeta`]), or [`None`] when the rule
+    /// is unclassified. The default keeps every existing consumer rule
+    /// valid — it simply reports no registry entry
+    /// (`docs/rule-registry.md`); a rule opts in by overriding this with
+    /// its [`RuleMeta`], and [`registry_metas`] lists any registry's
+    /// identities in registry order.
+    fn meta(&self) -> Option<RuleMeta> {
+        None
+    }
 }
 
 /// PHP builtin function names a component call could shadow.
@@ -374,6 +436,25 @@ pub fn builtin_rules() -> &'static [&'static dyn ValidationRule] {
     BUILTIN_RULES
 }
 
+/// The built-in registry's machine-readable identities, in registry
+/// (diagnostic) order — the listing `lintel rules` prints
+/// (`docs/rule-registry.md`). Every built-in rule is classified (pinned by
+/// the `tests/rule_registry.rs` completeness contract), so the iterator
+/// yields one [`RuleMeta`] per built-in rule.
+pub fn builtin_rule_metas() -> impl Iterator<Item = RuleMeta> {
+    BUILTIN_RULES.iter().filter_map(|rule| rule.meta())
+}
+
+/// The identities of an explicit rule registry, in registry order —
+/// [`builtin_rule_metas`] for the built-in set, `Some`/`None` entries for
+/// any injected registry ([`crate::compile_with`], [`validate_with`]): a
+/// rule that does not override [`ValidationRule::meta`] reports [`None`]
+/// and stays a valid, unlisted member (`docs/rule-registry.md`).
+#[must_use]
+pub fn registry_metas(rules: &[&dyn ValidationRule]) -> Vec<Option<RuleMeta>> {
+    rules.iter().map(|rule| rule.meta()).collect()
+}
+
 /// `LNT0201` — a component whose name resolves to a PHP builtin function
 /// (`<Header>` → `header()`) unless the file declares or imports that
 /// function (doc 4.7).
@@ -409,6 +490,15 @@ impl ValidationRule for ShadowRule {
             );
         }
     }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "builtin-shadow",
+            codes: &[Code::BuiltinShadow],
+            summary: "a component must not resolve to a PHP builtin function unless the file \
+                      declares or imports that name",
+        })
+    }
 }
 
 /// `LNT0202` — a component attribute that cannot become a PHP named argument
@@ -442,6 +532,15 @@ impl ValidationRule for HyphenArgRule {
             }
         }
     }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "hyphen-arg",
+            codes: &[Code::HyphenArg],
+            summary: "a component attribute must be a PHP identifier so it can become a named \
+                      argument",
+        })
+    }
 }
 
 /// `LNT0203` — a named prop that does not match a declared parameter of the
@@ -467,6 +566,15 @@ impl ValidationRule for UnknownPropRule {
             return; // `...$rest` accepts arbitrary named arguments
         }
         check_unknown_props(element, signature, out);
+    }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "unknown-prop",
+            codes: &[Code::UnknownProp],
+            summary: "a named prop must match a declared parameter of the in-file component \
+                      signature",
+        })
     }
 }
 
@@ -513,6 +621,14 @@ impl ValidationRule for MissingRequiredPropRule {
             return;
         };
         check_missing_required(element, signature, out);
+    }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "missing-required-prop",
+            codes: &[Code::MissingRequiredProp],
+            summary: "a parameter declared without a default must be supplied by the invocation",
+        })
     }
 }
 
@@ -588,6 +704,15 @@ impl ValidationRule for UnexpectedChildrenRule {
             );
         }
     }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "unexpected-children",
+            codes: &[Code::UnexpectedChildren],
+            summary: "JSX children require a `children` parameter on the in-file component \
+                      signature",
+        })
+    }
 }
 
 /// `LNT0301` — a dynamic event-handler attribute (`onclick={expr}` and
@@ -619,6 +744,14 @@ impl ValidationRule for DynamicHandlerRule {
                 }
             }
         }
+    }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "dynamic-handler",
+            codes: &[Code::DynamicHandler],
+            summary: "dynamic event-handler attributes are rejected at compile time",
+        })
     }
 }
 
@@ -654,6 +787,14 @@ impl ValidationRule for StaticHandlerRule {
             }
         }
     }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "static-handler",
+            codes: &[Code::StaticHandler],
+            summary: "static event-handler strings are discouraged and ride along as warnings",
+        })
+    }
 }
 
 /// `LNT0401` — a void element given children (architecture doc 4.2).
@@ -677,6 +818,14 @@ impl ValidationRule for VoidChildrenRule {
                 .with_help("remove the children or switch to a non-void element"),
             );
         }
+    }
+
+    fn meta(&self) -> Option<RuleMeta> {
+        Some(RuleMeta {
+            id: "void-children",
+            codes: &[Code::VoidChildren],
+            summary: "void elements cannot have children",
+        })
     }
 }
 
