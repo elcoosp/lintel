@@ -14,6 +14,7 @@
 //! - [`Severity`] distinguishes hard failures from advisory warnings.
 //! - [`Diagnostic`] is the data type shared by CLI, daemon, LSP and WASM.
 //! - [`Diagnostic::render`] draws a miette-style snippet with a caret.
+//! - [`SourceMap`] converts the shared byte offsets into editor positions.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -202,9 +203,9 @@ impl Diagnostic {
     /// clamped so rendering can never panic.
     #[must_use]
     pub fn render(&self, src: &str) -> String {
-        let offset = clamp_offset(src, self.offset);
-        let (line_no, col) = line_col(src, offset);
-        let line_text = line_text(src, offset);
+        let map = SourceMap::new(src);
+        let (line_no, col) = map.line_col(self.offset);
+        let line_text = map.line_text(self.offset);
 
         let mut out = String::new();
         out.push_str(&self.headline());
@@ -235,37 +236,79 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-/// Clamp a byte offset into `src` and floor it to a char boundary.
-fn clamp_offset(src: &str, offset: usize) -> usize {
-    let end = src.len();
-    let mut off = offset.min(end);
-    while off > 0 && !src.is_char_boundary(off) {
-        off -= 1;
+/// Byte-offset → editor-position mapping for the offsets every
+/// [`Diagnostic`] carries.
+///
+/// The compiler's diagnostics anchor on byte offsets; editors, LSPs and
+/// CLIs speak in 1-based line/column pairs. [`Diagnostic::render`] computes
+/// that mapping internally; this struct is the same conversion as a public
+/// seam so consumers do not have to re-implement (or drift from) it.
+///
+/// Semantics, identical to the renderer's long-standing private helpers:
+///
+/// - Offsets are **clamped** into the source and **floored to a char
+///   boundary** — an offset inside a multi-byte character resolves to the
+///   character's first byte, never a panic.
+/// - Lines are 1-based and counted on `\n` (a CRLF source has the same line
+///   numbers as the LF-only equivalent).
+/// - Columns are 1-based and counted in **characters**, not bytes, matching
+///   the renderer's caret alignment.
+pub struct SourceMap<'a> {
+    src: &'a str,
+}
+
+impl<'a> SourceMap<'a> {
+    /// Map offsets against `src`.
+    #[must_use]
+    pub fn new(src: &'a str) -> Self {
+        Self { src }
     }
-    off
-}
 
-/// 1-based line number and 1-based character column of a byte offset.
-fn line_col(src: &str, offset: usize) -> (usize, usize) {
-    let prefix = &src[..offset];
-    let line_no = prefix.matches('\n').count() + 1;
-    let line_start = prefix.rfind('\n').map_or(0, |idx| idx + 1);
-    let col = src[line_start..offset].chars().count() + 1;
-    (line_no, col)
-}
+    /// The mapped source text.
+    #[must_use]
+    pub fn source(&self) -> &'a str {
+        self.src
+    }
 
-/// The full text of the line containing a byte offset (without the newline).
-fn line_text(src: &str, offset: usize) -> String {
-    let line_start = src[..offset].rfind('\n').map_or(0, |idx| idx + 1);
-    let line_end = src[line_start..]
-        .find('\n')
-        .map_or(src.len(), |idx| line_start + idx);
-    src[line_start..line_end].to_string()
+    /// Clamp `offset` into the source, flooring it to a char boundary.
+    #[must_use]
+    pub fn clamp(&self, offset: usize) -> usize {
+        let mut off = offset.min(self.src.len());
+        while off > 0 && !self.src.is_char_boundary(off) {
+            off -= 1;
+        }
+        off
+    }
+
+    /// The 1-based line and 1-based character column of `offset`.
+    ///
+    /// Out-of-range or mid-character offsets clamp first, so the last
+    /// position of the source resolves instead of panicking.
+    #[must_use]
+    pub fn line_col(&self, offset: usize) -> (usize, usize) {
+        let offset = self.clamp(offset);
+        let prefix = &self.src[..offset];
+        let line = prefix.matches('\n').count() + 1;
+        let line_start = prefix.rfind('\n').map_or(0, |idx| idx + 1);
+        let col = self.src[line_start..offset].chars().count() + 1;
+        (line, col)
+    }
+
+    /// The full text of the line containing `offset` (without the newline).
+    #[must_use]
+    pub fn line_text(&self, offset: usize) -> &'a str {
+        let offset = self.clamp(offset);
+        let line_start = self.src[..offset].rfind('\n').map_or(0, |idx| idx + 1);
+        let line_end = self.src[line_start..]
+            .find('\n')
+            .map_or(self.src.len(), |idx| line_start + idx);
+        &self.src[line_start..line_end]
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Code, Diagnostic, Severity};
+    use super::{Code, Diagnostic, Severity, SourceMap};
 
     #[test]
     fn lnt_codes_are_stable() {
@@ -371,5 +414,43 @@ mod tests {
         let problem = Diagnostic::new(Code::BadAttr, "bad", 0);
         let rendered = problem.render("x");
         assert!(!rendered.contains("= help:"), "{rendered}");
+    }
+
+    #[test]
+    fn sourcemap_lines_and_columns_are_one_based_chars() {
+        let map = SourceMap::new("héllo\nworld");
+        // Byte 0 → line 1 col 1; `é` occupies bytes 1..3, so the `l` after
+        // it is the third character of the line (byte 3, column 3).
+        assert_eq!(map.line_col(0), (1, 1));
+        assert_eq!(map.line_col(3), (1, 3));
+        assert_eq!(map.line_col(4), (1, 4));
+        // Byte 6 is the `\n` itself — still line 1; line 2 starts at 7.
+        assert_eq!(map.line_col(6), (1, 6));
+        assert_eq!(map.line_col(7), (2, 1));
+        assert_eq!(map.clamp(2), 1, "mid-character offset floors");
+        assert_eq!(map.line_text(6), "héllo");
+        assert_eq!(map.line_text(7), "world");
+        assert_eq!(map.line_text(0), "héllo");
+    }
+
+    #[test]
+    fn sourcemap_clamps_out_of_range_offsets_like_the_renderer() {
+        let map = SourceMap::new("abc");
+        assert_eq!(map.line_col(99), (1, 4));
+        assert_eq!(map.line_text(99), "abc");
+        assert_eq!(map.clamp(99), 3);
+        let empty = SourceMap::new("");
+        assert_eq!(empty.line_col(0), (1, 1));
+        assert_eq!(empty.line_text(0), "");
+        assert_eq!(empty.clamp(7), 0);
+    }
+
+    #[test]
+    fn render_agrees_with_the_public_sourcemap() {
+        let src = "<?php\n<button onclick={$handler}>";
+        let problem = Diagnostic::new(Code::DynamicHandler, "boom", 16);
+        let map = SourceMap::new(src);
+        let (line, col) = map.line_col(problem.offset);
+        assert!(problem.render(src).contains(&format!("input:{line}:{col}")));
     }
 }
