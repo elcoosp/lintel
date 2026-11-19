@@ -1255,17 +1255,20 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 
 | Plan item | Status | Where |
 |---|---|---|
-| T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` only; `lintel-cli`/`lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1) |
-| T-02 diagnostics crate | **done** | `crates/lintel-diag` — `Code` (LNT0101–LNT0401), `Diagnostic`, dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
-| T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested |
+| T-01 workspace + CI | **done (subset)** | `Cargo.toml`, `.github/workflows/ci.yml` — members `lintel-diag`, `lintel-core` only; `lintel-cli`/`lintel-wasm`/`lintel-lsp`/`lintel-fmt`/`lintel-html-spec` are deferred (§6.1 lists four members, §5.1 lists seven: this repo now defines the truth per §21.1). CI clippy gate uses the renamed `-W clippy::pedantic` lint: the bare `-W pedantic` name is a `renamed-and-removed-lints` hard error on current stable toolchains |
+| T-02 diagnostics crate | **done (with severities)** | `crates/lintel-diag` — `Code` (LNT0101–LNT0402), `Severity` (`Error`/`Warning`), `Diagnostic`, dependency-free miette-style `render()`; `docs/errors/LNT*.md` pages not yet written |
+| T-03 PHP-aware scanner | **done** | `crates/lintel-core/src/scan.rs` — byte-identical pass-through is golden-tested; lowering is injected via `scan_with(src, &dyn Lowering)` instead of being hardcoded |
 | T-04 text normalization | **done** | `crates/lintel-core/src/text.rs` + `tests/whitespace.rs` |
 | T-05 parse + emit (string target) | **done** | `crates/lintel-core/src/{ast,scan,emit}.rs`, `compile()` contract in `lib.rs` |
-| T-08 validation pass | **done (v0.1 subset)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0301/0401; "did you mean" close-tag suggestions and the static `on*` lint *warning* are open (the `Diagnostic` type has no severity field yet, per §6.6) |
-| T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality |
+| T-08 validation pass | **done (v0.1 subset + warnings)** | `crates/lintel-core/src/validate.rs` — LNT0201/0202/0301/0302/0401; error-severity diagnostics fail `compile()`, warnings (static `on*` strings, LNT0302) ride along on `Output::warnings`; "did you mean" close-tag suggestions remain open |
+| `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` |
+| T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **not started** | PHP side (`php/`) does not exist yet |
 | T-09+ differential/fuzz/CLI/daemon/WASM | **not started** | — |
 
-Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion). They
+Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion): the
+four compiler-throughput scenarios plus `rfc_component_tree` (RFC-parity
+lowering) and `warned_handlers` (warn-and-continue validation path). They
 measure compiler throughput only; the §9.2 PHP rendering harness is future
 work, so no perf claims beyond these numbers are made anywhere.
 
