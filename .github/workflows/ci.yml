@@ -15,7 +15,7 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (pedantic, warnings as errors)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W pedantic
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
       - name: Tests (all features)
         run: cargo test --workspace --all-features
       - name: Benches (smoke)
