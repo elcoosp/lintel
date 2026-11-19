@@ -19,6 +19,7 @@
 //! the exit code reports whether *any* file failed.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::ops::ControlFlow;
@@ -33,6 +34,7 @@ lintel — the JSX-for-PHP compiler CLI (architecture doc §6.7 subset)
 USAGE:
     lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place]
     lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
+    lintel stats <paths>... [--format=text|json]
     lintel init [DIR]
     lintel --help | --version
 
@@ -43,19 +45,34 @@ ARGS:
 COMMANDS:
     build    compile sources to plain PHP: stdout by default, --out or --in-place
     check    compile diagnostics-only; exit 1 when any error-severity diagnostic fires
+    stats    report each file's component shape (declared + invoked) without
+             emitting PHP; exit 1 only when a file fails to parse
     init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php
 
 FLAGS:
-    --target=<t>    lowering target: string (default), stream or rfc
-    --format=<f>    diagnostic format: text (default) or json (one JSON object
-                    per diagnostic on stderr; exit codes unchanged)
+    --target=<t>    lowering target for build/check: string (default), stream
+                    or rfc (accepted on stats for pipeline parity; the shape
+                    report is target-independent)
+    --format=<f>    diagnostic/report format: text (default) or json (one JSON
+                    object per diagnostic or report on the sink; exit codes
+                    unchanged)
     --out <dir>     write each source as <dir>/<name>.php instead of stdout
     --in-place      write each source as <name>.php next to it
     --help, -h      print this help
     --version       print the version line
 
+STATS REPORT:
+    One section per file: the path header, then one `declared Name(params)`
+    line per component the file declares (`!` marks a required parameter,
+    `...` the variadic tail) and one
+    `invoke <Name> at line:col props: ...` line per component invocation
+    site, followed by `; children`, `; spread` and `; undeclared` as they
+    apply. --format=json emits one JSON object per file instead, a `file`
+    field ahead of the core inventory's documented shape
+    (docs/component-inventory.md).
+
 EXIT CODES:
-    0    every file compiled cleanly (warnings are advisory)
+    0    every file compiled/scanned cleanly (warnings are advisory)
     1    at least one file failed (rendered diagnostics on stderr)
     2    usage error (bad flag, missing path, conflicting output modes)";
 
@@ -127,6 +144,14 @@ enum Invocation {
         target: Target,
         format: Format,
     },
+    /// `lintel stats [paths]`: the per-file component shape report
+    /// (`docs/component-inventory.md`), rendered to stdout in the
+    /// requested [`Format`]; parse diagnostics fail a file like `check`,
+    /// validation lints play no part.
+    Stats {
+        paths: Vec<PathBuf>,
+        format: Format,
+    },
     /// `lintel init [DIR]`: scaffold the runnable demo into `path`.
     Init {
         path: PathBuf,
@@ -184,6 +209,10 @@ pub fn run(
         } => {
             let sources = collect_sources(&paths)?;
             Ok(check(&sources, target, format, stderr))
+        }
+        Invocation::Stats { paths, format } => {
+            let sources = collect_sources(&paths)?;
+            Ok(stats(&sources, format, stdout, stderr))
         }
         Invocation::Init { path } => {
             let report = init(&path)?;
@@ -295,19 +324,19 @@ fn parse_args(
 /// and flags interleave freely — but `--in-place`/`--out` are `build`-only.
 fn parse(args: &[String]) -> Result<Invocation, CliError> {
     let Some(command) = args.first() else {
-        return Err(CliError("missing command: build or check".into()));
+        return Err(CliError("missing command: build, check or stats".into()));
     };
     match command.as_str() {
         "--help" | "-h" => return Ok(Invocation::Help),
         "--version" => return Ok(Invocation::Version),
-        "build" | "check" => {}
+        "build" | "check" | "stats" => {}
         "init" => {
             let path = parse_init(&args[1..])?;
             return Ok(Invocation::Init { path });
         }
         other => {
             return Err(CliError(format!(
-                "unknown command `{other}`: expected build, check or init"
+                "unknown command `{other}`: expected build, check, stats or init"
             )))
         }
     }
@@ -331,19 +360,22 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             return Err(CliError(format!("no such path: {}", path.display())));
         }
     }
-    if is_build {
-        Ok(Invocation::Build {
+    match command.as_str() {
+        "build" => Ok(Invocation::Build {
             paths: parsed.paths,
             target: parsed.target,
             format: parsed.format,
             destination: parsed.destination,
-        })
-    } else {
-        Ok(Invocation::Check {
+        }),
+        "check" => Ok(Invocation::Check {
             paths: parsed.paths,
             target: parsed.target,
             format: parsed.format,
-        })
+        }),
+        _ => Ok(Invocation::Stats {
+            paths: parsed.paths,
+            format: parsed.format,
+        }),
     }
 }
 
@@ -556,6 +588,122 @@ fn check(sources: &[PathBuf], target: Target, format: Format, stderr: &mut dyn W
         }
     }
     i32::from(failed)
+}
+
+/// Compile the per-file component shape report with `stats` semantics: the
+/// scanner runs (the pipeline `check` uses, minus validation and emission —
+/// the shape report is target-independent), parse diagnostics are rendered
+/// to `stderr` in the requested [`Format`] and fail the file, and every
+/// clean file prints one report section to `stdout` — the text table or one
+/// JSON object per file. Validation lints play no part: `stats` is a shape
+/// report, not a linter. Returns 0 when every file scanned, 1 when at least
+/// one failed to parse (or could not be read).
+fn stats(
+    sources: &[PathBuf],
+    format: Format,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    let mut failed = false;
+    for source in sources {
+        let src = match fs::read_to_string(source) {
+            Ok(src) => src,
+            Err(e) => {
+                let _ = writeln!(stderr, "lintel: cannot read {}: {e}", source.display());
+                failed = true;
+                continue;
+            }
+        };
+        let parsed = lintel_core::scan::scan(&src);
+        if !parsed.diagnostics.is_empty() {
+            for problem in &parsed.diagnostics {
+                emit_diagnostic(problem, &src, format, stderr);
+            }
+            failed = true;
+            continue;
+        }
+        let inventory = lintel_core::collect_inventory(&parsed.roots, &parsed.context);
+        match format {
+            Format::Text => {
+                let _ = write!(stdout, "{}", stats_text(source, &inventory, &src));
+            }
+            Format::Json => {
+                let _ = writeln!(stdout, "{}", stats_json(source, &inventory, &src));
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+/// The text report for one file: the path header, then one `declared`
+/// line per declared component — `Name(params)` with `!` marking a
+/// required parameter and `...` the variadic tail — and one `invoke` line
+/// per invocation site (position mapped through [`lintel_core::SourceMap`],
+/// flags appended in the fixed order `children`, `spread`, `undeclared`).
+fn stats_text(source: &Path, inventory: &lintel_core::FileInventory, src: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", source.display());
+    let map = lintel_core::SourceMap::new(src);
+    for component in &inventory.declared {
+        let signature = &component.signature;
+        let params = signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                let tail = if signature.variadic && index == signature.params.len() - 1 {
+                    "..."
+                } else if signature.required.contains(param) {
+                    "!"
+                } else {
+                    ""
+                };
+                format!("{param}{tail}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "  declared {}({params})", component.name);
+    }
+    for site in &inventory.invocations {
+        let (line, col) = map.line_col(site.offset);
+        let mut flags = String::new();
+        if site.children {
+            flags.push_str("; children");
+        }
+        if site.spread {
+            flags.push_str("; spread");
+        }
+        if !site.declared_in_file {
+            flags.push_str("; undeclared");
+        }
+        let props = if site.props.is_empty() {
+            "none".to_string()
+        } else {
+            site.props.join(", ")
+        };
+        let _ = writeln!(
+            out,
+            "  invoke <{}> at {line}:{col} props: {props}{flags}",
+            site.name
+        );
+    }
+    out
+}
+
+/// The JSON report line for one file: the core inventory's documented
+/// `to_json` object with a `file` field prepended — the splice replaces the
+/// leading `{"declared"` key, which can only be the object's first field,
+/// so no value can ever be mistaken for it (`docs/component-inventory.md`).
+fn stats_json(source: &Path, inventory: &lintel_core::FileInventory, src: &str) -> String {
+    let mut file = String::new();
+    file.push('"');
+    lintel_core::json_escape(&source.to_string_lossy(), &mut file);
+    file.push('"');
+    inventory.to_json(src).replacen(
+        "{\"declared\"",
+        &format!("{{\"file\":{file},\"declared\""),
+        1,
+    )
 }
 
 /// The output file name for one source: `Page.lintel.php` → `Page.php`; a
