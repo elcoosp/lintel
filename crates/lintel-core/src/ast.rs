@@ -110,6 +110,21 @@ pub enum Attr {
     },
 }
 
+impl Attr {
+    /// The attribute's name, or [`None`] for a spread — a spread carries no
+    /// name of its own (doc 4.4: it scatters an array of named attributes),
+    /// so named-attribute rules and shape reports skip it.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Attr::Str { name, .. } | Attr::Bool { name, .. } | Attr::Expr { name, .. } => {
+                Some(name)
+            }
+            Attr::Spread { .. } => None,
+        }
+    }
+}
+
 /// HTML void elements (architecture doc 4.2): emitted without a close tag.
 pub(crate) const VOID_ELEMENTS: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
@@ -170,10 +185,14 @@ pub fn visit_node(node: &Node, visitor: &mut dyn NodeVisitor) {
     }
 }
 
-/// Walk every root in source order (the same node sequence
-/// [`crate::validate::validate_with`]'s walk covers over
-/// `scan().roots`): each root is one [`NodeVisitor`] walk
-/// ([`NodeVisitor`] contract).
+/// Walk every root in `Parsed::roots` order (the same node sequence
+/// [`crate::validate::validate_with`]'s walk covers over `scan().roots`):
+/// each root is one [`NodeVisitor`] walk ([`NodeVisitor`] contract). The
+/// vector is in source order at the top level; a JSX root nested inside an
+/// attribute expression is scanned *before* its enclosing root and
+/// therefore precedes it (it is still fully contained in the enclosing
+/// root's source span). Consumers that need a strict source ordering sort
+/// their collected items by `offset` — the component inventory does.
 pub fn visit_roots(roots: &[Node], visitor: &mut dyn NodeVisitor) {
     for root in roots {
         visit_node(root, visitor);
