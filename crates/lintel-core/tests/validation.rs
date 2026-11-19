@@ -151,3 +151,27 @@ fn scan_context_reports_declared_functions_case_insensitively() {
     assert!(context.declares_function("CARD"));
     assert!(!context.declares_function("header"));
 }
+
+#[test]
+fn the_builtin_validate_wrapper_reports_the_registry_diagnostics() {
+    // `validate` is the built-in-registry convenience wrapper over
+    // `validate_with`; exercise it directly so the zero-argument entry
+    // point stays covered outside a full `compile`.
+    let parsed = lintel_core::scan::scan("<?php\nreturn <Header />;\n");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let problems = lintel_core::validate::validate(&parsed.roots, &parsed.context);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems[0].code, Code::BuiltinShadow);
+
+    let clean = lintel_core::scan::scan("<?php\nreturn <b>x</b>;\n");
+    let clean_problems = lintel_core::validate::validate(&clean.roots, &clean.context);
+    assert_eq!(clean_problems, Vec::new());
+}
+
+#[test]
+fn the_builtin_validate_wrapper_honours_suppression_choke_point() {
+    // Suppression is filtered in the shared walk, so the wrapper sees it too.
+    let parsed = lintel_core::scan::scan("<?php\n// lintel-ignore-file\nreturn <Header />;\n");
+    let problems = lintel_core::validate::validate(&parsed.roots, &parsed.context);
+    assert!(problems.is_empty(), "{problems:?}");
+}
