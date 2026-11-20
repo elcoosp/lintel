@@ -35,6 +35,8 @@ final class LoaderTest extends TestCase
 {
     private string $tmp;
     private ?ClassLoader $registered = null;
+    /** @var resource|null */
+    private $daemonResponder = null;
 
     protected function setUp(): void
     {
@@ -50,6 +52,13 @@ final class LoaderTest extends TestCase
             $this->registered = null;
         }
         putenv('LINTEL_BIN');
+        unset($GLOBALS['lintelFromSource']);
+        if ($this->daemonResponder !== null) {
+            $proc = $this->daemonResponder;
+            $this->daemonResponder = null;
+            proc_terminate($proc);
+            proc_close($proc);
+        }
         self::rrmdir($this->tmp);
     }
 
@@ -190,6 +199,41 @@ final class LoaderTest extends TestCase
         self::assertSame(7, \App\Ui\hello());
     }
 
+    public function testBootDefinesFunctionComponentsBeforeTheFallbackRegisters(): void
+    {
+        // The T-31 order: the eager lane completes during boot() — PHP has
+        // no function autoloading, so a function first called after boot can
+        // only exist if the eager require already ran. The PSR-4 fallback
+        // keeps working for class-shaped sources (the reorder must not
+        // break the §6.10 class lane).
+        putenv('LINTEL_BIN=' . $this->fakeLintel());
+        $this->put('proj9/lintel.json', '{"functions": ["components/*.lintel.php"]}');
+        $this->put('proj9/components/badge.lintel.php', "<?php\n\nnamespace App\\Ui;\n\nfunction badge(): int\n{\n    return 9;\n}\n");
+        $comp = $this->put('proj9/components/Panel.lintel.php', <<<'PHP'
+            <?php
+
+            namespace Fixtures\Nine;
+
+            final class Panel
+            {
+                public function render(): string
+                {
+                    return '<p>panel</p>';
+                }
+            }
+            PHP);
+        $this->registerPsr4('Fixtures\\', dirname($comp, 2));
+
+        Loader::boot($this->tmp . '/cache', null, $this->tmp . '/proj9');
+
+        self::assertTrue(function_exists('\App\Ui\badge'), 'the eager lane completed during boot');
+        self::assertSame(9, \App\Ui\badge());
+        /** @phpstan-ignore class.notFound (runtime-defined via the compiled cache) */
+        $panel = new \Fixtures\Nine\Panel();
+        /** @phpstan-ignore class.notFound (runtime-defined via the compiled cache) */
+        self::assertSame('<p>panel</p>', $panel->render(), 'the PSR-4 fallback still loads class components');
+    }
+
     public function testFunctionsManifestCompileRealMarkupWhenTheCompilerIsPresent(): void
     {
         $bin = getenv('LINTEL_TEST_BIN');
@@ -238,6 +282,31 @@ final class LoaderTest extends TestCase
         self::assertSame(42, \one());
     }
 
+    public function testBootSkipsSourcesTheProdShimAlreadyLoaded(): void
+    {
+        // T-31 lane collision: when the prod files shim ran in this process
+        // (it registers the sources it required in $GLOBALS['lintelFromSource']),
+        // the eager lane must skip them — requiring the source again would
+        // fatal on redeclare. Sources the shim does not know still load.
+        putenv('LINTEL_BIN=' . $this->fakeLintel());
+        $this->put('proj10/lintel.json', '{"functions": ["components/*.lintel.php"]}');
+        $this->put('proj10/components/shimmed.lintel.php', "<?php\n\nnamespace App\\Shim;\n\nfunction shimmed(): int\n{\n    return 1;\n}\n");
+        $this->put('proj10/components/fresh.lintel.php', "<?php\n\nnamespace App\\Fresh;\n\nfunction fresh(): int\n{\n    return 2;\n}\n");
+        $GLOBALS['lintelFromSource'] = ['components/shimmed.lintel.php' => true];
+
+        try {
+            Loader::boot($this->tmp . '/cache', null, $this->tmp . '/proj10');
+        } finally {
+            unset($GLOBALS['lintelFromSource']);
+        }
+
+        self::assertFalse(
+            function_exists('\App\Shim\shimmed'),
+            'a source the prod shim loaded must be skipped, not redeclared'
+        );
+        self::assertTrue(function_exists('\App\Fresh\fresh'), 'unshimmed sources still load eagerly');
+    }
+
     public function testSocketParameterIsToleratedWithoutADaemon(): void
     {
         // The T-12 daemon is gated; a configured socket must not break the
@@ -248,6 +317,76 @@ final class LoaderTest extends TestCase
         Loader::boot($this->tmp . '/cache', '/nonexistent/lintel.sock');
 
         self::assertSame('via-fallback', Loader::require($file, $this->tmp . '/cache'));
+    }
+
+    /**
+     * The §6.10 daemon handoff (T-12): with `$socket` configured and a
+     * live daemon behind it, the compile goes over the socket — a failing
+     * `lintel` binary proves the spawn fallback never ran.
+     */
+    public function testCompileUsesTheDaemonSocketWhenItAnswers(): void
+    {
+        $file = $this->put('src/Daemon.lintel.php', "<?php return 'ignored-source';\n");
+        putenv('LINTEL_BIN=' . $this->failingLintel());
+        $socket = $this->tmp . '/d.sock';
+        $this->startDaemonResponder($socket, 'ok');
+
+        Loader::boot($this->tmp . '/cache', $socket, $this->tmp);
+
+        self::assertSame('from-daemon', Loader::require($file, $this->tmp . '/cache'));
+    }
+
+    public function testCompileSurfacesTheDaemonErrAsADiagnostic(): void
+    {
+        $file = $this->put('src/Broken2.lintel.php', "<?php return 'ignored';\n");
+        putenv('LINTEL_BIN=' . $this->failingLintel());
+        $socket = $this->tmp . '/d.sock';
+        $this->startDaemonResponder($socket, 'err');
+
+        Loader::boot($this->tmp . '/cache', $socket, $this->tmp);
+
+        try {
+            Loader::require($file, $this->tmp . '/cache');
+            self::fail('a daemon ERR must throw');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('rendered daemon diagnostics', $e->getMessage());
+            self::assertStringContainsString('Broken2.lintel.php', $e->getMessage());
+        }
+    }
+
+    /**
+     * A stand-in daemon that answers `ok`/`err` over the socket path.
+     * The child lingers up to 5 idle seconds; tearDown terminates it.
+     */
+    private function startDaemonResponder(string $socket, string $mode): void
+    {
+        $proc = proc_open(
+            [PHP_BINARY, __DIR__ . '/fixtures/daemon-responder.php', $socket, $mode],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        if (! is_resource($proc)) {
+            self::markTestSkipped('could not start the daemon responder');
+        }
+        foreach ($pipes as $pipe) {
+            fclose($pipe);
+        }
+        $this->daemonResponder = $proc;
+        // Wait for the socket to appear (the child binds it on start).
+        for ($i = 0; $i < 50 && ! file_exists($socket); ++$i) {
+            usleep(20_000);
+        }
+        self::assertFileExists($socket, 'the responder never bound the socket');
+    }
+
+    /** A `lintel` stand-in that fails — the socket lane must never use it. */
+    private function failingLintel(): string
+    {
+        $bin = $this->tmp . '/failing-lintel';
+        file_put_contents($bin, "#!/bin/sh\necho 'the fallback must not run' >&2\nexit 1\n");
+        chmod($bin, 0755);
+
+        return $bin;
     }
 
     public function testCompileRunsTheBinaryThroughProcOpen(): void
