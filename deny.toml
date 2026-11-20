@@ -17,6 +17,13 @@ allow = [
     # unicode-ident, whose license expression gained the permissive
     # Unicode-3.0 grant for the Unicode data tables it embeds.
     "Unicode-3.0",
+    # The T-12 `lintel watch` file-watcher dependency (notify 8.x) is
+    # dedicated to the public domain under CC0-1.0 — FSF free/libre, the
+    # same effective terms as the permissive set above.
+    "CC0-1.0",
+    # notify's Linux backend (inotify, inotify-sys) is classic ISC —
+    # OSI-approved and FSF free/libre, BSD-family permissive.
+    "ISC",
 ]
 confidence-threshold = 0.93
 
