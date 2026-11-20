@@ -154,6 +154,43 @@ fn build_accepts_the_rfc_target_as_a_separate_word() {
     assert!(stdout.contains("\\Markup\\Element"), "{stdout}");
 }
 
+/// T-19 launch honesty (§16 post #3): `lintel migrate --to=native` must
+/// exist today — a thin alias over `build --target=rfc`, in all three
+/// spellings (`--to=native`, `--to native`, and the flag-free default).
+#[test]
+fn migrate_is_a_thin_alias_for_build_target_rfc() {
+    let dir = scratch("migrate-alias");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let path = source.to_str().expect("utf8 path");
+    for argv in [
+        vec!["migrate", path],
+        vec!["migrate", path, "--to=native"],
+        vec!["migrate", path, "--to", "native"],
+    ] {
+        let (code, stdout, stderr) = run_cli(&argv);
+        assert_eq!(code, 0, "argv {argv:?}: stderr: {stderr}");
+        assert!(stdout.contains("\\Markup\\Element"), "{stdout}");
+        assert!(!stdout.contains("new \\Lintel\\Html("), "{stdout}");
+    }
+}
+
+/// The alias is honest about its scope: only `native` exists today, and a
+/// target override belongs to `build`.
+#[test]
+fn migrate_rejects_other_to_values_and_target_overrides() {
+    let dir = scratch("migrate-reject");
+    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+    let path = source.to_str().expect("utf8 path");
+    for argv in [
+        vec!["migrate", path, "--to=html"],
+        vec!["migrate", path, "--to", "blade"],
+        vec!["migrate", path, "--target=string"],
+    ] {
+        let problem = usage_error(&argv);
+        assert!(problem.contains("migrate"), "{problem}");
+    }
+}
+
 #[test]
 fn check_is_quiet_when_clean_and_warns_without_failing() {
     let dir = scratch("check");
@@ -226,7 +263,10 @@ fn usage_errors_cover_flags_paths_and_modes() {
     let dir = scratch("usage");
     let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
     let path = source.to_str().expect("utf8 path");
-    assert_eq!(usage_error(&[]), "missing command: build, check or stats");
+    assert_eq!(
+        usage_error(&[]),
+        "missing command: build, check, stats or migrate"
+    );
     assert!(usage_error(&["compile", path]).contains("unknown command `compile`"));
     assert!(usage_error(&["build", "--wat", path]).contains("unknown flag `--wat`"));
     assert!(usage_error(&["build", "--target=go", path]).contains("unknown target `go`"));
