@@ -36,7 +36,7 @@ USAGE:
     lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
     lintel stats <paths>... [--format=text|json]
     lintel rules [--format=text|json]
-    lintel init [DIR]
+    lintel init [DIR] [--demo N]
     lintel --help | --version
 
 ARGS:
@@ -52,7 +52,8 @@ COMMANDS:
              <summary>` line per rule in registry order, or one JSON object
              per rule with --format=json (docs/rule-registry.md); takes no
              paths, exit 0
-    init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php
+    init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php;
+             with --demo N (1-5) scaffold one of the five T-15 demos instead
 
 FLAGS:
     --target=<t>    lowering target for build/check: string (default), stream
@@ -157,9 +158,11 @@ enum Invocation {
         paths: Vec<PathBuf>,
         format: Format,
     },
-    /// `lintel init [DIR]`: scaffold the runnable demo into `path`.
+    /// `lintel init [DIR] [--demo N]`: scaffold the runnable demo into
+    /// `path` — the hello demo by default, or T-15 demo `N` (1-5).
     Init {
         path: PathBuf,
+        demo: Option<usize>,
     },
     /// `lintel rules`: the built-in validation registry's machine-readable
     /// listing (`docs/rule-registry.md`), rendered to stdout in the
@@ -226,8 +229,8 @@ pub fn run(
             let sources = collect_sources(&paths)?;
             Ok(stats(&sources, format, stdout, stderr))
         }
-        Invocation::Init { path } => {
-            let report = init(&path)?;
+        Invocation::Init { path, demo } => {
+            let report = init_demo(&path, demo)?;
             writeln!(
                 stdout,
                 "wrote {} ({} lines of .lintel.php)",
@@ -354,8 +357,8 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             return Ok(Invocation::Rules { format });
         }
         "init" => {
-            let path = parse_init(&args[1..])?;
-            return Ok(Invocation::Init { path });
+            let (path, demo) = parse_init(&args[1..])?;
+            return Ok(Invocation::Init { path, demo });
         }
         other => {
             return Err(CliError(format!(
@@ -440,27 +443,63 @@ fn parse_rules(args: &[String]) -> Result<ControlFlow<Invocation, Format>, CliEr
     Ok(ControlFlow::Continue(format))
 }
 
-/// Parse the `init` invocation: `lintel init [DIR]` takes no flags and at
-/// most one directory argument (default: the working directory). The
-/// subcommand scaffolds files and compiles them once, so lowering-target
-/// and diagnostic-format flags have nothing to annotate and output flags
-/// would collide with the files it writes.
-fn parse_init(args: &[String]) -> Result<PathBuf, CliError> {
+/// Parse the `init` invocation: `lintel init [DIR] [--demo N]` takes the
+/// `--demo` selector (1-based, 1-5) and at most one directory argument
+/// (default: the working directory). The subcommand scaffolds files and
+/// compiles them once, so lowering-target and diagnostic-format flags have
+/// nothing to annotate and output flags would collide with the files it
+/// writes.
+fn parse_init(args: &[String]) -> Result<(PathBuf, Option<usize>), CliError> {
     let mut path: Option<PathBuf> = None;
-    for arg in args {
-        if arg.starts_with('-') {
+    let mut demo: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        let value = if arg == "--demo" {
+            match args.get(index) {
+                Some(value) => {
+                    index += 1;
+                    value.as_str()
+                }
+                None => {
+                    return Err(CliError(
+                        "--demo needs a value: the demo number 1-5 (see `lintel --help`)".into(),
+                    ))
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--demo=") {
+            value
+        } else if arg.starts_with('-') {
             return Err(CliError(format!(
-                "`lintel init` takes no flags (got `{arg}`): it scaffolds a runnable \
+                "`lintel init` takes only --demo (got `{arg}`): it scaffolds a runnable \
                  demo with the default target — see `lintel --help`"
             )));
+        } else {
+            if path.replace(PathBuf::from(arg)).is_some() {
+                return Err(CliError(
+                    "`lintel init` takes at most one directory argument".into(),
+                ));
+            }
+            continue;
+        };
+        let number: usize = value.parse().map_err(|_| {
+            CliError(format!(
+                "`--demo` needs a number (got `{value}`): the demo number 1-5"
+            ))
+        })?;
+        if number == 0 || number > DEMO_SOURCES.len() {
+            return Err(CliError(format!(
+                "unknown demo `{number}`: --demo takes 1-{} (component-library, \
+                 xss-gallery, table-10k, htmx-todo, error-showcase)",
+                DEMO_SOURCES.len()
+            )));
         }
-        if path.replace(PathBuf::from(arg)).is_some() {
-            return Err(CliError(
-                "`lintel init` takes at most one directory argument".into(),
-            ));
+        if demo.replace(number).is_some() {
+            return Err(CliError("--demo was given twice".into()));
         }
     }
-    Ok(path.unwrap_or_else(|| PathBuf::from(".")))
+    Ok((path.unwrap_or_else(|| PathBuf::from(".")), demo))
 }
 
 /// The lowering target named by a `--target` value (doc 5.3).
@@ -817,6 +856,155 @@ pub const DEMO_SOURCE_NAME: &str = "hello.lintel.php";
 /// The name of the file `lintel init` compiles the demo into.
 pub const DEMO_COMPILED_NAME: &str = "hello.php";
 
+/// The five task-card T-15 demos, `lintel init --demo N` (1-based)
+/// scaffolds: each is ≤ 60 lines, compiles with zero diagnostics on the
+/// default target, and — required with the §6.8 runtime — renders HTML with
+/// asserted output (`tests/php_demo.rs` executes all five under PHP).
+/// (1) component-library page, (2) XSS-attack gallery, (3) 10k-row table,
+/// (4) HTMX todo, (5) compile-error showcase.
+pub const DEMO_SOURCES: [&str; 5] = [
+    // Demo 1: component library page.
+    r"<?php
+// Generated by `lintel init --demo 1` — a component-library page.
+
+function Badge(string $label, string $variant = 'plain'): Html
+{
+    return <span class={['badge', 'badge--' . $variant]}>{$label}</span>;
+}
+
+function Card(string $title, ?Html $children = null): Html
+{
+    return <article class='card'>
+        <h2 class='card__title'>{$title}</h2>
+        {$children}
+    </article>;
+}
+
+function Stack(Html $children): Html
+{
+    return <div class='stack'>{$children}</div>;
+}
+
+echo <Stack>
+    <Card title='Badges'>
+        <Badge label='new' variant='accent' />
+        <Badge label='beta' variant='warn' />
+        <Badge label='stable' />
+    </Card>
+    <Card title='Composable'>
+        <p>Components are PHP functions; markup is an expression.</p>
+    </Card>
+</Stack>;
+",
+    // Demo 2: XSS-attack gallery (the §7.2 corpus, neutralized in text and URL positions).
+    r#"<?php
+// Generated by `lintel init --demo 2` — the XSS gallery: every payload neutralized.
+
+const PAYLOADS = [
+    'javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html;base64,PHNjcmlwdD4=', 'vbscript:msgbox',
+    'java' . "\t" . 'script:alert(1)', '<script>alert(1)</script>', '" onmouseover="x()', '</script>',
+];
+
+function Victim(string $payload): Html
+{
+    return <div class='attack'>
+        <p class='text'>text child: {$payload}</p>
+        <a class='url' href={$payload}>href attr: {$payload}</a>
+    </div>;
+}
+
+$rendered = [];
+foreach (PAYLOADS as $payload) {
+    $rendered[] = <Victim payload={$payload} />;
+}
+
+echo <main class='gallery'>
+    <h1>XSS gallery: every payload neutralized</h1>
+    {$rendered}
+</main>;
+"#,
+    // Demo 3: 10k-row table.
+    r"<?php
+// Generated by `lintel init --demo 3` — a 10,000-row table.
+
+function Rows(int $count): Html
+{
+    $o = [];
+    for ($i = 1; $i <= $count; $i++) {
+        $o[] = <tr><td>{$i}</td><td>row {$i}</td><td class='num'>{$i}.5</td></tr>;
+    }
+    return <table class='rows'><tbody>{$o}</tbody></table>;
+}
+
+echo <main>
+    <h1>10,000 rows, one pass, no virtual DOM</h1>
+    <Rows count={10000} />
+</main>;
+",
+    // Demo 4: HTMX todo.
+    r"<?php
+// Generated by `lintel init --demo 4` — an HTMX todo list.
+
+function TodoItem(string $text, bool $done): Html
+{
+    return <li class={['todo', 'todo--done' => $done]}>
+        <span class='todo__text'>{$text}</span>
+        <button hx-post='/todos/toggle' hx-target='closest li' hx-swap='outerHTML'>toggle</button>
+    </li>;
+}
+
+echo <main class='todos'>
+    <h1>Todo (HTMX)</h1>
+    <form hx-post='/todos' hx-target='#list' hx-swap='beforeend'>
+        <input name='text' placeholder='add a todo' />
+        <button type='submit'>add</button>
+    </form>
+    <ul id='list'>
+        <TodoItem text='write JSX in PHP' done={true} />
+        <TodoItem text='refresh to recompile' done={false} />
+    </ul>
+    <script src='https://unpkg.com/htmx.org@2' defer></script>
+</main>;
+",
+    // Demo 5: compile-error showcase (the LNT codes as content cards).
+    r"<?php
+// Generated by `lintel init --demo 5` — the compile-error showcase.
+
+const ERRORS = [
+    ['LNT0102', 'mismatched close tag', 'Did you mean </div>? The compiler suggests the nearest open tag.'],
+    ['LNT0201', 'builtin shadow', '<Header> would call PHP\'s header() — declare or import the component first.'],
+    ['LNT0202', 'hyphenated prop', 'data-x can\'t be a named argument — spread it: <Card {...[\'data-x\' => 1]} />'],
+    ['LNT0301', 'dynamic handler', 'onclick={…} is a compile error; static strings lint, data never becomes JS.'],
+    ['LNT0401', 'void with children', '<br>children</br> is invalid: void elements take no children.'],
+];
+
+function ErrorCard(string $code, string $name, string $help): Html
+{
+    return <article class={'error error--' . $code}>
+        <h2>{$code}</h2>
+        <p class='name'>{$name}</p>
+        <p class='help'>help: {$help}</p>
+    </article>;
+}
+
+$cards = [];
+foreach (ERRORS as [$code, $name, $help]) {
+    $cards[] = <ErrorCard code={$code} name={$name} help={$help} />;
+}
+
+echo <main class='errors'><h1>Errors that teach</h1>{$cards}</main>;
+",
+];
+
+/// The file-stem slug per T-15 demo (`demo1-component-library`, …).
+pub const DEMO_SLUGS: [&str; 5] = [
+    "component-library",
+    "xss-gallery",
+    "table-10k",
+    "htmx-todo",
+    "error-showcase",
+];
+
 /// The runnable demo `lintel init` scaffolds (task-card T-10 acceptance:
 /// "`lintel init` yields a runnable demo in one command"). It compiles
 /// with zero diagnostics on the default target and exercises the core
@@ -883,7 +1071,38 @@ fn compile_problems_error(problems: &[Diagnostic]) -> CliError {
 /// clobber), when the directories or files cannot be written, or — never,
 /// while [`DEMO_SOURCE`] stays valid — when the demo fails to compile.
 pub fn init(target_dir: &Path) -> Result<InitReport, CliError> {
-    let source = target_dir.join(DEMO_SOURCE_NAME);
+    init_demo(target_dir, None)
+}
+
+/// Scaffold one of the runnable demos (task-cards T-10/T-15): `demo` `None`
+/// writes the hello demo ([`DEMO_SOURCE_NAME`]/[`DEMO_COMPILED_NAME`]);
+/// `Some(n)` (1-based) writes T-15 demo `n` as
+/// `demo{n}-{slug}.lintel.php` plus its compiled `demo{n}-{slug}.php`.
+/// Either way the demo compiles once in the same command, so a single
+/// command leaves a runnable page.
+///
+/// # Errors
+///
+/// Returns [`CliError`] when the target source already exists (no clobber),
+/// when the directories or files cannot be written, or — never, while the
+/// demo sources stay valid — when the demo fails to compile.
+pub fn init_demo(target_dir: &Path, demo: Option<usize>) -> Result<InitReport, CliError> {
+    let (source_name, compiled_name, source_body) = match demo {
+        None => (DEMO_SOURCE_NAME, DEMO_COMPILED_NAME, DEMO_SOURCE),
+        Some(n) if (1..=DEMO_SOURCES.len()).contains(&n) => (
+            demo_source_name(n),
+            demo_compiled_name(n),
+            DEMO_SOURCES[n - 1],
+        ),
+        Some(n) => {
+            return Err(CliError(format!(
+                "unknown demo `{n}`: --demo takes 1-{} (component-library, xss-gallery, \
+                 table-10k, htmx-todo, error-showcase)",
+                DEMO_SOURCES.len()
+            )))
+        }
+    };
+    let source = target_dir.join(source_name);
     if source.exists() {
         return Err(CliError(format!(
             "refusing to overwrite existing {}: remove it (or the whole demo) \
@@ -892,17 +1111,45 @@ pub fn init(target_dir: &Path) -> Result<InitReport, CliError> {
         )));
     }
     fs::create_dir_all(target_dir)?;
-    fs::write(&source, DEMO_SOURCE)?;
-    let compiled_php = compile(DEMO_SOURCE, &Options::default())
+    fs::write(&source, source_body)?;
+    let compiled_php = compile(source_body, &Options::default())
         .map_err(|problems| compile_problems_error(&problems))?
         .php;
-    let compiled = target_dir.join(DEMO_COMPILED_NAME);
+    let compiled = target_dir.join(compiled_name);
     fs::write(&compiled, compiled_php)?;
     Ok(InitReport {
-        lines: DEMO_SOURCE.lines().count(),
+        lines: source_body.lines().count(),
         source,
         compiled,
     })
+}
+
+/// The source file name for T-15 demo `n` (1-based).
+#[must_use]
+pub fn demo_source_name(n: usize) -> &'static str {
+    // `demo{n}-{slug}.lintel.php` — the names are fixed constants, so the
+    // match keeps them `&'static str` without runtime formatting.
+    match n {
+        1 => "demo1-component-library.lintel.php",
+        2 => "demo2-xss-gallery.lintel.php",
+        3 => "demo3-table-10k.lintel.php",
+        4 => "demo4-htmx-todo.lintel.php",
+        5 => "demo5-error-showcase.lintel.php",
+        _ => unreachable!("demo index validated by the caller"),
+    }
+}
+
+/// The compiled file name for T-15 demo `n` (1-based).
+#[must_use]
+pub fn demo_compiled_name(n: usize) -> &'static str {
+    match n {
+        1 => "demo1-component-library.php",
+        2 => "demo2-xss-gallery.php",
+        3 => "demo3-table-10k.php",
+        4 => "demo4-htmx-todo.php",
+        5 => "demo5-error-showcase.php",
+        _ => unreachable!("demo index validated by the caller"),
+    }
 }
 
 #[cfg(test)]
