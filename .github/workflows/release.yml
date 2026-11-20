@@ -1,0 +1,122 @@
+# T-18 release engineering (architecture doc §15, §12.1): the `v*` tag
+# builds the five binaries (§12: linux x64/arm64 musl, macOS x64/arm64,
+# Windows x64), checksums them, attests build provenance (the "signatures"
+# leg — GitHub artifact attestation instead of minisign/cosign) and
+# publishes the GitHub release.
+#
+# The actual `git tag v0.1.0 && git push --tags` and the Composer Packagist
+# `lintel/runtime` + `lintel/lintel` tag publishes stay the maintainer's
+# action (DEFERRED-TO-MAINTAINER): Packagist derives the composer versions
+# from the pushed tags.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write # actions/attest-build-provenance signs with the workflow OIDC identity
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: lintel
+            archive: lintel-linux-x64.tar.gz
+            cross: musl-tools
+          - name: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary: lintel
+            archive: lintel-linux-arm64.tar.gz
+            cross: cargo-zigbuild
+          - name: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            binary: lintel
+            archive: lintel-macos-x64.tar.gz
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            binary: lintel
+            archive: lintel-macos-arm64.tar.gz
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: lintel.exe
+            archive: lintel-windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install the cross linker toolchain (linux arm64 via zig)
+        if: matrix.cross == 'cargo-zigbuild'
+        uses: taiki-e/install-action@cargo-zigbuild
+      - name: Install musl tools (native linux x64)
+        if: matrix.cross == 'musl-tools'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p lintel-cli
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: cargo-zigbuild
+      - name: Stage the archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
+            7z a "dist/${{ matrix.archive }}" ./dist/${{ matrix.binary }}
+            rm dist/${{ matrix.binary }}
+          else
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
+            tar -czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.binary }}"
+            rm "dist/${{ matrix.binary }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums (SHA256SUMS, the composer.json extra pin format)
+        working-directory: dist
+        run: sha256sum lintel-* | tee SHA256SUMS
+      - name: Attest build provenance (the release signatures)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/lintel-*
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/lintel-*
+            dist/SHA256SUMS
+          generate_release_notes: true
+      - name: Composer tag (DEFERRED-TO-MAINTAINER)
+        run: |
+          echo "The v-tag is pushed; the maintainer's remaining steps:"
+          echo "  1. confirm the release artifacts + SHA256SUMS attached above;"
+          echo "  2. Packagist picks the composer versions from this tag for"
+          echo "     lintel/runtime and lintel/lintel (or submit the tag URL at"
+          echo "     https://packagist.org/packages/submit);"
+          echo "  3. pin the SHA256SUMS digest into composer.json 'extra' for the"
+          echo "     installer plugin's checksum check (§12.3)."
