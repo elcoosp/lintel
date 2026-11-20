@@ -1,3 +1,5 @@
 target
 ship.toml
 .github/pr-body.md
+.phpunit.cache
+vendor
