@@ -1397,6 +1397,73 @@ The CI `php` job pins PHP 8.4 (`shivammathur/setup-php`), not the doc's
 runtime the corpus can actually exercise; the runtime package declares
 `php: >=8.1`.
 
+The fourteenth pass (F0/F1 + cards T-13/T-17/T-16/T-09) recorded the
+following closures and deviations, each forced by a failing gate rather
+than preference:
+
+- **F0 (CI repair):** `ci.yml`'s cargo-deny step name carried an unquoted
+  colon, so YAML parsing failed and **zero jobs ran**. The name is quoted,
+  actionlint (user-space binary) joined the local gate set (`make
+  workflows`, folded into `make ci`), and a pinned `workflow-lint` CI job
+  parse-validates every future workflow edit. F0 unblocks the
+  rust/php/dx/bench jobs, so T-14's two DEFERRED-TO-CI halves (the
+  Docker-pinned bench and the opcode probe) can execute on runners.
+- **F1 (stream closures capture enclosing locals):** the thirteenth pass's
+  §21.2 bullet — "the stream emit's closures capture nothing" — is closed.
+  The emitted closure is now `static function () use (...): \Generator`
+  with a by-value `use` list for every enclosing local its body
+  references, computed from the assembled body (single-quoted literals
+  hold no interpolation and are skipped; double-quoted and heredoc
+  interpolations count; comments are skipped; superglobals and `$this` are
+  never captured; nested component-children closures ride transitively
+  through the outer capture). The regression test executes a streaming
+  component with a typed parameter under PHP and asserts the render plus
+  an empty stderr; `docs/stream-alignment.md`'s contract table shows the
+  captures; the compiler-freeze exception covered this repair only.
+- **T-13 (WASM playground):** `crates/lintel-wasm` (the card-named entry
+  crate) wraps `compile()` behind `wasm-bindgen`; `playground/` ships
+  side-by-side output, a diagnostics panel, copy compiled, an examples
+  dropdown and `#src=…&t=…` permalinks, with a service worker making it
+  work offline after first load. The acceptance "loads <1 MB gz" is
+  asserted by `crates/lintel-wasm/tests/size_budget.rs` (`make
+  size-budget`): the bundle gzips to ~50 KB and the whole page payload to
+  ~59 KB. Verified served via `php -S` and in a real headless browser,
+  offline included.
+- **T-17 (docs site v0):** `crates/lintel-docs` (the card-named site
+  builder) renders `docs-site/pages/*.md`, the registry-driven error index
+  (serving `/e/LNTxxxx` exactly as `Code::docs_url` promises) and the
+  committed benchmark results with the methodology embedded verbatim; the
+  built tree mirrors the playground so the site is self-contained. The
+  §13.7 docs link check runs inside the build (`make docs-site`) and fails
+  it on any broken internal link. Deploy to lintel.sh stays T-18.
+- **T-16 (VS Code grammar):** `editors/vscode` ships the TextMate grammar
+  (`source.lintel.php`: PHP first, JSX at expression starts, backreferenced
+  close tags so children and nesting highlight), the language binding for
+  `*.lintel.php` and the `lintel-check` problem matcher. The acceptance
+  "JSX highlighted inside .lintel.php" is asserted by the tokenization
+  test (`npm test`) running the grammar through vscode-textmate +
+  vscode-oniguruma — the engine VS Code itself uses — and replayed by CI's
+  `editors` job.
+- **T-09 (differential + fuzz): partial.** The fuzz half is real:
+  `fuzz/compile_fuzz` exercises `compile()` on all three targets with the
+  never-panic/never-loop invariants and sampled `php -l` validation,
+  `make fuzz` runs the 60-second smoke locally and CI's nightly `fuzz`
+  lane runs the ten-minute acceptance. The differential half did **not**
+  land: the proptest generator was replaced by a deterministic LCG
+  generator mid-session and its remaining contract mismatches against the
+  hand-written reference renderer (class lists, spreads, self-closing
+  shapes) were not reconciled inside the session budget, so the
+  incomplete test was removed rather than left red. It is the first
+  backlog item for T-09's closure.
+- **S5 re-bench (honesty fix):** the §9.2 harness' stream lane now compiles
+  a **dynamic** streaming component (locals through the F1 capture, no
+  superglobal detour) and the committed `bench/results/` artifacts were
+  regenerated in the same native environment (PHP 8.4.11 static CLI, no
+  opcache — the opcode probe stays null here and is re-attempted by the CI
+  bench job on the pinned image). The dynamic stream lane's TTFB
+  (~3.4–4.2 µs median) replaces the prior static-only ~1.9 µs figure; the
+  sync lane still blocks ~15.2 ms.
+
 The thirteenth pass (T-11/T-14/T-15) recorded five deviations, each forced
 by a failing gate rather than preference:
 
