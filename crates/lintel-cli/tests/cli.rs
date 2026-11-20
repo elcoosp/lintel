@@ -265,7 +265,7 @@ fn usage_errors_cover_flags_paths_and_modes() {
     let path = source.to_str().expect("utf8 path");
     assert_eq!(
         usage_error(&[]),
-        "missing command: build, check, stats, rules, init, watch or migrate"
+        "missing command: build, check, analyze, stats, rules, init, watch or migrate"
     );
     assert!(usage_error(&["compile", path]).contains("unknown command `compile`"));
     assert!(usage_error(&["build", "--wat", path]).contains("unknown flag `--wat`"));
@@ -765,5 +765,284 @@ fn build_manifest_skips_failed_sources() {
         Some(1),
         "only the compiled source pairs into prod.artifacts"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// `lintel analyze` (§7.3-Y2, docs/type-elision.md): the types report drives
+// escape elision, the counters ride on stderr, and every deviation from the
+// report contract degrades conservatively or fails loudly.
+// ---------------------------------------------------------------------------
+
+/// A dashboard with one int-proven child and one unproven child.
+const ANALYZE_SOURCE: &str =
+    "<?php\nfunction Page(int $id, $label) {\n  return <><p>{$id}</p><span>{$label}</span></>;\n}\n";
+
+const ANALYZE_REPORT: &str = r#"{"version":1,"source":"Page.lintel.php","children":[{"line":3,"expr":"$id","type":"int"},{"line":3,"expr":"$label","type":"string"}]}"#;
+
+#[test]
+fn analyze_elides_proven_children_and_reports_the_rate() {
+    let dir = scratch("analyze-text");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(&dir, "report.json", ANALYZE_REPORT);
+    let (code, stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("' . $id . '"),
+        "the proven int child elides: {stdout}"
+    );
+    assert!(
+        stdout.contains("\\Lintel\\c($label)"),
+        "the plain string child keeps the helper: {stdout}"
+    );
+    assert!(
+        stderr.contains("analyze "),
+        "the elision report rides on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("2 decision-reachable, 1 elided"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("50.0% elision rate"), "{stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_json_report_carries_the_documented_shape() {
+    let dir = scratch("analyze-json");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(&dir, "report.json", ANALYZE_REPORT);
+    let (code, stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("' . $id . '"), "{stdout}");
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with('{'))
+        .expect("one JSON report line");
+    let decoded: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+    assert_eq!(decoded["file"], source.display().to_string(), "{decoded}");
+    assert_eq!(decoded["children"], 2, "{decoded}");
+    assert_eq!(decoded["considered"], 2, "{decoded}");
+    assert_eq!(decoded["elided"], 1, "{decoded}");
+    assert_eq!(decoded["rate"], 0.5, "{decoded}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_without_a_report_compiles_without_hints() {
+    let dir = scratch("analyze-noreport");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let (code, stdout, stderr) = run_cli(&["analyze", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0, "the missing sidecar is advisory: {stderr}");
+    assert!(
+        stdout.contains("\\Lintel\\c($id)"),
+        "no hints, no elision: {stdout}"
+    );
+    assert!(stderr.contains("0 elided by type"), "{stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_defaults_to_the_source_sidecar() {
+    let dir = scratch("analyze-sidecar");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    write_source(&dir, "Page.lintel.php.lintel-types.json", ANALYZE_REPORT);
+    let (code, stdout, _stderr) = run_cli(&["analyze", source.to_str().expect("utf8 path")]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("' . $id . '"),
+        "the sidecar applies: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_explicit_types_must_exist() {
+    let dir = scratch("analyze-missing-types");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let problem = usage_error(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        dir.join("absent.json").to_str().expect("utf8 path"),
+    ]);
+    assert!(problem.contains("--types"), "{problem}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_rejects_unknown_report_kinds_loudly() {
+    let dir = scratch("analyze-unknown-kind");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(
+        &dir,
+        "report.json",
+        r#"{"version":1,"source":"x","children":[{"line":3,"expr":"$id","type":"digit-string"}]}"#,
+    );
+    let (code, stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 1, "a contract mismatch fails the file: {stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("unknown child type `digit-string`"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_treats_known_non_elidable_kinds_as_conservative() {
+    let dir = scratch("analyze-bool");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    // Two conflicting ELIDABLE kinds poison the key (the analysis is
+    // ambiguous → the helper stays); a `bool` entry is filtered at parse
+    // time (known but non-elidable, docs/type-elision.md).
+    let report = write_source(
+        &dir,
+        "report.json",
+        r#"{"version":1,"source":"x","children":[{"line":3,"expr":"$id","type":"int"},{"line":3,"expr":"$id","type":"float"},{"line":3,"expr":"$label","type":"int"},{"line":3,"expr":"$label","type":"float"}]}"#,
+    );
+    let (code, stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("\\Lintel\\c($id)") && stdout.contains("\\Lintel\\c($label)"),
+        "bool keeps the helper and a conflict poisons the key: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_stream_target_elides_and_usage_errors_list_the_command() {
+    let dir = scratch("analyze-stream");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(&dir, "report.json", ANALYZE_REPORT);
+    let (code, stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+        "--target=stream",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("yield $id;"), "{stdout}");
+    assert!(!stdout.contains("\\Lintel\\c($id)"), "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+
+    // The missing-command message names the new command.
+    let problem = usage_error(&[]);
+    assert!(problem.contains("analyze"), "{problem}");
+}
+
+#[test]
+fn check_types_renders_stale_hints_as_advisories() {
+    let dir = scratch("check-stale");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    // A fresh entry (line 3 `$id`) plus a stale one (line 99, long gone).
+    let report = write_source(
+        &dir,
+        "report.json",
+        r#"{"version":1,"source":"x","children":[{"line":3,"expr":"$id","type":"int"},{"line":99,"expr":"$ghost","type":"int"}]}"#,
+    );
+    let (code, _stdout, stderr) = run_cli(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+    ]);
+    assert_eq!(code, 0, "advisories never change the exit code: {stderr}");
+    assert!(
+        stderr.contains("stale analyze hint at line 99: $ghost (type int)"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_types_json_renders_stale_entries_as_objects() {
+    let dir = scratch("check-stale-json");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(
+        &dir,
+        "report.json",
+        r#"{"version":1,"source":"x","children":[{"line":99,"expr":"$ghost","type":"int"}]}"#,
+    );
+    let (code, _stdout, stderr) = run_cli(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("one JSON object");
+    let decoded: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+    assert_eq!(decoded["file"], source.display().to_string(), "{decoded}");
+    assert_eq!(decoded["line"], 99, "{decoded}");
+    assert_eq!(decoded["expr"], "$ghost", "{decoded}");
+    assert_eq!(decoded["stale"], true, "{decoded}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_rejects_a_missing_explicit_types_file() {
+    let dir = scratch("check-missing-types");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let problem = usage_error(&[
+        "check",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        dir.join("absent.json").to_str().expect("utf8 path"),
+    ]);
+    assert!(problem.contains("--types"), "{problem}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn analyze_reports_stale_hint_counts() {
+    let dir = scratch("analyze-stale");
+    let source = write_source(&dir, "Page.lintel.php", ANALYZE_SOURCE);
+    let report = write_source(
+        &dir,
+        "report.json",
+        r#"{"version":1,"source":"x","children":[{"line":3,"expr":"$id","type":"int"},{"line":99,"expr":"$ghost","type":"int"}]}"#,
+    );
+    let (code, _stdout, stderr) = run_cli(&[
+        "analyze",
+        source.to_str().expect("utf8 path"),
+        "--types",
+        report.to_str().expect("utf8 path"),
+        "--format=json",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("one JSON object");
+    let decoded: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+    assert_eq!(decoded["stale"], 1, "{decoded}");
+    assert_eq!(decoded["elided"], 1, "{decoded}");
     let _ = fs::remove_dir_all(&dir);
 }
