@@ -143,9 +143,6 @@ function run_worker(string $setting, string $compiledDir): array
 
     $results = [];
     $notes = [];
-    // The S5 stream lane reads its data through a superglobal (see
-    // lib/Scenarios.php): register it here, before any component renders.
-    $GLOBALS['bench_data'] = $data['S5'];
     foreach ($scenarios as $id => $scenario) {
         $results[$id] = [];
 
@@ -187,13 +184,15 @@ function run_worker(string $setting, string $compiledDir): array
             ];
             unset($results[$id]['lintel']);
             if ($bin !== null) {
-                // stream_source is authored streaming-safe (static-generator
-                // closures cannot see locals — see lib/Scenarios.php).
+                // stream_source is authored streaming-safe: the emitted
+                // generator closures capture their locals (the §21.2 emit
+                // fix — see lib/Scenarios.php), so the lane reads its data
+                // through an ordinary parameter.
                 $streamPath = compile_scenario($bin, $compiledDir, $id, $scenario['stream_source'], 'stream');
                 require $streamPath;
                 $streamFn = 'Lintel\\Bench\\Gen\\S5PageStream';
                 $results[$id]['lintel-stream'] = bench_stream(
-                    static fn (): iterable => $streamFn(),
+                    static fn (): iterable => $streamFn($data['S5']),
                     $runs,
                 );
             }
