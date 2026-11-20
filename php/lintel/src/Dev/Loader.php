@@ -38,11 +38,27 @@ final class Loader
      * function components. `Composer classmap/PSR-4 can't find
      * *.lintel.php; add a fallback autoloader` (§6.10).
      *
+     * The T-31 order is deliberate: the function components are required
+     * **before** the PSR-4 fallback registers. PHP has no function
+     * autoloading — once `boot()` returns, a call to an undeclared function
+     * fatals — so the eager lane must have completed by then. The compiled
+     * component bodies resolve their classes (the runtime, other
+     * components) lazily at call time, after the fallback has registered.
+     *
+     * When the T-31 prod shim ran in this process (it registers the
+     * sources it loaded in `$GLOBALS['lintelFromSource']`), those sources
+     * are skipped here: their functions already exist, and requiring the
+     * source again would fatal on redeclare. The prod shim is authoritative
+     * for the lanes it covers; the loader covers everything else (sources
+     * added since the last `lintel build --manifest`, and projects without
+     * a prod build).
+     *
      * @throws \RuntimeException when a present lintel.json is malformed
      */
     public static function boot(string $cacheDir, ?string $socket = null, ?string $projectRoot = null): void
     {
         self::$sock = $socket;
+        self::loadFunctionComponents($cacheDir, $projectRoot ?? (\getcwd() ?: '.'));
         \spl_autoload_register(static function (string $class) use ($cacheDir): void {
             foreach (ClassLoader::getRegisteredLoaders() as $loader) {
                 foreach ($loader->getPrefixesPsr4() as $prefix => $dirs) {
@@ -60,7 +76,6 @@ final class Loader
                 }
             }
         }, true, true);
-        self::loadFunctionComponents($cacheDir, $projectRoot ?? (\getcwd() ?: '.'));
     }
 
     /**
@@ -103,6 +118,13 @@ final class Loader
      */
     private static function compile(string $file): string
     {
+        if (self::$sock !== null) {
+            $daemon = self::compileOverSocket($file);
+            if ($daemon !== null) {
+                return $daemon;
+            }
+            // The socket is dead — fall through to the spawn fallback.
+        }
         $command = [self::binary(), 'build', $file];
         $process = @\proc_open($command, [
             1 => ['pipe', 'w'],
@@ -121,6 +143,65 @@ final class Loader
         }
 
         return $stdout;
+    }
+
+    /**
+     * The T-12 daemon protocol (one request per connection): the client
+     * sends `<abs path>\n`, the daemon answers `OK <len>\n<php>` or
+     * `ERR <len>\n<rendered diagnostics>`. Returns `null` on any
+     * transport failure (the caller falls back to proc_open); an `ERR`
+     * answer is a *compile* failure, surfaced as the daemon rendered it.
+     */
+    private static function compileOverSocket(string $file): ?string
+    {
+        $stream = @\stream_socket_client('unix://' . self::$sock, $errno, $errstr, 5.0);
+        if ($stream === false) {
+            return null;
+        }
+        $written = @\fwrite($stream, $file . "\n");
+        if ($written === false || \strpos($file, "\n") !== false) {
+            \fclose($stream);
+
+            return null;
+        }
+        $header = self::socketLine($stream);
+        if ($header === null || !\preg_match('/^(OK|ERR) (\d+)$/', $header, $m)) {
+            \fclose($stream);
+
+            return null;
+        }
+        $length = (int) $m[2];
+        $body = '';
+        while (\strlen($body) < $length && !\feof($stream)) {
+            $chunk = @\fread($stream, (int) \max(1, $length - \strlen($body)));
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $body .= $chunk;
+        }
+        \fclose($stream);
+        if (\strlen($body) !== $length) {
+            return null;
+        }
+
+        if ($m[1] === 'ERR') {
+            // A compile failure the daemon already rendered — surface it
+            // like the proc_open fallback surfaces a non-zero exit.
+            throw new \RuntimeException("lintel build failed for {$file}: " . $body);
+        }
+
+        return $body;
+    }
+
+    /** One `\n`-terminated line from the socket, or `null` on EOF/error. */
+    private static function socketLine($stream): ?string
+    {
+        $line = \fgets($stream);
+        if ($line === false) {
+            return null;
+        }
+
+        return \rtrim($line, "\r\n");
     }
 
     private static function binary(): string
@@ -175,6 +256,9 @@ final class Loader
         if (!\is_array($globs)) {
             throw new \RuntimeException("lintel.json at {$root}: \"functions\" must be a string or a list of globs");
         }
+        // The T-31 prod shim records the sources it required; a source it
+        // loaded already defined this process's functions — skip it.
+        $shimLoaded = $GLOBALS['lintelFromSource'] ?? null;
         foreach ($globs as $glob) {
             if (!\is_string($glob) || $glob === '') {
                 throw new \RuntimeException("lintel.json at {$root}: \"functions\" entries must be non-empty strings");
@@ -182,10 +266,31 @@ final class Loader
             $matches = \glob($root . '/' . $glob) ?: [];
             \sort($matches);
             foreach ($matches as $match) {
-                if (\is_file($match)) {
-                    self::require($match, $cacheDir);
+                if (!\is_file($match)) {
+                    continue;
                 }
+                if (\is_array($shimLoaded)
+                    && isset($shimLoaded[self::manifestRelative($match, $root)])) {
+                    continue;
+                }
+                self::require($match, $cacheDir);
             }
         }
+    }
+
+    /**
+     * A file's path relative to the manifest root, with normalized
+     * separators — the key space the prod shim's registry uses.
+     */
+    private static function manifestRelative(string $file, string $root): string
+    {
+        $normalize = static fn (string $path): string => \str_replace('\\', '/', $path);
+        $file = $normalize($file);
+        $root = \rtrim($normalize($root), '/');
+        if ($root !== '' && \str_starts_with($file, $root . '/')) {
+            return \substr($file, \strlen($root) + 1);
+        }
+
+        return $file;
     }
 }
