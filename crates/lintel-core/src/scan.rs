@@ -1460,6 +1460,7 @@ impl<'s> Scanner<'s> {
     /// `<<<LABEL` / `<<<"LABEL"` / `<<<'LABEL'` … closing label (PHP ≥7.3
     /// allows indentation before the label).
     fn copy_heredoc(&mut self) {
+        let start = self.pos;
         self.pos += 3;
         while self
             .b
@@ -1483,6 +1484,15 @@ impl<'s> Scanner<'s> {
             self.pos += 1;
         }
         let label = self.src[ls..self.pos].to_string();
+        // A heredoc needs a label: PHP lexes `<<<` with none (e.g. `<<<"…"`
+        // where the next byte is not an identifier) as no heredoc at all.
+        // Rewind to just after `<<<` so the bytes pass through verbatim —
+        // an empty label would both swallow following lines as the body and
+        // (through the quote skip) leave `pos` inside a multi-byte char.
+        if label.is_empty() {
+            self.pos = start + 3;
+            return;
+        }
         if quote.is_some() {
             self.pos += 1;
         }
