@@ -37,6 +37,7 @@ USAGE:
     lintel stats <paths>... [--format=text|json]
     lintel rules [--format=text|json]
     lintel init [DIR] [--demo N]
+    lintel migrate <paths>... [--to=native] [--format=text|json] [--out DIR | --in-place]
     lintel --help | --version
 
 ARGS:
@@ -54,6 +55,9 @@ COMMANDS:
              paths, exit 0
     init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php;
              with --demo N (1-5) scaffold one of the five T-15 demos instead
+    migrate  thin alias over `build --target=rfc`: emit the native-RFC-parity
+             lowering the future runtime consumes (docs/rfc-alignment.md);
+             `--to=native` is accepted and is the only value today
 
 FLAGS:
     --target=<t>    lowering target for build/check: string (default), stream
@@ -270,10 +274,17 @@ struct ParsedArgs {
 fn parse_args(
     args: &[String],
     is_build: bool,
+    is_migrate: bool,
 ) -> Result<ControlFlow<Invocation, ParsedArgs>, CliError> {
     let mut parsed = ParsedArgs {
         paths: vec![],
-        target: Target::default(),
+        // `migrate` compiles with the native RFC lowering unless --to=native
+        // (accepted) says the same thing; --target is rejected below.
+        target: if is_migrate {
+            Target::Rfc
+        } else {
+            Target::default()
+        },
         format: Format::default(),
         destination: Destination::Stdout,
         out_seen: false,
@@ -291,6 +302,20 @@ fn parse_args(
                 parsed.destination = Destination::InPlace;
             }
             "--in-place" => return Err(CliError("--in-place is a `build` flag".into())),
+            s if s.starts_with("--target=") && is_migrate => {
+                return Err(CliError(
+                    "`migrate` compiles with the native RFC lowering; use \
+                     `lintel build --target=…` to pick a target"
+                        .into(),
+                ))
+            }
+            "--target" if is_migrate => {
+                return Err(CliError(
+                    "`migrate` compiles with the native RFC lowering; use \
+                     `lintel build --target=…` to pick a target"
+                        .into(),
+                ))
+            }
             s if s.starts_with("--target=") => {
                 parsed.target = parse_target(&s["--target=".len()..])?;
             }
@@ -303,6 +328,35 @@ fn parse_args(
                 index += 1;
                 parsed.target = parse_target(value)?;
             }
+            s if s.starts_with("--to=") && is_migrate => {
+                let value = &s["--to=".len()..];
+                if value != "native" {
+                    return Err(CliError(format!(
+                        "`migrate` only supports `--to=native` today (got `--to={value}`): \
+                         the native RFC lowering is the migration target \
+                         (docs/rfc-alignment.md)"
+                    )));
+                }
+                parsed.target = Target::Rfc;
+            }
+            "--to" if is_migrate => {
+                let Some(value) = args.get(index) else {
+                    return Err(CliError("--to needs a value: native".into()));
+                };
+                index += 1;
+                if value != "native" {
+                    return Err(CliError(format!(
+                        "`migrate` only supports `--to=native` today (got `--to {value}`): \
+                         the native RFC lowering is the migration target \
+                         (docs/rfc-alignment.md)"
+                    )));
+                }
+                parsed.target = Target::Rfc;
+            }
+            s if s.starts_with("--to=") => {
+                return Err(CliError("--to is a `migrate` flag (values: native)".into()));
+            }
+            "--to" => return Err(CliError("--to is a `migrate` flag (values: native)".into())),
             s if s.starts_with("--format=") => {
                 parsed.format = parse_format(&s["--format=".len()..])?;
             }
@@ -343,12 +397,14 @@ fn parse_args(
 /// and flags interleave freely — but `--in-place`/`--out` are `build`-only.
 fn parse(args: &[String]) -> Result<Invocation, CliError> {
     let Some(command) = args.first() else {
-        return Err(CliError("missing command: build, check or stats".into()));
+        return Err(CliError(
+            "missing command: build, check, stats or migrate".into(),
+        ));
     };
     match command.as_str() {
         "--help" | "-h" => return Ok(Invocation::Help),
         "--version" => return Ok(Invocation::Version),
-        "build" | "check" | "stats" => {}
+        "build" | "check" | "stats" | "migrate" => {}
         "rules" => {
             let format = match parse_rules(&args[1..])? {
                 ControlFlow::Break(invocation) => return Ok(invocation),
@@ -362,12 +418,13 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
         }
         other => {
             return Err(CliError(format!(
-                "unknown command `{other}`: expected build, check, stats, rules or init"
+                "unknown command `{other}`: expected build, check, stats, rules, init or migrate"
             )))
         }
     }
-    let is_build = command == "build";
-    let parsed = match parse_args(args, is_build)? {
+    let is_build = command == "build" || command == "migrate";
+    let is_migrate = command == "migrate";
+    let parsed = match parse_args(args, is_build, is_migrate)? {
         ControlFlow::Break(invocation) => return Ok(invocation),
         ControlFlow::Continue(parsed) => parsed,
     };
@@ -387,7 +444,7 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
         }
     }
     match command.as_str() {
-        "build" => Ok(Invocation::Build {
+        "build" | "migrate" => Ok(Invocation::Build {
             paths: parsed.paths,
             target: parsed.target,
             format: parsed.format,
