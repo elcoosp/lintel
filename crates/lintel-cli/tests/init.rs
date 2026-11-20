@@ -122,3 +122,90 @@ fn init_takes_no_flags_and_at_most_one_directory() {
     let problem = usage_error(&["init", "a", "b"]);
     assert!(problem.contains("at most one"), "{problem}");
 }
+
+#[test]
+fn init_demo_scaffolds_all_five_t15_demos() {
+    for (n, slug) in lintel_cli::DEMO_SLUGS.iter().enumerate() {
+        let demo = n + 1;
+        let dir = scratch(&format!("demo{demo}"));
+        let (code, stdout, stderr) = run_cli(&[
+            "init",
+            dir.to_str().expect("utf8 path"),
+            "--demo",
+            &demo.to_string(),
+        ]);
+        assert_eq!(code, 0, "stderr: {stderr}");
+
+        let source_name = lintel_cli::demo_source_name(demo);
+        let compiled_name = lintel_cli::demo_compiled_name(demo);
+        let source = dir.join(source_name);
+        let compiled = dir.join(compiled_name);
+        assert!(source.exists(), "demo {demo} source written: {stdout}");
+        assert!(
+            compiled.exists(),
+            "demo {demo} compiled in the same command"
+        );
+
+        // Card T-15: each demo is <= 60 lines.
+        let src = fs::read_to_string(&source).expect("source is utf8");
+        let lines = src.lines().count();
+        assert!(lines <= 60, "demo {demo} must be <= 60 lines, got {lines}");
+        assert!(source_name.contains(slug), "{source_name}");
+    }
+}
+
+#[test]
+fn init_demo_accepts_the_equals_form_and_rejects_bad_numbers() {
+    let dir = scratch("demo-equals");
+    let (code, _, stderr) = run_cli(&["init", dir.to_str().expect("utf8 path"), "--demo=3"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(dir.join("demo3-table-10k.lintel.php").exists());
+
+    let problem = usage_error(&["init", "--demo", "6"]);
+    assert!(problem.contains("unknown demo `6`"), "{problem}");
+    let problem = usage_error(&["init", "--demo", "0"]);
+    assert!(problem.contains("unknown demo `0`"), "{problem}");
+    let problem = usage_error(&["init", "--demo", "many"]);
+    assert!(problem.contains("needs a number"), "{problem}");
+    let problem = usage_error(&["init", "--demo"]);
+    assert!(problem.contains("needs a value"), "{problem}");
+}
+
+#[test]
+fn init_demo_never_clobbers_a_different_demo() {
+    let dir = scratch("demo-clobber");
+    let (code, _, _) = run_cli(&["init", dir.to_str().expect("utf8 path"), "--demo", "1"]);
+    assert_eq!(code, 0);
+    // A second demo in the same directory is fine (different file names).
+    let (code, _, stderr) = run_cli(&["init", dir.to_str().expect("utf8 path"), "--demo", "5"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(dir.join("demo1-component-library.lintel.php").exists());
+    assert!(dir.join("demo5-error-showcase.lintel.php").exists());
+    // The SAME demo refuses to clobber.
+    let problem = usage_error(&["init", dir.to_str().expect("utf8 path"), "--demo", "5"]);
+    assert!(problem.contains("refusing to overwrite"), "{problem}");
+}
+
+#[test]
+fn every_demo_source_compiles_zero_diagnostics_and_stays_short() {
+    for (n, source) in lintel_cli::DEMO_SOURCES.iter().enumerate() {
+        let demo = n + 1;
+        let lines = source.lines().count();
+        assert!(lines <= 60, "demo {demo} must be <= 60 lines, got {lines}");
+        match lintel_core::compile(source, &lintel_core::Options::default()) {
+            Ok(output) => {
+                assert!(
+                    output.warnings.is_empty(),
+                    "demo {demo} carries warnings: {:?}",
+                    output.warnings
+                );
+                assert_eq!(
+                    output.php.lines().count(),
+                    lines,
+                    "demo {demo} line preservation"
+                );
+            }
+            Err(problems) => panic!("demo {demo} does not compile: {problems:?}"),
+        }
+    }
+}
