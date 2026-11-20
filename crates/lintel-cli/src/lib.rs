@@ -25,7 +25,10 @@ use std::io::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use lintel_core::{builtin_rule_metas, compile, Diagnostic, Options, Target};
+use lintel_core::{
+    builtin_rule_metas, compile, compile_analyzed, ChildHint, ChildKind, Diagnostic, Options,
+    Target, TypeHints,
+};
 
 mod manifest;
 pub mod watch;
@@ -36,7 +39,8 @@ lintel — the JSX-for-PHP compiler CLI (architecture doc §6.7 subset)
 
 USAGE:
     lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place] [--manifest [PATH]]
-    lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
+    lintel check <paths>... [--target=string|stream|rfc] [--format=text|json] [--types PATH]
+    lintel analyze <paths>... [--types PATH] [--target=string|stream|rfc] [--format=text|json]
     lintel stats <paths>... [--format=text|json]
     lintel rules [--format=text|json]
     lintel init [DIR] [--demo N]
@@ -53,6 +57,9 @@ COMMANDS:
              with --manifest also write the T-31 `lintel.json` function-component
              manifest (see MANIFEST below)
     check    compile diagnostics-only; exit 1 when any error-severity diagnostic fires
+    analyze  the §7.3-Y2 pass: compile with the PHPStan bridge's proven child
+             types driving escape elision (stdout like build) and report the
+             elision counters on stderr (see ANALYZE REPORT below)
     stats    report each file's component shape (declared + invoked) without
              emitting PHP; exit 1 only when a file fails to parse
     rules    list the built-in validation rules — one `<id> <LNTxxxx codes>
@@ -74,6 +81,11 @@ FLAGS:
                     unchanged)
     --out <dir>     write each source as <dir>/<name>.php instead of stdout
     --in-place      write each source as <name>.php next to it
+    --types PATH    the analyze report file (analyze compiles against it;
+                    check renders its stale entries as advisories). Without
+                    it analyze reads each source's own
+                    <source>.lintel-types.json sidecar, an absent one
+                    compiling without hints
     --manifest [PATH]
                     after building, scan the compiled sources for top-level
                     `function Name(...): Html` declarations and write the
@@ -107,6 +119,22 @@ STATS REPORT:
     apply. --format=json emits one JSON object per file instead, a `file`
     field ahead of the core inventory's documented shape
     (docs/component-inventory.md).
+
+ANALYZE REPORT (§7.3-Y2, docs/type-elision.md):
+    `lintel analyze` compiles each source with the PHPStan bridge's proven
+    child-expression types driving escape elision and reports the elision
+    counters on stderr: `children` (every dynamic child lowered on the
+    markup targets), `considered` (how many reached the analyze decision
+    step past the v0.1 folds), `elided` (how many the proven
+    int/float/numeric-string/literal types removed the `c()` wrapper for)
+    and `stale` (report entries matching no child of the current source —
+    `lintel check --types PATH` renders each one as an advisory line /
+    JSON object).
+    Text prints one summary line per file with the elision rate; JSON
+    emits one object per file with a `rate` field (elided/considered,
+    null when nothing was reachable). The types file is advisory: a
+    missing report compiles without hints, and a malformed one fails the
+    file (exit 1) — never silently.
 
 EXIT CODES:
     0    every file compiled/scanned cleanly (warnings are advisory)
@@ -181,6 +209,23 @@ enum Invocation {
     },
     Check {
         paths: Vec<PathBuf>,
+        target: Target,
+        format: Format,
+        /// The explicit analyze report (`--types`): its stale entries
+        /// surface as advisories (§7.3-Y2, `docs/type-elision.md`).
+        types: Option<PathBuf>,
+    },
+    /// `lintel analyze [paths] [--types PATH]`: the §7.3-Y2 pass
+    /// (`docs/type-elision.md`) — compile each source with the `PHPStan`
+    /// bridge's proven child types driving escape elision, write the PHP
+    /// to stdout like `build`, and report the elision counters on stderr.
+    Analyze {
+        paths: Vec<PathBuf>,
+        /// The explicit report file every source compiles against; `None`
+        /// reads each source's own `<source>.lintel-types.json` sidecar
+        /// (the bridge runner's output), absent reports compiling without
+        /// hints.
+        types: Option<PathBuf>,
         target: Target,
         format: Format,
     },
@@ -267,10 +312,25 @@ pub fn run(
             paths,
             target,
             format,
+            types,
         } => {
+            if let Some(report) = &types {
+                if !report.is_file() {
+                    return Err(CliError(format!(
+                        "cannot read {}: no such file (--types names one analyze report file)",
+                        report.display()
+                    )));
+                }
+            }
             let sources = collect_sources(&paths)?;
-            Ok(check(&sources, target, format, stderr))
+            Ok(check(&sources, target, format, types.as_deref(), stderr))
         }
+        Invocation::Analyze {
+            paths,
+            types,
+            target,
+            format,
+        } => run_analyze(&paths, types.as_deref(), target, format, stdout, stderr),
         Invocation::Stats { paths, format } => {
             let sources = collect_sources(&paths)?;
             Ok(stats(&sources, format, stdout, stderr))
@@ -325,6 +385,10 @@ struct ParsedArgs {
     format: Format,
     destination: Destination,
     manifest: Option<PathBuf>,
+    /// The `check`-only analyze report (`--types`): when present, check
+    /// renders the report's stale entries as advisories (§7.3-Y2,
+    /// `docs/type-elision.md`).
+    types: Option<PathBuf>,
     out_seen: bool,
     in_place_seen: bool,
 }
@@ -337,6 +401,20 @@ struct ParsedArgs {
 ///
 /// Returns [`CliError`] for unknown flags, missing flag values, unknown
 /// targets/formats, or a `build`-only flag under `check`.
+/// The `check`-only analyze report flag (§7.3-Y2): `build` rejects it.
+///
+/// # Errors
+///
+/// Under `build` the flag is a contract mismatch.
+fn types_flag(value: String, is_build: bool) -> Result<Option<PathBuf>, CliError> {
+    if is_build {
+        return Err(CliError(
+            "--types is a `check` flag: build takes no analyze report".into(),
+        ));
+    }
+    Ok(Some(PathBuf::from(value)))
+}
+
 fn parse_args(
     args: &[String],
     is_build: bool,
@@ -354,6 +432,7 @@ fn parse_args(
         format: Format::default(),
         destination: Destination::Stdout,
         manifest: None,
+        types: None,
         out_seen: false,
         in_place_seen: false,
     };
@@ -405,6 +484,23 @@ fn parse_args(
                 return Err(CliError("--to is a `migrate` flag (values: native)".into()));
             }
             "--to" => return Err(CliError("--to is a `migrate` flag (values: native)".into())),
+            "--types" => {
+                let value = value_flag(args, &mut index, "--types needs a value: the report file")?;
+                if is_build {
+                    return Err(CliError(
+                        "--types is a `check` flag: build takes no analyze report".into(),
+                    ));
+                }
+                parsed.types = Some(PathBuf::from(value));
+            }
+            s if s.starts_with("--types=") => {
+                if is_build {
+                    return Err(CliError(
+                        "--types is a `check` flag: build takes no analyze report".into(),
+                    ));
+                }
+                parsed.types = Some(PathBuf::from(&s["--types=".len()..]));
+            }
             s if s.starts_with("--format=") => {
                 parsed.format = parse_format(&s["--format=".len()..])?;
             }
@@ -530,13 +626,25 @@ fn value_flag(args: &[String], index: &mut usize, missing: &str) -> Result<Strin
 fn parse(args: &[String]) -> Result<Invocation, CliError> {
     let Some(command) = args.first() else {
         return Err(CliError(
-            "missing command: build, check, stats, rules, init, watch or migrate".into(),
+            "missing command: build, check, analyze, stats, rules, init, watch or migrate".into(),
         ));
     };
     match command.as_str() {
         "--help" | "-h" => return Ok(Invocation::Help),
         "--version" => return Ok(Invocation::Version),
         "build" | "check" | "stats" | "migrate" => {}
+        "analyze" => {
+            let args = match parse_analyze(&args[1..])? {
+                ControlFlow::Break(invocation) => return Ok(invocation),
+                ControlFlow::Continue(parsed) => parsed,
+            };
+            return Ok(Invocation::Analyze {
+                paths: args.paths,
+                types: args.types,
+                target: args.target,
+                format: args.format,
+            });
+        }
         "rules" => {
             let format = match parse_rules(&args[1..])? {
                 ControlFlow::Break(invocation) => return Ok(invocation),
@@ -599,6 +707,7 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             paths: parsed.paths,
             target: parsed.target,
             format: parsed.format,
+            types: parsed.types,
         }),
         _ => Ok(Invocation::Stats {
             paths: parsed.paths,
@@ -980,7 +1089,40 @@ fn write_output(
 /// `stderr` (both severities) in the requested [`Format`], nothing is
 /// written, and the exit code fails only on error-severity diagnostics — a
 /// warning-severity file passes the CI gate (doc 4.4).
-fn check(sources: &[PathBuf], target: Target, format: Format, stderr: &mut dyn Write) -> i32 {
+/// The `analyze` dispatch: validate the explicit report path (a usage
+/// error before any sink output, like a missing input path), collect the
+/// sources, run the pass.
+///
+/// # Errors
+///
+/// A `--types` path that does not exist returns [`CliError`].
+fn run_analyze(
+    paths: &[PathBuf],
+    types: Option<&Path>,
+    target: Target,
+    format: Format,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    if let Some(report) = types {
+        if !report.is_file() {
+            return Err(CliError(format!(
+                "cannot read {}: no such file (--types names one analyze report file)",
+                report.display()
+            )));
+        }
+    }
+    let sources = collect_sources(paths)?;
+    Ok(analyze(&sources, types, target, format, stdout, stderr))
+}
+
+fn check(
+    sources: &[PathBuf],
+    target: Target,
+    format: Format,
+    types: Option<&Path>,
+    stderr: &mut dyn Write,
+) -> i32 {
     let mut failed = false;
     for source in sources {
         let src = match fs::read_to_string(source) {
@@ -991,6 +1133,15 @@ fn check(sources: &[PathBuf], target: Target, format: Format, stderr: &mut dyn W
                 continue;
             }
         };
+        if let Some(report) = types {
+            match load_type_hints(source, Some(report)) {
+                Ok(hints) => report_stale(source, &src, &hints, format, stderr),
+                Err(problem) => {
+                    let _ = writeln!(stderr, "lintel: {}: {problem}", source.display());
+                    failed = true;
+                }
+            }
+        }
         match compile(&src, &Options { target }) {
             Ok(out) => {
                 for warning in &out.warnings {
@@ -1006,6 +1157,315 @@ fn check(sources: &[PathBuf], target: Target, format: Format, stderr: &mut dyn W
         }
     }
     i32::from(failed)
+}
+
+/// The `analyze` runner (§7.3-Y2, `docs/type-elision.md`): compile each
+/// source through [`compile_analyzed`] with the `PHPStan` bridge's proven
+/// child types, write the PHP to stdout exactly like `build`'s stdout lane,
+/// and report the elision counters on stderr in the requested [`Format`].
+/// Exit 1 when any file fails to parse/validate or its analyze report is
+/// malformed; usage errors (an explicit `--types` path that does not
+/// exist) surface as [`CliError`] from [`run`].
+fn analyze(
+    sources: &[PathBuf],
+    types: Option<&Path>,
+    target: Target,
+    format: Format,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    let mut failed = false;
+    for source in sources {
+        let src = match fs::read_to_string(source) {
+            Ok(src) => src,
+            Err(e) => {
+                let _ = writeln!(stderr, "lintel: cannot read {}: {e}", source.display());
+                failed = true;
+                continue;
+            }
+        };
+        let hints = match load_type_hints(source, types) {
+            Ok(hints) => hints,
+            Err(problem) => {
+                let _ = writeln!(stderr, "lintel: {}: {problem}", source.display());
+                failed = true;
+                continue;
+            }
+        };
+        match compile_analyzed(
+            &src,
+            &Options { target },
+            &hints,
+            lintel_core::builtin_rules(),
+        ) {
+            Ok(out) => {
+                for warning in &out.output.warnings {
+                    emit_diagnostic(warning, &src, format, stderr);
+                }
+                if let Err(e) = stdout.write_all(out.output.php.as_bytes()) {
+                    let _ = writeln!(stderr, "lintel: cannot write {}: {e}", source.display());
+                    failed = true;
+                    continue;
+                }
+                let stale = lintel_core::stale_hints(&src, &hints).len();
+                report_elision(source, &out, stale, format, stderr);
+            }
+            Err(problems) => {
+                for problem in &problems {
+                    emit_diagnostic(problem, &src, format, stderr);
+                }
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+/// The stale-hint advisories for one source (§7.3-Y2 UX): report entries
+/// that match no child expression of the current source — an analysis run
+/// against an older artifact. Advisory by construction (elision already
+/// ignores them): text prints one line per stale entry, JSON emits one
+/// object per entry with `stale: true`.
+fn report_stale(
+    source: &Path,
+    src: &str,
+    hints: &TypeHints,
+    format: Format,
+    stderr: &mut dyn Write,
+) {
+    for stale in lintel_core::stale_hints(src, hints) {
+        match format {
+            Format::Text => {
+                let _ = writeln!(
+                    stderr,
+                    "check {}: stale analyze hint at line {}: {} (type {})",
+                    source.display(),
+                    stale.line,
+                    stale.expr,
+                    stale.kind
+                );
+            }
+            Format::Json => {
+                let object = serde_json::json!({
+                    "file": source.display().to_string(),
+                    "line": stale.line,
+                    "expr": stale.expr,
+                    "type": stale.kind,
+                    "stale": true,
+                });
+                let _ = writeln!(stderr, "{object}");
+            }
+        }
+    }
+}
+
+/// The elision report for one compiled file: text prints one summary line,
+/// JSON emits one object — `file`, `children`, `considered`, `elided` and
+/// `rate` (elided/considered, `null` when nothing reached the step).
+fn report_elision(
+    source: &Path,
+    out: &lintel_core::AnalyzedOutput,
+    stale: usize,
+    format: Format,
+    stderr: &mut dyn Write,
+) {
+    let rate = out.elision_rate();
+    match format {
+        Format::Text => {
+            let rate_note = rate.map_or_else(String::new, |value| {
+                format!(" ({:.1}% elision rate)", value * 100.0)
+            });
+            let stale_note = if stale == 0 {
+                String::new()
+            } else {
+                format!(", {stale} stale hint(s) ignored")
+            };
+            let _ = writeln!(
+                stderr,
+                "analyze {}: {} dynamic children, {} decision-reachable, {} elided by type{}{}",
+                source.display(),
+                out.dynamic_children,
+                out.considered,
+                out.elided,
+                rate_note,
+                stale_note,
+            );
+        }
+        Format::Json => {
+            let object = serde_json::json!({
+                "file": source.display().to_string(),
+                "children": out.dynamic_children,
+                "considered": out.considered,
+                "elided": out.elided,
+                "stale": stale,
+                "rate": rate,
+            });
+            let _ = writeln!(stderr, "{object}");
+        }
+    }
+}
+
+/// The analyze report for one source: an explicit `--types PATH` applies to
+/// every source; otherwise the per-source sidecar
+/// `<source>.lintel-types.json` (the bridge runner's default output) is
+/// advisory — an absent sidecar compiles without hints. A malformed or
+/// contract-mismatching report fails the file (exit 1), never silently.
+///
+/// # Errors
+///
+/// Returns the problem text for unreadable/malformed/unknown-shaped
+/// reports; the caller renders it and fails the file.
+fn load_type_hints(source: &Path, types: Option<&Path>) -> Result<TypeHints, String> {
+    let report = if let Some(path) = types {
+        path.to_path_buf()
+    } else {
+        let mut sidecar = source.as_os_str().to_os_string();
+        sidecar.push(".lintel-types.json");
+        PathBuf::from(sidecar)
+    };
+    let json = match fs::read_to_string(&report) {
+        Ok(json) => json,
+        Err(e) => {
+            return if types.is_some() {
+                Err(format!("cannot read {}: {e}", report.display()))
+            } else {
+                // The advisory sidecar is absent: no analyze information.
+                Ok(TypeHints::default())
+            };
+        }
+    };
+    parse_type_hints(&json)
+}
+
+/// Parse the bridge runner's report JSON into [`TypeHints`].
+///
+/// # Errors
+///
+/// Every deviation from the documented shape fails with a precise message:
+/// a non-object document, an unknown `version`, a non-list `children`, or
+/// an entry whose `line`/`expr`/`type`/`value` fields are missing,
+/// mistyped, or name an unknown kind (a producer/consumer contract
+/// mismatch must be loud, not silently dropped).
+fn parse_type_hints(json: &str) -> Result<TypeHints, String> {
+    let document: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("the analyze report is not JSON: {e}"))?;
+    let object = document
+        .as_object()
+        .ok_or("the analyze report is not a JSON object")?;
+    let version = object
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("the analyze report has no integer `version`")?;
+    if version != 1 {
+        return Err(format!("unsupported analyze report version {version}"));
+    }
+    let children = object
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("the analyze report has no `children` list")?;
+    let mut entries = Vec::with_capacity(children.len());
+    for child in children {
+        let entry = child
+            .as_object()
+            .ok_or("the analyze report `children` holds a non-object entry")?;
+        let line = entry
+            .get("line")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("an analyze report entry has no integer `line`")?;
+        let expr = entry
+            .get("expr")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("an analyze report entry has no string `expr`")?
+            .to_string();
+        let kind_name = entry
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("an analyze report entry has no string `type`")?;
+        let value = entry.get("value").and_then(serde_json::Value::as_str);
+        match ChildKind::parse(kind_name, value) {
+            Ok(Some(kind)) => entries.push(ChildHint {
+                line: u32::try_from(line)
+                    .map_err(|_| "an analyze report `line` is out of range")?,
+                expr,
+                kind,
+            }),
+            // Known but non-elidable (bool, string, …): the report carries
+            // every resolved type; these simply keep the helper.
+            Ok(None) => {}
+            Err(problem) => return Err(problem),
+        }
+    }
+    Ok(TypeHints::from_entries(entries))
+}
+
+/// The parsed `analyze` invocation: paths, the optional report file, the
+/// target and the report format.
+struct AnalyzeArgs {
+    paths: Vec<PathBuf>,
+    types: Option<PathBuf>,
+    target: Target,
+    format: Format,
+}
+
+/// The `analyze` argument parser: paths, `--types PATH`, `--target` and
+/// `--format` (no output-destination flags — the compiled PHP always goes
+/// to stdout this pass; destination flags stay `build`'s).
+///
+/// # Errors
+///
+/// Unknown flags, missing flag values, unknown targets/formats.
+fn parse_analyze(args: &[String]) -> Result<ControlFlow<Invocation, AnalyzeArgs>, CliError> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut types: Option<PathBuf> = None;
+    let mut target = Target::default();
+    let mut format = Format::default();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--help" | "-h" => return Ok(ControlFlow::Break(Invocation::Help)),
+            "--version" => return Ok(ControlFlow::Break(Invocation::Version)),
+            s if s.starts_with("--types=") => {
+                types = Some(PathBuf::from(&s["--types=".len()..]));
+            }
+            "--types" => {
+                let value = value_flag(args, &mut index, "--types needs a value: the report file")?;
+                types = Some(PathBuf::from(value));
+            }
+            s if s.starts_with("--target=") => {
+                target = parse_target(&s["--target=".len()..])?;
+            }
+            "--target" => {
+                let value = value_flag(
+                    args,
+                    &mut index,
+                    "--target needs a value: string, stream or rfc",
+                )?;
+                target = parse_target(&value)?;
+            }
+            s if s.starts_with("--format=") => {
+                format = parse_format(&s["--format=".len()..])?;
+            }
+            "--format" => {
+                let value = value_flag(args, &mut index, "--format needs a value: text or json")?;
+                format = parse_format(&value)?;
+            }
+            s if s.starts_with('-') => {
+                return Err(CliError(format!(
+                    "unknown flag `{s}`: analyze takes --types, --target and --format \
+                     (see `lintel --help`)"
+                )));
+            }
+            path => paths.push(PathBuf::from(path)),
+        }
+    }
+    Ok(ControlFlow::Continue(AnalyzeArgs {
+        paths,
+        types,
+        target,
+        format,
+    }))
 }
 
 /// Compile the per-file component shape report with `stats` semantics: the
