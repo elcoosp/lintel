@@ -15,9 +15,18 @@
 //! parameter the enclosing function declares as a non-nullable `string` —
 //! proven by the scanner's [`crate::scan::FunctionScope`] tracking — fold
 //! to a direct `\htmlspecialchars(...)` call (`docs/escape-elision.md`).
+//!
+//! The §7.3-Y2 analyze pass extends that ladder: when a root lowers with
+//! resolved [`crate::analyze::EscapeDecisions`] (the `PHPStan` bridge's
+//! proven child types, via [`AnalyzeLowering`]), a child the v0.1 ladder
+//! could not prove elides when the analyze pass proved it
+//! `int|float|numeric-string|literal` — everything else keeps
+//! `\Lintel\c()`, conservative by design (`docs/type-elision.md`).
 
+use std::cell::Cell;
 use std::fmt::Write as _;
 
+use crate::analyze::{ChildKind, EscapeDecisions};
 use crate::ast::{is_void_element, Attr, Element, Node};
 use crate::scan::FunctionScope;
 use crate::Target;
@@ -31,6 +40,35 @@ enum Part {
 #[derive(Debug, Default)]
 struct Parts {
     items: Vec<(u32, Part)>,
+    /// Dynamic children lowered on this root/tree (the analyze pass's
+    /// denominator); zero-cost bookkeeping the non-analyze lowerings
+    /// discard.
+    dynamic: u32,
+    /// Children that reached the analyze decision step (past the v0.1
+    /// folds).
+    considered: u32,
+    /// Children elided BY the analyze pass (a subset of `considered`).
+    elided: u32,
+}
+
+impl Parts {
+    /// Fold one lowered subtree's bookkeeping into this one (component
+    /// children lower into their own `Parts` before concatenation).
+    fn absorb(&mut self, inner: &Parts) {
+        self.dynamic += inner.dynamic;
+        self.considered += inner.considered;
+        self.elided += inner.elided;
+    }
+}
+
+/// The analyze pass's per-root counters, accumulated across roots by
+/// [`AnalyzeLowering`] (one scan compiles every root of a file through one
+/// lowering instance).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct AnalyzeStats {
+    dynamic: u32,
+    considered: u32,
+    elided: u32,
 }
 
 /// URL attributes routed to the `\Lintel\u()` scheme-allowlist helper (doc 4.4).
@@ -83,6 +121,23 @@ pub trait Lowering {
     fn emit_root_scoped(&self, node: &Node, total_lines: u32, _scope: &FunctionScope) -> String {
         self.emit_root(node, total_lines)
     }
+
+    /// The §7.3-Y2 analyze variant of [`Lowering::emit_root_scoped`]:
+    /// `decisions` carries the per-child elision verdicts the `lintel
+    /// analyze` pass resolved for this root (`crate::analyze`), keyed by
+    /// each child expression's absolute source byte offset. The default
+    /// ignores the decisions and delegates to
+    /// [`Lowering::emit_root_scoped`] — existing strategies keep their
+    /// exact behavior, [`AnalyzeLowering`] opts into the fold.
+    fn emit_root_typed(
+        &self,
+        node: &Node,
+        total_lines: u32,
+        scope: &FunctionScope,
+        _decisions: &EscapeDecisions,
+    ) -> String {
+        self.emit_root_scoped(node, total_lines, scope)
+    }
 }
 
 /// String-concat AOT lowering (default, doc 5.3): the root becomes one
@@ -91,15 +146,30 @@ pub trait Lowering {
 #[derive(Debug, Default)]
 pub struct StringLowering;
 
+/// The string root's lowering body, shared by [`StringLowering`] and
+/// [`AnalyzeLowering`]: `decisions` is `Some` only under the analyze pass.
+fn string_root(
+    node: &Node,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    total_lines: u32,
+) -> (String, Parts) {
+    let mut parts = Parts::default();
+    lower(node, scope, decisions, &mut parts);
+    let items = std::mem::take(&mut parts.items);
+    (
+        format!("new \\Lintel\\Html({})", concat(items, 0, total_lines)),
+        parts,
+    )
+}
+
 impl Lowering for StringLowering {
     fn emit_root(&self, node: &Node, total_lines: u32) -> String {
         self.emit_root_scoped(node, total_lines, &FunctionScope::EMPTY)
     }
 
     fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
-        let mut parts = Parts::default();
-        lower(node, scope, &mut parts);
-        format!("new \\Lintel\\Html({})", concat(parts, 0, total_lines))
+        string_root(node, scope, None, total_lines).0
     }
 }
 
@@ -117,27 +187,129 @@ impl Lowering for StringLowering {
 #[derive(Debug, Default)]
 pub struct StreamLowering;
 
+/// The stream root's lowering body, shared by [`StreamLowering`] and
+/// [`AnalyzeLowering`] (doc 5.3 `stream`, §10).
+fn stream_root(
+    node: &Node,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    total_lines: u32,
+) -> (String, Parts) {
+    let mut parts = Parts::default();
+    match node {
+        Node::Element(element) if element.is_component => {
+            stream_component(element, scope, decisions, &mut parts);
+        }
+        Node::Element(element) => html_element(element, scope, decisions, &mut parts),
+        Node::Fragment { children, .. } => {
+            for child in children {
+                lower_stream(child, scope, decisions, &mut parts);
+            }
+        }
+        Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
+        Node::Expr {
+            php, line, offset, ..
+        } => {
+            let part = dyn_child(php, *offset, scope, decisions, &mut parts);
+            parts.items.push((*line, part));
+        }
+    }
+    let items = std::mem::take(&mut parts.items);
+    (stream_closure(&concat_stream(items, 0, total_lines)), parts)
+}
+
 impl Lowering for StreamLowering {
     fn emit_root(&self, node: &Node, total_lines: u32) -> String {
         self.emit_root_scoped(node, total_lines, &FunctionScope::EMPTY)
     }
 
     fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
-        let mut parts = Parts::default();
-        match node {
-            Node::Element(element) if element.is_component => {
-                stream_component(element, scope, &mut parts);
-            }
-            Node::Element(element) => html_element(element, scope, &mut parts),
-            Node::Fragment { children, .. } => {
-                for child in children {
-                    lower_stream(child, scope, &mut parts);
-                }
-            }
-            Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-            Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
+        stream_root(node, scope, None, total_lines).0
+    }
+}
+
+/// The §7.3-Y2 analyze lowering (architecture doc §7.3-Y2,
+/// `docs/type-elision.md`): the `lintel analyze` path's strategy — a
+/// target wrapper that lowers every root with the `PHPStan` bridge's
+/// resolved child decisions, eliding the escape helper where the analysis
+/// proved the type, and accumulating the elision-rate counters
+/// (`dynamic_children`/`considered`/`elided`) the pass must report.
+///
+/// Every decision was resolved against the scanner's own scope tracking
+/// (`crate::analyze::resolve_decisions`) and applied strictly after the
+/// v0.1 folds, so the analyze pass extends, never replaces, the existing
+/// elision lanes.
+#[derive(Debug, Default)]
+pub struct AnalyzeLowering {
+    target: Target,
+    stats: Cell<AnalyzeStats>,
+}
+
+impl AnalyzeLowering {
+    /// A analyze lowering for `target` (the `rfc` target emits no escape
+    /// helpers, so decisions never fire there — the counters stay zero).
+    #[must_use]
+    pub fn new(target: Target) -> Self {
+        Self {
+            target,
+            stats: Cell::new(AnalyzeStats::default()),
         }
-        stream_closure(&concat_stream(parts, 0, total_lines))
+    }
+
+    /// Every dynamic child lowered on this file (the rate's denominator).
+    #[must_use]
+    pub fn dynamic_children(&self) -> u32 {
+        self.stats.get().dynamic
+    }
+
+    /// Children that reached the analyze decision step.
+    #[must_use]
+    pub fn considered(&self) -> u32 {
+        self.stats.get().considered
+    }
+
+    /// Children elided by the analyze pass.
+    #[must_use]
+    pub fn elided(&self) -> u32 {
+        self.stats.get().elided
+    }
+}
+
+impl Lowering for AnalyzeLowering {
+    fn emit_root(&self, node: &Node, total_lines: u32) -> String {
+        self.emit_root_typed(
+            node,
+            total_lines,
+            &FunctionScope::EMPTY,
+            &EscapeDecisions::new(),
+        )
+    }
+
+    fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
+        self.emit_root_typed(node, total_lines, scope, &EscapeDecisions::new())
+    }
+
+    fn emit_root_typed(
+        &self,
+        node: &Node,
+        total_lines: u32,
+        scope: &FunctionScope,
+        decisions: &EscapeDecisions,
+    ) -> String {
+        let (php, parts) = match self.target {
+            Target::String => string_root(node, scope, Some(decisions), total_lines),
+            Target::Stream => stream_root(node, scope, Some(decisions), total_lines),
+            // The RFC lowering emits no `\Lintel\` helpers by contract, so
+            // there is nothing to elide — the decisions are inert.
+            Target::Rfc => (rfc_root(node, total_lines), Parts::default()),
+        };
+        let stats = self.stats.get();
+        self.stats.set(AnalyzeStats {
+            dynamic: stats.dynamic + parts.dynamic,
+            considered: stats.considered + parts.considered,
+            elided: stats.elided + parts.elided,
+        });
+        php
     }
 }
 
@@ -154,27 +326,32 @@ impl Lowering for StreamLowering {
 #[derive(Debug, Default)]
 pub struct RfcLowering;
 
+/// The RFC root's lowering body (no `\Lintel\` helpers by contract).
+fn rfc_root(node: &Node, total_lines: u32) -> String {
+    let mut parts = Parts::default();
+    match node {
+        Node::Element(element) => rfc_node_value(element, &mut parts),
+        Node::Fragment { children, line, .. } => {
+            parts.items.push((*line, Part::Lit("[".into())));
+            let mut first = true;
+            for child in children {
+                rfc_child(child, &mut parts, &mut first);
+            }
+            parts.items.push((*line, Part::Lit("]".into())));
+        }
+        Node::Text { text, line, .. } => {
+            parts.items.push((*line, Part::Lit(php_str(text))));
+        }
+        Node::Expr { php, line, .. } => {
+            parts.items.push((*line, rfc_expr_child(php)));
+        }
+    }
+    concat_rfc(parts.items, 0, total_lines)
+}
+
 impl Lowering for RfcLowering {
     fn emit_root(&self, node: &Node, total_lines: u32) -> String {
-        let mut parts = Parts::default();
-        match node {
-            Node::Element(element) => rfc_node_value(element, &mut parts),
-            Node::Fragment { children, line, .. } => {
-                parts.items.push((*line, Part::Lit("[".into())));
-                let mut first = true;
-                for child in children {
-                    rfc_child(child, &mut parts, &mut first);
-                }
-                parts.items.push((*line, Part::Lit("]".into())));
-            }
-            Node::Text { text, line, .. } => {
-                parts.items.push((*line, Part::Lit(php_str(text))));
-            }
-            Node::Expr { php, line, .. } => {
-                parts.items.push((*line, rfc_expr_child(php)));
-            }
-        }
-        concat_rfc(parts, 0, total_lines)
+        rfc_root(node, total_lines)
     }
 }
 
@@ -339,17 +516,29 @@ fn rfc_component(element: &Element, parts: &mut Parts) {
     parts.items.push((element.end_line, Part::Lit(")".into())));
 }
 
-fn lower(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
+fn lower(
+    node: &Node,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) {
     match node {
         Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
+        Node::Expr {
+            php, line, offset, ..
+        } => {
+            let part = dyn_child(php, *offset, scope, decisions, parts);
+            parts.items.push((*line, part));
+        }
         Node::Fragment { children, .. } => {
             for child in children {
-                lower(child, scope, parts);
+                lower(child, scope, decisions, parts);
             }
         }
-        Node::Element(element) if element.is_component => component(element, scope, parts),
-        Node::Element(element) => html_element(element, scope, parts),
+        Node::Element(element) if element.is_component => {
+            component(element, scope, decisions, parts);
+        }
+        Node::Element(element) => html_element(element, scope, decisions, parts),
     }
 }
 
@@ -357,17 +546,29 @@ fn lower(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
 /// dynamic children emit the same parts — but component invocations keep
 /// their children argument as a generator closure instead of an
 /// `new \Lintel\Html(...)` value (doc 5.3 `stream`).
-fn lower_stream(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
+fn lower_stream(
+    node: &Node,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) {
     match node {
         Node::Text { text, line, .. } => parts.items.push((*line, Part::Lit(text.clone()))),
-        Node::Expr { php, line, .. } => parts.items.push((*line, dyn_child(php, scope))),
+        Node::Expr {
+            php, line, offset, ..
+        } => {
+            let part = dyn_child(php, *offset, scope, decisions, parts);
+            parts.items.push((*line, part));
+        }
         Node::Fragment { children, .. } => {
             for child in children {
-                lower_stream(child, scope, parts);
+                lower_stream(child, scope, decisions, parts);
             }
         }
-        Node::Element(element) if element.is_component => stream_component(element, scope, parts),
-        Node::Element(element) => html_element(element, scope, parts),
+        Node::Element(element) if element.is_component => {
+            stream_component(element, scope, decisions, parts);
+        }
+        Node::Element(element) => html_element(element, scope, decisions, parts),
     }
 }
 
@@ -380,7 +581,24 @@ fn lower_stream(node: &Node, scope: &FunctionScope, parts: &mut Parts) {
 /// proves the value is a string, so the generic `\Lintel\c()` wrapper's
 /// runtime check is pure overhead. Everything the scope cannot prove keeps
 /// the wrapper, conservative by design (`docs/escape-elision.md`).
-fn dyn_child(php: &str, scope: &FunctionScope) -> Part {
+///
+/// The §7.3-Y2 analyze step runs strictly after that v0.1 ladder: when the
+/// `lintel analyze` pass resolved a decision for this child (matched by
+/// absolute source byte offset, `crate::analyze`), a proven
+/// `int|float|numeric-string` child folds to the raw expression and a
+/// proven `literal` child folds to its escaped value — each byte-identical
+/// to what `c()` renders, so the fold changes cost, never output. The
+/// counters ride on `parts` (the analyze pass's elision-rate report);
+/// non-analyze lowerings discard them.
+fn dyn_child(
+    php: &str,
+    offset: usize,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) -> Part {
+    parts.dynamic += 1;
+    let decision = decisions.and_then(|map| map.get(&offset));
     let trimmed = php.trim();
     if let Some(name) = bare_var(trimmed) {
         if scope.typed_strings().iter().any(|proven| proven == name) {
@@ -400,7 +618,35 @@ fn dyn_child(php: &str, scope: &FunctionScope) -> Part {
         // markup, so the `\Lintel\c()` call is pure overhead.
         return Part::Dyn(trimmed.to_string());
     }
-    Part::Dyn(format!("\\Lintel\\c({trimmed})"))
+    // The analyze step: everything above proved something at compile time;
+    // this is where the PHPStan-proven verdicts land. An absent decision
+    // (unproven, mismatched, or the plain compile path) keeps the wrapper.
+    parts.considered += 1;
+    match decision {
+        Some(ChildKind::Literal(value))
+            if value.matches('\n').count() == php.matches('\n').count() =>
+        {
+            // Inlining the known value must preserve line numbers (doc
+            // 13.4): a value with a different newline count than the
+            // expression it replaces stays wrapped. The escaped value is
+            // emitted UNQUOTED — [`concat_parts`] quotes literal parts
+            // exactly like the v0.1 single-quoted fold, and `html_escape`
+            // already removed the quotes `ENT_QUOTES` would have escaped.
+            parts.elided += 1;
+            Part::Lit(html_escape(value))
+        }
+        Some(ChildKind::Int | ChildKind::Float | ChildKind::NumericString) => {
+            // Digits and numeric strings cannot carry markup (doc
+            // §7.3-Y2): the raw expression renders byte-identical to the
+            // escaped helper call.
+            parts.elided += 1;
+            Part::Dyn(trimmed.to_string())
+        }
+        // `bool` is deliberately absent (c() renders bools as '' while a
+        // raw bool interpolates as '1' — no byte-parity fold exists), and
+        // so is everything the analysis did not prove.
+        _ => Part::Dyn(format!("\\Lintel\\c({trimmed})")),
+    }
 }
 
 /// Whether the trimmed expression is exactly one `$name` variable — no
@@ -609,7 +855,12 @@ fn balanced_prefix(src: &str, open: u8, close: u8) -> Option<&str> {
     None
 }
 
-fn html_element(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
+fn html_element(
+    element: &Element,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) {
     let tag = element.name.as_str();
     parts
         .items
@@ -629,7 +880,7 @@ fn html_element(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
     }
     parts.items.push((element.line, Part::Lit(">".into())));
     for child in &element.children {
-        lower(child, scope, parts);
+        lower(child, scope, decisions, parts);
     }
     parts
         .items
@@ -682,17 +933,23 @@ fn push_attr(attr: &Attr, parts: &mut Parts) {
     }
 }
 
-fn component(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
+fn component(
+    element: &Element,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) {
     let children = if element.children.is_empty() {
         None
     } else {
         let mut inner = Parts::default();
         for child in &element.children {
-            lower(child, scope, &mut inner);
+            lower(child, scope, decisions, &mut inner);
         }
+        parts.absorb(&inner);
         Some(format!(
             "new \\Lintel\\Html({})",
-            concat(inner, element.line, element.end_line)
+            concat(inner.items, element.line, element.end_line)
         ))
     };
     component_call(element, children, parts);
@@ -702,16 +959,22 @@ fn component(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
 /// generator closure yielding the children chunks, so a component body can
 /// iterate/`yield from` it (doc 5.3 `stream`); the call itself stays wrapped
 /// in `\Lintel\c()` so returning `\Generator` or `\Lintel\Html` both render.
-fn stream_component(element: &Element, scope: &FunctionScope, parts: &mut Parts) {
+fn stream_component(
+    element: &Element,
+    scope: &FunctionScope,
+    decisions: Option<&EscapeDecisions>,
+    parts: &mut Parts,
+) {
     let children = if element.children.is_empty() {
         None
     } else {
         let mut inner = Parts::default();
         for child in &element.children {
-            lower_stream(child, scope, &mut inner);
+            lower_stream(child, scope, decisions, &mut inner);
         }
+        parts.absorb(&inner);
         Some(stream_closure(&concat_stream(
-            inner,
+            inner.items,
             element.line,
             element.end_line,
         )))
@@ -756,23 +1019,23 @@ fn component_call(element: &Element, children: Option<String>, parts: &mut Parts
 /// Merge adjacent literals, interleave newlines so emitted line numbers match
 /// the source span (doc 6.5 `concat`, with the separator placed after the
 /// newline so lines start with ` . ` like the reference golden).
-fn concat(parts: Parts, base: u32, total: u32) -> String {
-    concat_parts(parts, base, total, " . ", true)
+fn concat(items: Vec<(u32, Part)>, base: u32, total: u32) -> String {
+    concat_parts(items, base, total, " . ", true)
 }
 
 /// [`concat`] for the RFC lowering: the RFC emitters build final PHP text
 /// (already string-quoted where needed) and carry their own list separators,
 /// so parts are emitted verbatim with no inter-part separator.
-fn concat_rfc(parts: Parts, base: u32, total: u32) -> String {
-    concat_parts(parts, base, total, "", false)
+fn concat_rfc(items: Vec<(u32, Part)>, base: u32, total: u32) -> String {
+    concat_parts(items, base, total, "", false)
 }
 
 /// [`concat`] for the streaming lowering: each merged part becomes one
 /// `yield` statement — literal parts are PHP-quoted string chunks, dynamic
 /// parts are yielded as-is — so the generator produces one chunk per literal
 /// run / dynamic slot (doc 5.3 `stream`).
-fn concat_stream(parts: Parts, base: u32, total: u32) -> String {
-    let merged = merge_adjacent(parts.items);
+fn concat_stream(items: Vec<(u32, Part)>, base: u32, total: u32) -> String {
+    let merged = merge_adjacent(items);
     let mut out = String::new();
     let mut cur = base;
     let mut first = true;
@@ -1066,13 +1329,13 @@ fn skip_heredoc(
 /// newlines, and either PHP-quote literal parts (`quote_literals`, string
 /// target) or emit them verbatim (RFC target).
 fn concat_parts(
-    parts: Parts,
+    items: Vec<(u32, Part)>,
     base: u32,
     total: u32,
     separator: &str,
     quote_literals: bool,
 ) -> String {
-    let merged = merge_adjacent(parts.items);
+    let merged = merge_adjacent(items);
 
     let mut out = String::new();
     let mut cur = base;
