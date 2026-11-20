@@ -4,4 +4,6 @@ parameters:
         - php
     excludePaths:
         - php/runtime/vendor
-        - php/runtime/.phpunit.cache
+        - php/runtime/.phpunit.cache (?)
+        - php/lintel/vendor
+        - php/lintel/.phpunit.cache (?)
