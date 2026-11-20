@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lintel-diag", "crates/lintel-core", "crates/lintel-cli"]
+members = ["crates/lintel-diag", "crates/lintel-core", "crates/lintel-cli", "crates/lintel-wasm", "crates/lintel-docs"]
 
 [workspace.package]
 edition = "2021"
@@ -21,3 +21,11 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 opt-level = 3
+
+# The T-13 playground budget ("loads <1 MB gz"): the wasm bundle is built
+# with `cargo build --profile wasm-release --target wasm32-unknown-unknown`
+# (see `make playground`), optimized for size instead of speed.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+strip = true
