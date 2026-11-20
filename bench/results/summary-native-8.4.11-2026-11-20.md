@@ -1,6 +1,6 @@
 # Bench results (native) — PHP 8.4.11, 2026-11-20
 
-Hardware/OS: `Linux 5.10.134-013.15.kangaroo.al8.x86_64 x86_64`, host `c-6aff8d49-140d72b5-7a3143c35d5a`; lintel `lintel 0.1.0`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep 5 ms each. Raw JSON: `results-native-8.4.11-2026-11-20.json`.
+Hardware/OS: `Linux 5.10.134-013.15.kangaroo.al8.x86_64 x86_64`, host `c-6b005be3-140d72b5-7bc55e3733be`; lintel `lintel 0.1.0`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep 5 ms each. Raw JSON: `results-native-8.4.11-2026-11-20.json`.
 
 > Publishing rule (§9.2): no number appears in README/launch posts unless `make bench` reproduces it and the methodology page links this raw JSON.
 
@@ -8,68 +8,68 @@ Hardware/OS: `Linux 5.10.134-013.15.kangaroo.al8.x86_64 x86_64`, host `c-6aff8d4
 
 | ns/render (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel | 914 ns | 922 ns | 923 ns |
-| rfc | 18.25 µs | 18.19 µs | 18.16 µs |
-| echo | 511 ns | 512 ns | 512 ns |
-| blade | 13.84 µs | 13.90 µs | 14.02 µs |
-| twig | 5.16 µs | 5.17 µs | 5.13 µs |
-| plates | 12.19 µs | 12.25 µs | 12.28 µs |
+| lintel | 915 ns | 918 ns | 918 ns |
+| rfc | 18.08 µs | 18.13 µs | 18.13 µs |
+| echo | 520 ns | 516 ns | 509 ns |
+| blade | 13.93 µs | 13.75 µs | 13.79 µs |
+| twig | 5.16 µs | 5.10 µs | 5.12 µs |
+| plates | 12.34 µs | 15.31 µs | 12.26 µs |
 
 ### S2 1,000-row table — ns/render
 
 | ns/render (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel | 1.27 ms | 1.26 ms | 1.26 ms |
-| rfc | 2.79 ms | 2.78 ms | 2.80 ms |
-| echo | 774.84 µs | 777.52 µs | 779.64 µs |
-| blade | 1.58 ms | 1.58 ms | 1.56 ms |
-| twig | 1.83 ms | 1.83 ms | 1.82 ms |
-| plates | 932.86 µs | 933.59 µs | 933.25 µs |
+| lintel | 1.29 ms | 1.26 ms | 1.27 ms |
+| rfc | 2.85 ms | 2.80 ms | 2.82 ms |
+| echo | 786.03 µs | 777.86 µs | 775.34 µs |
+| blade | 3.71 ms | 1.57 ms | 1.59 ms |
+| twig | 1.88 ms | 1.83 ms | 1.84 ms |
+| plates | 982.39 µs | 932.62 µs | 954.90 µs |
 
 ### S3 component tree (depth 10 × fan-out 3) — ns/render
 
 | ns/render (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel | 31.29 ms | 31.28 ms | 31.61 ms |
-| rfc | 78.99 ms | 80.04 ms | 81.19 ms |
-| echo | 7.66 ms | 7.91 ms | 7.87 ms |
-| blade | 1630.01 ms | 1626.07 ms | 1651.69 ms |
-| twig | 152.56 ms | 153.95 ms | 307.96 ms |
-| plates | 997.16 ms | 1000.84 ms | 2200.60 ms |
+| lintel | 56.12 ms | 31.28 ms | 31.81 ms |
+| rfc | 151.71 ms | 79.73 ms | 82.74 ms |
+| echo | 10.77 ms | 7.70 ms | 7.77 ms |
+| blade | 1649.48 ms | 1636.33 ms | 1645.10 ms |
+| twig | 153.10 ms | 152.51 ms | 151.88 ms |
+| plates | 992.28 ms | 994.35 ms | 997.75 ms |
 
 ### S4 attribute-heavy links — ns/render
 
 | ns/render (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel | 673.73 µs | 702.65 µs | 742.87 µs |
-| rfc | 491.75 µs | 498.21 µs | 492.18 µs |
-| echo | 181.36 µs | 183.46 µs | 183.61 µs |
-| blade | 372.67 µs | 433.77 µs | 386.52 µs |
-| twig | 611.67 µs | 666.03 µs | 613.18 µs |
-| plates | 215.81 µs | 218.99 µs | 221.89 µs |
+| lintel | 671.15 µs | 671.84 µs | 680.62 µs |
+| rfc | 490.20 µs | 491.48 µs | 490.44 µs |
+| echo | 179.57 µs | 181.47 µs | 181.26 µs |
+| blade | 369.48 µs | 371.81 µs | 374.81 µs |
+| twig | 613.53 µs | 612.73 µs | 612.45 µs |
+| plates | 215.56 µs | 215.57 µs | 215.64 µs |
 
 ### S5 streaming TTFB (time to first chunk)
 
 | TTFB (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel-sync | 15.19 ms | 15.21 ms | 15.25 ms |
-| lintel-stream | 1.86 µs | 2.22 µs | 2.76 µs |
-| echo-stream | 4.60 µs | 4.94 µs | 5.81 µs |
+| lintel-sync | 15.20 ms | 15.29 ms | 15.20 ms |
+| lintel-stream | 3.06 µs | 3.56 µs | 3.08 µs |
+| echo-stream | 4.72 µs | 5.51 µs | 4.96 µs |
 
 ### S5 total render time
 
 | total (median) | opcache-off | opcache-on | opcache-jit |
 | --- | --- | --- | --- |
-| lintel-sync | 15.19 ms | 15.21 ms | 15.25 ms |
-| lintel-stream | 15.20 ms | 15.21 ms | 15.28 ms |
-| echo-stream | 15.20 ms | 15.21 ms | 15.24 ms |
+| lintel-sync | 15.20 ms | 15.29 ms | 15.20 ms |
+| lintel-stream | 15.22 ms | 15.27 ms | 15.22 ms |
+| echo-stream | 15.20 ms | 15.21 ms | 15.20 ms |
 
 ### Compile throughput (lintel build, 100 sources)
 
 | metric | value |
 | --- | --- |
-| cold files/s | 9728 |
-| warm files/s | 7400 |
+| cold files/s | 23054 |
+| warm files/s | 24040 |
 
 ### Opcode counts (opcache.opt_debug_level=0x20000)
 
