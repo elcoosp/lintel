@@ -24,6 +24,22 @@ function e(string $s): string { return \htmlspecialchars($s, FLAGS, 'UTF-8'); }
 function c(mixed $v): string
 {
     if ($v instanceof Html) return $v->s;
+    if ($v instanceof \Traversable) {
+        // Stream target (§10): a Traversable child is a markup stream — its
+        // chunks are compiler-produced markup (literals) or data already
+        // escaped when the chunk was built, so they pass through raw. Plain
+        // arrays stay data and take the is_iterable branch below.
+        $o = '';
+        foreach ($v as $x) {
+            if ($x instanceof \Traversable) { $o .= c($x); }
+            elseif ($x instanceof Html) { $o .= $x->s; }
+            elseif (\is_string($x)) { $o .= $x; }
+            elseif (\is_int($x) || \is_float($x)) { $o .= (string) $x; }
+            elseif ($x === null || \is_bool($x)) { $o .= ''; }
+            else { throw new \InvalidArgumentException('Cannot render ' . \get_debug_type($x) . ' as a markup chunk'); }
+        }
+        return $o;
+    }
     if (\is_string($v))     return \htmlspecialchars($v, FLAGS, 'UTF-8');
     if ($v === null || \is_bool($v)) return '';
     if (\is_int($v) || \is_float($v)) return (string) $v;
@@ -133,6 +149,10 @@ function attrs(array $m): string
             \in_array($lk, ['href', 'src', 'action', 'formaction', 'poster', 'cite', 'data'], true) => u($k, $v),
             $lk === 'class' => cls($v),
             $lk === 'style' => sty($v),
+            // §4.4's spread row: "each entry goes through the same attribute
+            // rules" — a srcset key must split candidates and scheme-check
+            // each URL exactly like a direct srcset={…} attribute (§7.1).
+            $lk === 'srcset' => srcset($k, $v),
             default => a($k, $v),
         };
     }
