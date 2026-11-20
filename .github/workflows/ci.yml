@@ -44,6 +44,7 @@ jobs:
         run: |
           composer install --working-dir=php/runtime --no-interaction --no-progress
           composer install --working-dir=php/lintel --no-interaction --no-progress
+          composer install --working-dir=php/lintel-phpstan --no-interaction --no-progress
           composer install --working-dir=bench --no-interaction --no-progress
       - name: Build the lintel binary for the PHP gates
         run: cargo build --release -p lintel-cli
@@ -51,6 +52,7 @@ jobs:
         run: |
           composer validate --working-dir=php/runtime --no-check-all
           composer validate --working-dir=php/lintel --no-check-all
+          composer validate --working-dir=php/lintel-phpstan --no-check-all
           composer validate --working-dir=bench --no-check-all
       - name: php -l (every tracked PHP file)
         run: bash scripts/php-gates.sh lint
