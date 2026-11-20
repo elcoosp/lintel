@@ -20,6 +20,7 @@
 //! tags are not recognized (deprecated upstream) and `<\Namespaced>` tags
 //! written with a leading backslash are treated as operators.
 
+use crate::analyze::{resolve_decisions, TypeHints};
 use crate::ast::{Attr, Element, Node};
 use crate::emit::{Lowering, StringLowering};
 use crate::text::normalize_jsx_text;
@@ -434,7 +435,21 @@ pub fn scan(src: &str) -> Parsed {
 /// chosen inside the scanner so new targets need no scanner changes.
 #[must_use]
 pub fn scan_with(src: &str, lowering: &dyn Lowering) -> Parsed {
-    let mut scanner = Scanner::new(src, lowering);
+    scan_with_typed(src, lowering, &TypeHints::default())
+}
+
+/// Scan a full `.lintel.php` source with the §7.3-Y2 analyze hints
+/// (`crate::analyze`, `docs/type-elision.md`): every JSX root lowers with
+/// the given strategy through [`Lowering::emit_root_typed`], carrying the
+/// per-child elision decisions resolved from the `PHPStan` bridge's report —
+/// keyed onto each child's absolute source byte offset before lowering, so
+/// the strategy looks decisions up with the offsets the tree already
+/// carries. Hints that match no child (a stale report, a line/text
+/// mismatch, an ambiguous entry) are silently ignored: a stale report must
+/// degrade to the wrapped emission, never to a guessed fold.
+#[must_use]
+pub fn scan_with_typed(src: &str, lowering: &dyn Lowering, hints: &TypeHints) -> Parsed {
+    let mut scanner = Scanner::new(src, lowering, hints);
     scanner.transpile_file();
     Parsed {
         php: scanner.out,
@@ -483,6 +498,9 @@ struct Scanner<'s> {
     context: ScanContext,
     /// Lowering strategy applied to every JSX root as it is parsed (doc 5.3).
     lowering: &'s dyn Lowering,
+    /// The §7.3-Y2 analyze hints (`crate::analyze`): per-root elision
+    /// decisions are resolved from this table at each [`Self::lower_root`].
+    hints: &'s TypeHints,
     /// Function-declaration state machine (see [`FunctionPending`]).
     pending_function: FunctionPending,
     /// Saw `use` and expect the import list next.
@@ -502,7 +520,7 @@ struct Scanner<'s> {
 }
 
 impl<'s> Scanner<'s> {
-    fn new(src: &'s str, lowering: &'s dyn Lowering) -> Self {
+    fn new(src: &'s str, lowering: &'s dyn Lowering, hints: &'s TypeHints) -> Self {
         Self {
             src,
             b: src.as_bytes(),
@@ -513,6 +531,7 @@ impl<'s> Scanner<'s> {
             roots: vec![],
             context: ScanContext::default(),
             lowering,
+            hints,
             pending_function: FunctionPending::default(),
             pending_use: false,
             import_mode: false,
@@ -661,13 +680,20 @@ impl<'s> Scanner<'s> {
 
     /// Parse the JSX root at `start` (an expression-start `<`) and splice
     /// its lowering into the output: the root lowers against the innermost
-    /// enclosing [`FunctionScope`] (root-level context proves nothing).
+    /// enclosing [`FunctionScope`] (root-level context proves nothing), with
+    /// the analyze pass's elision decisions resolved from the hint table
+    /// first (§7.3-Y2) so the strategy sees exact per-child verdicts.
     fn lower_root(&mut self, out: &mut String, start: usize) -> Result<(), Diagnostic> {
         let node = self.parse_element_or_fragment(start)?;
         let total = self.newline_count(start);
         let scopeless = &FunctionScope::EMPTY;
         let scope = self.scopes.last().unwrap_or(scopeless);
-        out.push_str(&self.lowering.emit_root_scoped(&node, total, scope));
+        let decisions = resolve_decisions(&node, self.src, self.hints);
+        out.push_str(
+            &self
+                .lowering
+                .emit_root_typed(&node, total, scope, &decisions),
+        );
         self.roots.push(node);
         Ok(())
     }
