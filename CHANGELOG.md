@@ -5,6 +5,35 @@ All notable changes to Lintel are documented here. The format follows
 versions with SemVer, and the language spec versions separately
 (architecture doc §12.4).
 
+## [Unreleased]
+
+### Added
+
+- **Type-driven escape elision** (§7.3-Y2, `docs/type-elision.md`): the
+  `lintel analyze` path — `php/lintel-phpstan/bin/analyze` runs the PHPStan
+  bridge's `LintelTypesCollector` over the prepared cache and writes
+  `<source>.lintel-types.json`; `lintel analyze <paths> [--types PATH]
+  [--target=…][--format=text|json]` compiles with the proven
+  `int`/`float`/`numeric-string`/`literal` children folded past the v0.1
+  ladder (never over it), reports the elision counters (children /
+  considered / elided / rate) on stderr, and compiles byte-identical to
+  `lintel build` when the report is absent. `bool` deliberately keeps the
+  helper: `c()` renders bools as `''` while raw interpolation renders
+  `'1'` — no fold preserves the output. The `analyze_children` bench
+  drift-checks the counters.
+
+### Fixed
+
+- Root PHPStan level max is clean again: the bridge's `json_decode` shapes
+  decode through `Bridge::decodeDiagnostic` into validated field shapes
+  (no ignores, no level changes), the Plugin's `prod.artifacts` lookup
+  validates the `prod` object first, and the Composer autoloader map reads
+  its documented shape directly.
+- `scripts/php-gates.sh` `php -l` no longer sweeps the `.lintel.php` JSX
+  fixtures (compiler input, not PHP — the exclusion phpstan.neon already
+  documents), and its subcommand mode propagates failures instead of
+  exiting 0 on red (a CI blind spot).
+
 ## [0.1.0] — 2026-11-20
 
 First public release: the MVP scope of the 14-day plan (architecture doc
