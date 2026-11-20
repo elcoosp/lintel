@@ -127,9 +127,10 @@ Details the doc does not pin down, decided here:
 ## What the compiler does not do yet
 
 - **PHPStan-backed elision** (`int|float|bool|numeric-string|literal`) is
-  the §7.3 Y2 plan (`lintel analyze`); benchmarks must report the elision
-  rate when it lands. The `fn`-arrow bodies' own typed parameters also
-  wait for that pass (rule 10).
+  now the shipped `lintel analyze` path — `docs/type-elision.md` records
+  the contract, the per-rule proofs and the elision-rate report; `bool`
+  deliberately keeps the helper (render parity, recorded there). The
+  `fn`-arrow bodies' own typed parameters still wait (rule 10).
 - **No runtime change.** The PHP runtime (T-07) is unaffected: the emitted
   calls shrink, the `\Lintel\c()` helper itself stays for every wrapped
   child.
