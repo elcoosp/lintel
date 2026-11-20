@@ -107,7 +107,11 @@ final class RuntimeStubTest extends TestCase
         }
     }
 
-    /** The runtime's helper functions with their ordered `$name`/type pairs. */
+    /**
+     * The runtime's helper functions with their ordered `$name`/type pairs.
+     *
+     * @return array<string, array<int, array{name: string, type: string}>>
+     */
     private static function runtimeFunctions(): array
     {
         $names = ['e', 'c', 'a', 'u', 'srcset', 'cls', 'sty', 'attrs'];
@@ -137,19 +141,27 @@ final class RuntimeStubTest extends TestCase
             // `type $name = default` / `...$name` — the name is the first
             // `$identifier`; the type is the text before it.
             if (preg_match('/^(.*?)\$\w+/', $segment, $match) === 1) {
-                preg_match('/\$(\w+)/', $segment, $nameMatch);
                 $type = trim($match[1], ' &');
                 // Promotion modifiers ride the declaration, not the type.
                 foreach (['public', 'private', 'protected', 'readonly'] as $modifier) {
                     $type = preg_replace('/^' . $modifier . '\s+/i', '', $type) ?? $type;
                 }
                 $params[] = [
-                    'name' => '$' . $nameMatch[1],
+                    'name' => self::paramName($segment),
                     'type' => self::normalize($type),
                 ];
             }
         }
         return $params;
+    }
+
+    /** The first `$identifier` in a parameter source, `''` when none. */
+    private static function paramName(string $segment): string
+    {
+        if (preg_match('/\$(\w+)/', $segment, $nameMatch) !== 1) {
+            return '';
+        }
+        return '$' . $nameMatch[1];
     }
 
     private static function typeString(?\ReflectionType $type): string
