@@ -61,7 +61,9 @@ final class BridgeTest extends TestCase
         self::assertNotNull($metadata, 'the sidecar exists beside the artifact shell');
         self::assertSame(dirname(__DIR__) . '/tests/fixture/Diagnostics.lintel.php', $metadata['source']);
         self::assertNull($metadata['artifact'], 'a failing source produces no compiled artifact');
-        $codes = array_map(static fn (array $diagnostic): string => (string) $diagnostic['code'], $metadata['diagnostics']);
+        // The diagnostics are the bridge's validated shape — `code` is
+        // proven by `Bridge::decodeDiagnostic`, no re-narrowing here.
+        $codes = array_map(static fn (array $diagnostic): string => $diagnostic['code'], $metadata['diagnostics']);
         self::assertContains('LNT0205', $codes, 'the missing-required rejection is recorded');
         self::assertContains('LNT0203', $codes, 'the unknown-prop rejection is recorded');
         self::assertSame('', $prepared->artifact);
