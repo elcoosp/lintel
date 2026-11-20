@@ -3,6 +3,7 @@ resolver = "2"
 members = ["crates/lintel-diag", "crates/lintel-core", "crates/lintel-cli", "crates/lintel-wasm", "crates/lintel-docs"]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.80"
