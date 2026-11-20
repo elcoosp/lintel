@@ -64,6 +64,7 @@
 //! same-file boundary rules respected until then
 //! (`docs/cross-file-signatures.md`).
 
+pub mod analyze;
 pub mod ast;
 pub mod emit;
 pub mod inventory;
@@ -71,7 +72,9 @@ pub mod scan;
 pub mod text;
 pub mod validate;
 
+pub use analyze::{stale_hints, ChildHint, ChildKind, StaleHint, TypeHints};
 pub use ast::{visit_node, visit_roots, NodeVisitor};
+pub use emit::AnalyzeLowering;
 pub use inventory::{collect_inventory, DeclaredComponent, FileInventory, Invocation};
 pub use lintel_diag::{json_escape, Code, Diagnostic, Severity, SourceMap};
 pub use validate::{builtin_rule_metas, builtin_rules, registry_metas, RuleMeta, ValidationRule};
@@ -148,7 +151,34 @@ pub fn compile_with(
     opts: &Options,
     rules: &[&dyn ValidationRule],
 ) -> Result<Output, Vec<Diagnostic>> {
-    let parsed = scan::scan_with(src, emit::lowering_for(opts.target));
+    Ok(compile_analyzed(src, opts, &TypeHints::default(), rules)?.output)
+}
+
+/// The §7.3-Y2 analyze compile (`docs/type-elision.md`): compile `src` with
+/// the `PHPStan` bridge's proven child-expression types (`hints`, resolved
+/// per absolute source line + expression text) driving escape elision.
+///
+/// Elision is conservative end to end: only children the analyze pass
+/// PROVED `int|float|numeric-string|literal` fold, and only past the v0.1
+/// ladder (typed parameters, casts, `count()`) which keeps its exact
+/// behavior; every unproven/ambiguous/mismatched child keeps
+/// `\Lintel\c()`. With an empty hint table the output equals [`compile`]
+/// byte for byte. The [`AnalyzedOutput`] counters report the elision rate
+/// (§7.3-Y2: "Benchmarks must report elision rate").
+///
+/// # Errors
+///
+/// Same contract as [`compile`]: every error-severity [`Diagnostic`] found
+/// while scanning or validating fails the whole compilation, warnings ride
+/// along on [`Output::warnings`].
+pub fn compile_analyzed(
+    src: &str,
+    opts: &Options,
+    hints: &TypeHints,
+    rules: &[&dyn ValidationRule],
+) -> Result<AnalyzedOutput, Vec<Diagnostic>> {
+    let lowering = emit::AnalyzeLowering::new(opts.target);
+    let parsed = scan::scan_with_typed(src, &lowering, hints);
     if !parsed.diagnostics.is_empty() {
         return Err(parsed.diagnostics);
     }
@@ -159,10 +189,40 @@ pub fn compile_with(
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok(Output {
-        php: parsed.php,
-        warnings,
+    Ok(AnalyzedOutput {
+        output: Output {
+            php: parsed.php,
+            warnings,
+        },
+        dynamic_children: lowering.dynamic_children(),
+        considered: lowering.considered(),
+        elided: lowering.elided(),
     })
+}
+
+/// The [`compile_analyzed`] result: the compiled output plus the
+/// elision-rate counters the analyze pass must report (§7.3-Y2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzedOutput {
+    /// The compiled PHP and the validation warnings.
+    pub output: Output,
+    /// Every dynamic child lowered on the markup targets (the rate's
+    /// denominator).
+    pub dynamic_children: u32,
+    /// Children that reached the analyze decision step (past the v0.1
+    /// folds).
+    pub considered: u32,
+    /// Children elided by the analyze pass (a subset of `considered`).
+    pub elided: u32,
+}
+
+impl AnalyzedOutput {
+    /// The elision rate: the fraction of decision-reachable children the
+    /// analyze pass elided, or `None` when none reached the step.
+    #[must_use]
+    pub fn elision_rate(&self) -> Option<f64> {
+        (self.considered > 0).then(|| f64::from(self.elided) / f64::from(self.considered))
+    }
 }
 
 #[cfg(test)]
