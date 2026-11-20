@@ -1,0 +1,21 @@
+[package]
+name = "lintel-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lintel-core = { path = "../crates/lintel-core" }
+
+[[bin]]
+name = "compile_fuzz"
+path = "fuzz_targets/compile_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
