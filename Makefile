@@ -54,7 +54,7 @@ fuzz:  ## 60s smoke (requires cargo-fuzz + the T-09 fuzz targets)
 
 bench:  ## Docker, pinned PHP 8.6 digest; writes bench/results/
 	@if docker info >/dev/null 2>&1; then \
-		docker build -f bench/Dockerfile -t lintel-bench bench/ && \
+		docker build -f bench/Dockerfile -t lintel-bench . && \
 		docker run --rm \
 			-v "$$PWD/target/release/lintel:/lintel/lintel:ro" \
 			-v "$$PWD/bench/results:/app/bench/results" \
