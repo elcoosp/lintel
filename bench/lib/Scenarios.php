@@ -250,25 +250,21 @@ function S5Page(array $d): Html
 }
 PHP;
 
-        // The v0.1 stream emit lowers JSX to `static function (): \Generator`
-        // closures WITHOUT a use-capture (docs/stream-alignment.md as
-        // shipped), so a streamed component body cannot see its own locals:
-        // the stream lane's source reads its data through a superglobal.
-        // Recorded as a §21.2 observation; the emit fix is backlog.
+        // The stream emit lowers JSX to `static function () use (...):
+        // \Generator` closures that capture the enclosing locals their body
+        // references (the §21.2 emit fix), so this lane reads its data
+        // through ordinary function parameters — a DYNAMIC streaming
+        // component: every yield flows through the capture at runtime.
         $streamSource = self::SRC_HEAD . <<<'PHP'
 function S5BoundaryStream(string $label, int $ms): \Generator
 {
     \usleep($ms * 1000);
-    // The emitted static closure cannot see the parameter either (same
-    // no-use-capture limitation), so the body parks its argument in the
-    // superglobal the JSX reads back.
-    $GLOBALS['bench_label'] = $label;
-    return <div class="boundary">{$GLOBALS['bench_label']} resolved</div>;
+    return <div class="boundary">{$label} resolved</div>;
 }
 
-function S5PageStream(): \Generator
+function S5PageStream(array $d): \Generator
 {
-    return <main class="s5"><h1>{$GLOBALS['bench_data']['title']}</h1><S5BoundaryStream label="one" ms={$GLOBALS['bench_data']['ms']} /><S5BoundaryStream label="two" ms={$GLOBALS['bench_data']['ms']} /><S5BoundaryStream label="three" ms={$GLOBALS['bench_data']['ms']} /></main>;
+    return <main class="s5"><h1>{$d['title']}</h1><S5BoundaryStream label="one" ms={$d['ms']} /><S5BoundaryStream label="two" ms={$d['ms']} /><S5BoundaryStream label="three" ms={$d['ms']} /></main>;
 }
 PHP;
 
