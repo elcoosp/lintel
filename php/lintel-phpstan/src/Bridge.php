@@ -87,7 +87,10 @@ final class Bridge
         }
 
         // 2. Record the compiler's diagnostics for the source, whatever
-        //    the compile verdict was.
+        //    the compile verdict was. Each JSON line decodes into the
+        //    validated diagnostic shape (`docs/diagnostics-json.md`'s
+        //    stable fields) — malformed lines cannot become half-typed
+        //    metadata the rule would have to re-guess.
         $check = self::run([$binary, 'check', $sourcePath, '--format=json']);
         $diagnostics = [];
         foreach (explode("\n", trim($check['stderr'])) as $line) {
@@ -96,7 +99,7 @@ final class Bridge
             }
             $decoded = json_decode($line, true);
             if (is_array($decoded)) {
-                $diagnostics[] = $decoded;
+                $diagnostics[] = self::decodeDiagnostic($decoded);
             }
         }
         $metaPath = $artifact . self::METADATA_SUFFIX;
@@ -184,7 +187,7 @@ final class Bridge
      * compiled Lintel artifact (every ordinary PHP file in the project).
      * The rule calls this per file; a missing sidecar is the common case.
      *
-     * @return array{source: string, artifact: string|null, diagnostics: array<mixed, mixed>}|null
+     * @return array{source: string, artifact: string|null, diagnostics: list<array{code: string, severity: string, message: string, offset: int, line: int, col: int, help: string|null, docs: string}>}|null
      */
     public static function metadataFor(string $artifactPath): ?array
     {
@@ -202,10 +205,45 @@ final class Bridge
             return null;
         }
         $artifact = $decoded['artifact'] ?? null;
+        $diagnostics = [];
+        foreach ($decoded['diagnostics'] as $raw) {
+            if (is_array($raw)) {
+                $diagnostics[] = self::decodeDiagnostic($raw);
+            }
+        }
         return [
             'source' => $decoded['source'],
             'artifact' => is_string($artifact) ? $artifact : null,
-            'diagnostics' => $decoded['diagnostics'],
+            'diagnostics' => $diagnostics,
+        ];
+    }
+
+    /**
+     * The validated diagnostic shape (`docs/diagnostics-json.md`'s stable
+     * fields — code, severity, message, offset, line, col, help, docs; new
+     * fields may be appended, these never renamed). Every field carries a
+     * fallback with the exact semantics the diagnostics rule used to
+     * apply per-consumer, so decoding is the single validation point:
+     * the compiler always emits this shape, and anything malformed
+     * degrades to the same defaults the rule's own guards spelled — it
+     * never produces a half-typed entry downstream code must re-guess.
+     *
+     * @param array<mixed, mixed> $raw
+     * @return array{code: string, severity: string, message: string, offset: int, line: int, col: int, help: string|null, docs: string}
+     */
+    public static function decodeDiagnostic(array $raw): array
+    {
+        $code = is_string($raw['code'] ?? null) ? $raw['code'] : 'LNT????';
+        $message = is_string($raw['message'] ?? null) ? $raw['message'] : 'unknown Lintel diagnostic';
+        return [
+            'code' => $code,
+            'severity' => is_string($raw['severity'] ?? null) ? $raw['severity'] : 'error',
+            'message' => $message,
+            'offset' => is_int($raw['offset'] ?? null) ? $raw['offset'] : 0,
+            'line' => is_int($raw['line'] ?? null) ? $raw['line'] : 1,
+            'col' => is_int($raw['col'] ?? null) ? $raw['col'] : 1,
+            'help' => is_string($raw['help'] ?? null) ? $raw['help'] : null,
+            'docs' => is_string($raw['docs'] ?? null) ? $raw['docs'] : '',
         ];
     }
 
