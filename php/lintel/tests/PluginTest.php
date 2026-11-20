@@ -86,6 +86,7 @@ final class PluginTest extends TestCase
     protected function tearDown(): void
     {
         putenv('LINTEL_BIN');
+        unset($GLOBALS['lintelProdArtifacts'], $GLOBALS['lintelFromSource']);
     }
 
     public function testSubscribesToPostAutoloadDump(): void
@@ -148,6 +149,140 @@ final class PluginTest extends TestCase
         self::assertStringContainsStringIgnoringCase('LINTEL_BIN', $io->getOutput());
     }
 
+
+    public function testSubscribesToPreAutoloadDump(): void
+    {
+        $events = Plugin::getSubscribedEvents();
+        self::assertArrayHasKey(ScriptEvents::PRE_AUTOLOAD_DUMP, $events);
+        self::assertSame('injectFunctionAutoload', $events[ScriptEvents::PRE_AUTOLOAD_DUMP]);
+    }
+
+    public function testInjectsFilesAutoloadFromTheProdManifest(): void
+    {
+        // T-31: the prod lane. `lintel build --manifest` wrote `prod.files`;
+        // the plugin generates <vendor>/lintel/functions.php requiring every
+        // artifact and appends it to the root package's `files` autoload.
+        $project = $this->projectDir();
+        mkdir($project . '/build', 0777, true);
+        file_put_contents(
+            $project . '/build/Card.php',
+            "<?php\n\nnamespace Smoke;\n\nfunction prodCard(): string\n{\n    return 'from-prod-artifact';\n}\n"
+        );
+        file_put_contents(
+            $project . '/lintel.json',
+            '{"functions": ["src/*.lintel.php"], '
+            . '"prod": {"artifacts": {"src/Card.lintel.php": "build/Card.php"}}}'
+        );
+
+        $plugin = new Plugin();
+        $composer = $this->composer($project, []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+
+        self::assertFileExists($project . '/vendor/lintel/functions.php');
+        $generated = (string) file_get_contents($project . '/vendor/lintel/functions.php');
+        self::assertStringContainsString("dirname(__DIR__, 2)", $generated, 'the shim resolves artifacts against the project root');
+        self::assertStringContainsString("'src/Card.lintel.php' => 'build/Card.php'", $generated, 'the shim carries the source-artifact pair');
+        self::assertStringContainsString("lintelFromSource", $generated, 'the shim records the sources it loaded');
+        self::assertStringNotContainsString($project, $generated, 'no absolute path leaks into the shim');
+
+        $autoload = $composer->getPackage()->getAutoload();
+        self::assertContains('vendor/lintel/functions.php', $autoload['files'] ?? []);
+
+        // The shim itself works: requiring it (as Composer's files autoload
+        // would) defines the function — no manual require, no dev loader.
+        require $project . '/vendor/lintel/functions.php';
+        self::assertTrue(function_exists('\Smoke\prodCard'));
+        self::assertSame('from-prod-artifact', \Smoke\prodCard());
+        self::assertStringContainsString('function-component artifact', $io->getOutput());
+    }
+
+    public function testInjectionIsIdempotentAcrossRepeatedDumps(): void
+    {
+        $project = $this->projectDir();
+        file_put_contents(
+            $project . '/lintel.json',
+            '{"prod": {"artifacts": {"src/A.lintel.php": "build/A.php"}}}'
+        );
+
+        $plugin = new Plugin();
+        $composer = $this->composer($project, []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+
+        $files = $composer->getPackage()->getAutoload()['files'] ?? [];
+        self::assertCount(1, $files, 'a second dump must not duplicate the entry');
+        self::assertSame(['vendor/lintel/functions.php'], $files);
+    }
+
+    public function testWithoutAProdSectionTheInjectionIsASilentNoOp(): void
+    {
+        // A dev-only manifest (functions globs, no prod) injects nothing —
+        // and is not an error: the plugin ran fine before T-31 too.
+        $project = $this->projectDir();
+        file_put_contents($project . '/lintel.json', '{"functions": ["src/*.lintel.php"]}');
+
+        $plugin = new Plugin();
+        $composer = $this->composer($project, []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+
+        self::assertFileDoesNotExist($project . '/vendor/lintel/functions.php');
+        $autoload = $composer->getPackage()->getAutoload();
+        self::assertArrayNotHasKey('files', $autoload, 'no files entry without a prod section');
+    }
+
+    public function testAMalformedProdSectionIsAnIoNoticeNotAFailure(): void
+    {
+        // composer install must never fail over the manifest: a malformed
+        // `prod.files` is a notice on the error stream and a no-op.
+        $project = $this->projectDir();
+        file_put_contents($project . '/lintel.json', '{"prod": {"artifacts": 42}}');
+
+        $plugin = new Plugin();
+        $composer = $this->composer($project, []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+
+        self::assertFileDoesNotExist($project . '/vendor/lintel/functions.php');
+        self::assertStringContainsString('skipping the prod function autoload', $io->getOutput());
+        $autoload = $composer->getPackage()->getAutoload();
+        self::assertArrayNotHasKey('files', $autoload);
+    }
+
+    public function testAMalformedArtifactValueIsAnIoNoticeNotAFailure(): void
+    {
+        $project = $this->projectDir();
+        file_put_contents(
+            $project . '/lintel.json',
+            '{"prod": {"artifacts": {"src/Card.lintel.php": 42}}}'
+        );
+
+        $plugin = new Plugin();
+        $composer = $this->composer($project, []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+
+        self::assertFileDoesNotExist($project . '/vendor/lintel/functions.php');
+        self::assertStringContainsString('skipping the prod function autoload', $io->getOutput());
+    }
+
+    public function testAMissingManifestIsASilentNoOp(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $plugin = new Plugin();
+        $composer = $this->composer($this->projectDir(), []);
+        $io = new BufferIO();
+        $plugin->activate($composer, $io);
+        $plugin->injectFunctionAutoload($this->preloadDumpEvent($composer, $io));
+    }
+
     /** A minimal composer object rooted at $project with the given extra.
      *
      * @param array<string, mixed> $extra
@@ -167,6 +302,11 @@ final class PluginTest extends TestCase
     private function dumpEvent(Composer $composer, IOInterface $io): Event
     {
         return new Event(ScriptEvents::POST_AUTOLOAD_DUMP, $composer, $io);
+    }
+
+    private function preloadDumpEvent(Composer $composer, IOInterface $io): Event
+    {
+        return new Event(ScriptEvents::PRE_AUTOLOAD_DUMP, $composer, $io);
     }
 
     private function projectDir(): string
