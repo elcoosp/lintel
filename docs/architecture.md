@@ -1273,7 +1273,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 > §6.8 PHP runtime transcription, the §7.2 PHPUnit threat corpus, PHPStan
 > level max, and the `php -l` gates that close the never-executable T-05
 > and T-10 acceptance halves — Rust integration tests wired through
-> `PHP_BIN` plus a new CI `php` job).
+> `PHP_BIN` plus a new CI `php` job), and again after the thirteenth pass
+> (task-cards T-11, T-14 and T-15: the `php/lintel` composer package —
+> installer plugin + no-watcher dev loader — the §9.2 `bench/` harness with
+> committed JSON/Markdown/SVG results, the §18 Makefile, cargo-deny (T-01),
+> and the five T-15 demos behind `lintel init --demo N`).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1302,6 +1306,11 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | Cross-file signature merge (eleventh pass) | **done** | `ScanContext::merged_with(&self, &ScanContext) → ScanContext` in `crates/lintel-core/src/scan.rs`: unions the declared-function set and the signature table for cross-file signature checks (`LNT0201`/`LNT0203`/`LNT0204`/`LNT0205` resolve against components declared in other files when a consumer validates with the merged context). The base file wins case-insensitive name collisions and keeps declaration order (documented non-commutative), the merge is read-only on both inputs, and suppression state deliberately does not merge (`lintel-ignore-*` windows and the file flag are per-source facts). Opt-in: `compile`/`validate_with` never merge on their own, so the §17.1 same-file boundary stands by default. The contract is recorded in `docs/cross-file-signatures.md`, tested by `tests/cross_file.rs`, demoed by `examples/cross_file.rs` and benched by the `cross_file` group |
 | T-06 line preservation | **done** | `tests/line_preservation.rs` + every golden asserts line-count equality; the `rfc` target preserves lines too |
 | T-07 runtime + security corpus | **done** | `php/runtime/src/functions.php` — the §6.8 transcription plus the `srcset()` helper §7.1 promises (`docs/srcset-alignment.md`) and a global `Html` alias so author-side unqualified `Html` type hints resolve; `php/runtime/tests/ThreatCorpusTest.php` — the §7.2 PHPUnit corpus (27 tests over every listed threat vector plus the §7.1 helper matrix); `phpstan.neon` — level max over `php/`, clean; `php/runtime/composer.json` — the dev-tooling lane (`composer test` / `composer stan`); CI gained the `php` job (setup-php, composer install, `PHP_BIN=php` wired into the Rust gates, PHPUnit, PHPStan) |
+| T-11 Composer packages + installer plugin + dev Loader | **done** | `php/lintel` (`composer.json` for `lintel/lintel`, type composer-plugin): `src/Installer/Plugin.php` + `BinaryInstaller.php` (§12 download → SHA-256 verify → atomic executable cache at `<vendor>/bin/lintel`; `LINTEL_BIN` override; **no invented release URL** — no live URLs exist before T-18, an unconfigured install is a notice, and `extra.lintel.url` without `sha256` refuses) + `src/Dev/Loader.php` (§6.10: PSR-4 fallback autoloader over `ClassLoader::getRegisteredLoaders()`, mtime+size compile-on-stale cache, `lintel.json` functions-glob eager-require — the T-31 note — and the proc_open fallback, the T-12 daemon being gated). PHPUnit corpus 23 tests / 68 assertions (the installer download lane runs against a real local `php -S` fixture URL), PHPStan level max clean, `composer validate` clean. Acceptance executed for real: `scripts/dx-smoke.sh` drives a fresh plain-PHP skeleton AND a fresh `composer create-project laravel/laravel` skeleton through `composer require` → edit → refresh → recompiled, no watcher; the CI `dx` job replays it |
+| T-14 Benchmark harness | **done (native results committed; Docker-pinned run wired to CI)** | `bench/` — `run.php` (worker/orchestrator), `lib/` (the §9.2 scenarios S1–S5, Blade/Twig/Plates engines, the measurement-only `\Markup\Element` reference shape so the `rfc` lane is executed, not skipped, metrics/SVG/Markdown writers); OPcache/JIT matrix over three PHP subprocess settings; ns/render median+p95 over 30 runs, peak memory, compile throughput (cold/warm: 23k/25k files/s native), opcode-count probe (null on this stripped static runtime — instrumentation unavailable; the CI job re-probes on the pinned image); `bench/results/` commits the raw JSON + summary Markdown + five SVG charts from the native run with full provenance. `bench/Dockerfile` pins `php:8.6-cli` by digest (a real registry digest queried 2026-11-20); `make bench` runs Docker-pinned when a daemon exists, native otherwise; the CI `bench` job runs the pinned reproduction |
+| T-15 Five demos | **done** | `lintel init --demo N` (1-5) scaffolds component-library, XSS-gallery (the §7.2 corpus, neutralized in text + URL positions), 10k-row table, HTMX todo, compile-error showcase (LNT cards as content); each ≤ 60 lines (max 31), compiles zero-diagnostics with line preservation pinned by a test, and **executes under PHP with asserted output** (`tests/php_demo.rs` reuses the php_demo gate pattern: `php -l`, render, per-demo assertions) |
+| §18 Makefile | **done** | repo-root `Makefile` with the four documented targets: `ci` (fmt, clippy -D warnings, test, php lint, phpunit, phpstan), `golden` (the golden + line-preservation tests), `fuzz` (preflights cargo-fuzz and points at T-09, which owns the targets), `bench` (Docker-pinned §9.2 reproduction, native fallback); `scripts/php-gates.sh` backs the PHP half |
+| T-01 cargo-deny drift | **closed** | `deny.toml` (advisories/licenses/bans/sources) + the CI cargo-deny step; `cargo deny check` green locally (intra-workspace path-dependency wildcards allowed with rationale; no speculative license allowances) |
 | T-09+ differential/fuzz/daemon/WASM | **not started** | — |
 
 Benchmarks live in `crates/lintel-core/benches/compile.rs` (criterion): the
@@ -1387,6 +1396,37 @@ The CI `php` job pins PHP 8.4 (`shivammathur/setup-php`), not the doc's
 "PHP 8.6 container": 8.6 is the launch target, 8.4 is the maintained
 runtime the corpus can actually exercise; the runtime package declares
 `php: >=8.1`.
+
+The thirteenth pass (T-11/T-14/T-15) recorded five deviations, each forced
+by a failing gate rather than preference:
+
+- **§6.10's `ClassLoader::class::getRegisteredLoaders()` line is invalid
+  PHP** — `php -l` rejects the double-`::` chain outright. The loader uses
+  the correct static call `ClassLoader::getRegisteredLoaders()`; its tests
+  register a real `ClassLoader` (constructed with a vendor dir — the only
+  way `register()` records a loader in `getRegisteredLoaders()`).
+- **§6.10's cache key carries no size.** The doc hashes the path and adds
+  `filemtime` only; a test edits a source with the *same* mtime and a
+  different size and is served stale forever. The key is now
+  `hash('xxh3', $file) . '-' . mtime . '-' . size`.
+- **§6.10's `lintel build --stdout` flag does not exist.** The real §6.7
+  CLI rejects `--stdout` (exit 2): `build` writes stdout by default. The
+  loader invokes `lintel build <file>`.
+- **The stream emit's `static function (): \Generator` closures capture
+  nothing** (docs/stream-alignment.md as shipped): a streamed component
+  body cannot see its own locals — not even its own function's parameters.
+  The bench S5 stream lane routes its data through a superglobal; the emit
+  fix (emit `use (...)` for referenced locals) is backlog item (§f); the
+  compiler core stays frozen this session.
+- **`make golden` runs the committed golden + line-preservation tests
+  instead of `cargo insta review`** — no cargo-insta dependency exists in
+  the tree; the goldens are plain integration tests (§21.1).
+
+Two doc-open decisions resolved here: the installer never invents a live
+release URL (no releases exist before T-18; `LINTEL_BIN` and
+`extra.lintel` {url, sha256} are the supported sources), and the
+`lintel.json` manifest path defaults to the process cwd with an explicit
+`Loader::boot(..., projectRoot:)` override (§6.10 does not pin it).
 
 ### 21.3 Documented v0.1 scanner limitations
 
