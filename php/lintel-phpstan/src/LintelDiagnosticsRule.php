@@ -36,19 +36,16 @@ final class LintelDiagnosticsRule implements \PHPStan\Rules\Rule
         }
 
         $errors = [];
+        // The sidecar's diagnostics are decoded into the validated shape
+        // (`Bridge::decodeDiagnostic`) — every field the rule reports is
+        // already the compiler's own value or the documented fallback.
         foreach ($metadata['diagnostics'] as $diagnostic) {
-            if (! is_array($diagnostic)) {
-                continue;
-            }
-            $code = is_string($diagnostic['code'] ?? null) ? $diagnostic['code'] : 'LNT????';
-            $message = is_string($diagnostic['message'] ?? null) ? $diagnostic['message'] : 'unknown Lintel diagnostic';
-            $builder = \PHPStan\Rules\RuleErrorBuilder::message($message)
-                ->identifier('lintel.' . $code)
+            $builder = \PHPStan\Rules\RuleErrorBuilder::message($diagnostic['message'])
+                ->identifier('lintel.' . $diagnostic['code'])
                 ->file($metadata['source'])
-                ->line(max(1, (int) ($diagnostic['line'] ?? 1)));
-            $help = $diagnostic['help'] ?? null;
-            if (is_string($help) && $help !== '') {
-                $builder->tip($help);
+                ->line(max(1, $diagnostic['line']));
+            if ($diagnostic['help'] !== null && $diagnostic['help'] !== '') {
+                $builder->tip($diagnostic['help']);
             }
             $errors[] = $builder->build();
         }
