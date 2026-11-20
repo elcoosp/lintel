@@ -16,6 +16,8 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy (pedantic, warnings as errors)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
+      - name: cargo-deny (T-01: advisories, licenses, bans, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
       - name: Tests (all features)
         run: cargo test --workspace --all-features
       - name: Benches (smoke)
@@ -29,14 +31,61 @@ jobs:
         with:
           php-version: '8.4'
           coverage: none
+          tools: composer
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install PHP dev tooling (PHPUnit, PHPStan)
-        run: composer install --working-dir=php/runtime --no-interaction --no-progress
+      - name: Install PHP dev tooling (both packages + the bench lane)
+        run: |
+          composer install --working-dir=php/runtime --no-interaction --no-progress
+          composer install --working-dir=php/lintel --no-interaction --no-progress
+          composer install --working-dir=bench --no-interaction --no-progress
+      - name: Build the lintel binary for the PHP gates
+        run: cargo build --release -p lintel-cli
+      - name: composer validate (every composer.json)
+        run: |
+          composer validate --working-dir=php/runtime --no-check-all
+          composer validate --working-dir=php/lintel --no-check-all
+          composer validate --working-dir=bench --no-check-all
+      - name: php -l (every tracked PHP file)
+        run: bash scripts/php-gates.sh lint
       - name: Rust PHP gates (php -l on every golden output + init demo execution)
         run: cargo test --workspace --all-features
         env:
           PHP_BIN: php
-      - name: PHPUnit threat corpus (§7.2)
-        run: php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
+      - name: PHPUnit threat corpus (§7.2) + installer/loader suite
+        run: bash scripts/php-gates.sh test
+        env:
+          LINTEL_TEST_BIN: ${{ github.workspace }}/target/release/lintel
       - name: PHPStan (level max)
-        run: php php/runtime/vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+        run: bash scripts/php-gates.sh stan
+
+  dx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the lintel binary
+        run: cargo build --release -p lintel-cli
+      - name: T-11 acceptance — fresh plain-PHP AND Laravel skeletons (composer require → edit → refresh, no watcher)
+        run: bash scripts/dx-smoke.sh
+        env:
+          LINTEL_BIN: ${{ github.workspace }}/target/release/lintel
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the lintel binary
+        run: cargo build --release -p lintel-cli
+      - name: T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin)
+        run: make bench
+      - name: Commit-nothing guard — results land as job artifacts, not tree edits
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/
