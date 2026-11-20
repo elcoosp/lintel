@@ -1,0 +1,19 @@
+[package]
+name = "lintel-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The Lintel language-server foundation: diagnostics and hover for .lintel.php files"
+repository = "https://github.com/elcoosp/lintel"
+
+[dependencies]
+lintel-core = { path = "../lintel-core" }
+# The T-21 wire types (initialize, publishDiagnostics, hover) come from
+# lsp-types; serde_json drives the JSON-RPC framing both sides speak.
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true
