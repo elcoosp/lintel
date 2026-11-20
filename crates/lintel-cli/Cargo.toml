@@ -9,6 +9,11 @@ repository = "https://github.com/elcoosp/lintel"
 
 [dependencies]
 lintel-core = { path = "../lintel-core" }
+# The T-31 manifest reads/updates the project's `lintel.json` as real JSON
+# (preserving the user's keys) — hand-rolled splicing would corrupt it.
+serde_json = "1"
+# The T-12 daemon watches the project for changed `.lintel.php` sources.
+notify = "8"
 
 [[bin]]
 name = "lintel"
@@ -19,3 +24,4 @@ workspace = true
 
 [dev-dependencies]
 lintel-core = { path = "../lintel-core" }
+serde_json = "1"
