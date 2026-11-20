@@ -265,7 +265,7 @@ fn usage_errors_cover_flags_paths_and_modes() {
     let path = source.to_str().expect("utf8 path");
     assert_eq!(
         usage_error(&[]),
-        "missing command: build, check, stats or migrate"
+        "missing command: build, check, stats, rules, init, watch or migrate"
     );
     assert!(usage_error(&["compile", path]).contains("unknown command `compile`"));
     assert!(usage_error(&["build", "--wat", path]).contains("unknown flag `--wat`"));
@@ -618,5 +618,152 @@ fn build_accepts_both_out_spellings() {
     let written = out.join("Page.php");
     let php = fs::read_to_string(&written).expect("the inline form wrote the file");
     assert!(php.contains("new \\Lintel\\Html("), "{php}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+const FUNCTION_SOURCE: &str = concat!(
+    "<?php\n\nnamespace App\\Ui;\n\nuse Lintel\\Html;\n\n",
+    "function card(string $title): Html\n{\n    return <div class=\"card\">{$title}</div>;\n}\n",
+    "function helper(int $n): int\n{\n    return $n + 1;\n}\n"
+);
+
+#[test]
+fn build_manifest_writes_the_component_map_and_prod_files() {
+    // T-31: `build --out DIR --manifest PATH` emits `components` (name →
+    // source) and `prod.files` (the compiled artifacts), preserving the
+    // user's `functions` globs.
+    let dir = scratch("manifest-build");
+    fs::create_dir_all(dir.join("src")).expect("creates src/");
+    let source = write_source(&dir, "src/Card.lintel.php", FUNCTION_SOURCE);
+    let manifest = dir.join("lintel.json");
+    fs::write(&manifest, r#"{"functions": ["src/*.lintel.php"]}"#).expect("seeds the manifest");
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        "--out",
+        dir.join("build").to_str().expect("utf8 path"),
+        &format!("--manifest={}", manifest.display()),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "", "no stdout when writing to --out");
+    let written = fs::read_to_string(&manifest).expect("reads the manifest");
+    let decoded: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    assert_eq!(
+        decoded["components"]["card"], "src/Card.lintel.php",
+        "{written}"
+    );
+    assert_eq!(
+        decoded["prod"]["artifacts"]["src/Card.lintel.php"], "build/Card.php",
+        "the compiled artifact pairs with its source in prod.artifacts"
+    );
+    assert_eq!(decoded["functions"][0], "src/*.lintel.php", "{written}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_manifest_on_a_stdout_build_omits_prod() {
+    let dir = scratch("manifest-stdout-build");
+    let source = write_source(&dir, "Card.lintel.php", FUNCTION_SOURCE);
+    let manifest = dir.join("lintel.json");
+    let (code, stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 path"),
+        &format!("--manifest={}", manifest.display()),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("new \\Lintel\\Html("),
+        "stdout still compiles"
+    );
+    let decoded: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest).expect("reads manifest"))
+            .expect("valid JSON");
+    assert_eq!(
+        decoded["components"]["card"], "Card.lintel.php",
+        "{decoded}"
+    );
+    assert!(
+        decoded.get("prod").is_none(),
+        "a stdout build writes no artifacts, so no prod section"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_manifest_without_a_value_defaults_to_lintel_json() {
+    // Bare `--manifest` never consumes the next token: a following path is
+    // a build input, not a manifest value. The default writes `lintel.json`
+    // in the process's working directory, so this one runs the real binary
+    // from the scratch dir (the in-process engine shares this process's cwd).
+    let dir = scratch("manifest-default");
+    let source = write_source(&dir, "Card.lintel.php", FUNCTION_SOURCE);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lintel"))
+        .args(["build", "--manifest", source.to_str().expect("utf8 path")])
+        .current_dir(&dir)
+        .output()
+        .expect("runs the lintel binary");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        dir.join("lintel.json").is_file(),
+        "the default manifest path is ./lintel.json"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn manifest_flag_is_build_only() {
+    assert!(
+        usage_error(&["migrate", "--manifest", "x"]).contains("--manifest is a `build` flag"),
+        "migrate emits RFC-parity artifacts no autoloader can require"
+    );
+    assert!(
+        usage_error(&["check", "--manifest", "x"]).contains("--manifest is a `build` flag"),
+        "check writes nothing, so a manifest has nothing to record"
+    );
+    assert!(
+        usage_error(&["stats", "--manifest", "x"]).contains("--manifest is a `build` flag"),
+        "stats is a shape report"
+    );
+}
+
+#[test]
+fn build_manifest_skips_failed_sources() {
+    // A source that fails to compile contributes no manifest entries (and
+    // no prod artifact), but still fails the build.
+    let dir = scratch("manifest-failed");
+    let good = write_source(&dir, "Good.lintel.php", FUNCTION_SOURCE);
+    let bad = write_source(&dir, "Bad.lintel.php", ERROR_SOURCE);
+    let manifest = dir.join("lintel.json");
+    let (code, _stdout, stderr) = run_cli(&[
+        "build",
+        good.to_str().expect("utf8 path"),
+        bad.to_str().expect("utf8 path"),
+        "--out",
+        dir.join("build").to_str().expect("utf8 path"),
+        &format!("--manifest={}", manifest.display()),
+    ]);
+    assert_eq!(code, 1, "the failing source fails the build: {stderr}");
+    let decoded: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest).expect("reads manifest"))
+            .expect("valid JSON");
+    assert_eq!(
+        decoded["components"]["card"], "Good.lintel.php",
+        "{decoded}"
+    );
+    assert!(
+        decoded["components"].get("helper").is_none(),
+        "non-Html functions are not components: {decoded}"
+    );
+    assert_eq!(
+        decoded["prod"]["artifacts"]
+            .as_object()
+            .map(serde_json::Map::len),
+        Some(1),
+        "only the compiled source pairs into prod.artifacts"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
