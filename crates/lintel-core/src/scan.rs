@@ -95,6 +95,12 @@ pub struct Parsed {
 pub struct ScanContext {
     declared: Vec<String>,
     signatures: Vec<(String, Signature)>,
+    /// Where each declared function's name and parameter names sit in the
+    /// source (the LSP go-to-definition seam, §17.1 Q3). Recorded by the
+    /// same declaration walk that fills the signature table — the single
+    /// source of truth — and keyed like it (last path segment, author's
+    /// spelling, case-insensitive lookups).
+    declarations: Vec<(String, Declaration)>,
     /// Source byte ranges covered by a `lintel-ignore-next` directive
     /// (`docs/ignore-directives.md`); consulted by the validation pass.
     suppressions: Vec<Suppression>,
@@ -189,6 +195,31 @@ impl FunctionScope {
     pub fn typed_strings(&self) -> &[String] {
         &self.typed_strings
     }
+}
+
+/// One declared function's source position (the LSP go-to-definition seam,
+/// §17.1 Q3): the byte offsets a definition request resolves to. Recorded
+/// verbatim from the same `function Name(...)` walk that fills the
+/// signature table, so definition resolves against the compiler's own
+/// declaration facts and every offset is an absolute source byte like the
+/// ones [`crate::Diagnostic`] and [`crate::inventory::Invocation`] carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    /// The declared name, as written (last path segment).
+    pub name: String,
+    /// Absolute byte offset of the declared name identifier — the span a
+    /// `<Card>` definition request jumps to.
+    pub offset: usize,
+    /// The verbatim parameter-list text between the declaration's parens
+    /// (a signature-help label renders it; [`parse_params`] segments the
+    /// same span).
+    pub params_src: String,
+    /// Parameter names in declaration order paired with the absolute byte
+    /// offset of each name's `$` — the span a prop definition request
+    /// jumps to. Segments without a `$identifier` (which [`parse_params`]
+    /// also skips) contribute no entry, so the names align with
+    /// [`Signature::params`] one-to-one.
+    pub params: Vec<(String, usize)>,
 }
 
 impl ScanContext {
@@ -293,6 +324,50 @@ impl ScanContext {
             .map(|(name, signature)| (name.as_str(), signature))
     }
 
+    /// Record a declared function's source position (the LSP
+    /// go-to-definition seam, §17.1 Q3). Fed by the same declaration walk
+    /// as [`ScanContext::declare_signature`], keyed the same way (last
+    /// path segment in the author's spelling, case-insensitive lookups);
+    /// the first declaration of a name wins, matching the signature table.
+    pub fn declare_declaration(&mut self, declaration: Declaration) {
+        let candidate = declaration
+            .name
+            .rsplit('\\')
+            .next()
+            .unwrap_or(&declaration.name)
+            .to_string();
+        if !self
+            .declarations
+            .iter()
+            .any(|(existing, _)| existing.eq_ignore_ascii_case(&candidate))
+        {
+            self.declarations.push((candidate, declaration));
+        }
+    }
+
+    /// The recorded source position of a function declared in this file,
+    /// looked up case-insensitively by its last path segment (PHP function
+    /// calls are case-insensitive). `use function` imports carry no
+    /// position — only `function Name(...)` declarations do.
+    #[must_use]
+    pub fn declaration_of(&self, name: &str) -> Option<&Declaration> {
+        let candidate = name.rsplit('\\').next().unwrap_or(name).to_lowercase();
+        self.declarations
+            .iter()
+            .find(|(existing, _)| existing.to_lowercase() == candidate)
+            .map(|(_, declaration)| declaration)
+    }
+
+    /// Every declared function's source position, in declaration order:
+    /// each item is `(last path segment in the author's spelling,
+    /// &Declaration)` — the table an LSP definition provider iterates for
+    /// its workspace symbols.
+    pub fn declarations(&self) -> impl Iterator<Item = (&str, &Declaration)> {
+        self.declarations
+            .iter()
+            .map(|(name, declaration)| (name.as_str(), declaration))
+    }
+
     /// Whether a function with this name is declared/imported. PHP function
     /// lookups are case-insensitive, so the comparison is too.
     #[must_use]
@@ -310,8 +385,13 @@ impl ScanContext {
     /// deliberately **not** merged: the `lintel-ignore-next` windows are
     /// byte ranges of *their own* source and the `lintel-ignore-file` flag
     /// silences one file, so neither fact is meaningful in another file's
-    /// coordinate space. The merge is read-only on both inputs and
-    /// documented non-commutative: `a.merged_with(&b)` resolves
+    /// coordinate space. The same per-source rule keeps the
+    /// [`Declaration`] position table out of the merge — its offsets point
+    /// into *their own* file's bytes, so a merged definition would jump
+    /// into the wrong file. Cross-file definition is the workspace-index
+    /// seam's job (§17.1 Q3 backlog), not the merge's. The merge is
+    /// read-only on both inputs and documented non-commutative:
+    /// `a.merged_with(&b)` resolves
     /// [`ScanContext::signature_of`]/[`ScanContext::declares_function`]
     /// lookups against `a`'s tables first, the way PHP resolves a call in
     /// the file it appears in.
@@ -320,6 +400,7 @@ impl ScanContext {
         let mut merged = ScanContext {
             declared: self.declared.clone(),
             signatures: self.signatures.clone(),
+            declarations: Vec::new(),
             suppressions: Vec::new(),
             file_suppressed: false,
         };
@@ -376,8 +457,21 @@ enum FunctionPending {
     /// Saw `function`; the next word is the declared name (or `(` closes an
     /// anonymous function).
     Name,
-    /// The declared name is recorded; the next `(` starts its parameter list.
-    Signature(String),
+    /// The declared name is recorded (with its byte offset for the
+    /// [`Declaration`] go-to-definition table); the next `(` starts its
+    /// parameter list.
+    Signature(String, usize),
+}
+
+/// One copied parameter list and everything parsed out of it: the
+/// [`Signature`] the validation pass checks against, the verbatim span it
+/// came from (a signature-help label), and each parameter name's absolute
+/// byte offset (a prop's go-to-definition target). Produced by
+/// [`Scanner::copy_param_list`].
+struct CapturedParams {
+    signature: Signature,
+    params_src: String,
+    params: Vec<(String, usize)>,
 }
 
 struct Scanner<'s> {
@@ -516,7 +610,7 @@ impl<'s> Scanner<'s> {
                     let s = self.pos;
                     let word = self.take_word();
                     self.flush(out, s);
-                    self.track_word(word);
+                    self.track_word(word, s);
                     prev = Self::prev_after_word(word);
                 }
                 b'0'..=b'9' => {
@@ -633,11 +727,13 @@ impl<'s> Scanner<'s> {
     fn open_paren(&mut self, out: &mut String) {
         let pending = std::mem::take(&mut self.pending_function);
         match pending {
-            FunctionPending::Signature(name) => self.capture_signature(out, &name),
+            FunctionPending::Signature(name, name_offset) => {
+                self.capture_signature(out, &name, name_offset);
+            }
             FunctionPending::Name => {
-                let signature = self.copy_param_list(out);
+                let captured = self.copy_param_list(out);
                 self.pending_body = Some(FunctionScope {
-                    typed_strings: signature.typed_strings,
+                    typed_strings: captured.signature.typed_strings,
                     close_depth: 0,
                     rebind_armed: false,
                 });
@@ -648,13 +744,14 @@ impl<'s> Scanner<'s> {
 
     /// Track function declarations and imports for the validation pass
     /// (doc §17.1): `function`/`fn` arm a name capture, the declared name
-    /// arms a signature capture, and `use function` lists record imports
+    /// arms a signature capture (with the name's byte offset for the
+    /// [`Declaration`] table), and `use function` lists record imports
     /// name-only (they carry no visible parameter list). Also tracks the
     /// scope-taint words of the typed-elision contract
     /// (`docs/escape-elision.md`): constructs that can rebind *arbitrary*
     /// names (`extract`, variable variables via `$$`, `include`/`require`,
     /// `eval`) clear the innermost scope's proven string set outright.
-    fn track_word(&mut self, word: &str) {
+    fn track_word(&mut self, word: &str, start: usize) {
         let lower = word.to_lowercase();
         if self.import_mode {
             if lower == "as" || lower == "function" {
@@ -699,10 +796,13 @@ impl<'s> Scanner<'s> {
             }
             return;
         }
-        // The word right after `function` is the declared name (doc §17.1).
+        // The word right after `function` is the declared name (doc §17.1);
+        // `start` is where the word begins in the source — the offset a
+        // definition request jumps to.
         if matches!(self.pending_function, FunctionPending::Name) {
             let last = word.rsplit('\\').next().unwrap_or(word).to_string();
-            self.pending_function = FunctionPending::Signature(last);
+            let name_offset = start + word.len() - last.len();
+            self.pending_function = FunctionPending::Signature(last, name_offset);
         }
         if word.starts_with('$') {
             self.track_rebinding(word);
@@ -817,11 +917,18 @@ impl<'s> Scanner<'s> {
     /// `(`; compound tokens (strings, comments, attributes) pass through
     /// byte-identically like the main scan, so the parameter list is parsed
     /// from the exact source span that was copied. Arms the function body's
-    /// [`FunctionScope`] (`docs/escape-elision.md`) for the upcoming `{`.
-    fn capture_signature(&mut self, out: &mut String, name: &str) {
-        let signature = self.copy_param_list(out);
-        let typed_strings = signature.typed_strings.clone();
-        self.context.declare_signature(name, signature);
+    /// [`FunctionScope`] (`docs/escape-elision.md`) for the upcoming `{`
+    /// and records the [`Declaration`] position table entry (§17.1 Q3).
+    fn capture_signature(&mut self, out: &mut String, name: &str, name_offset: usize) {
+        let captured = self.copy_param_list(out);
+        let typed_strings = captured.signature.typed_strings.clone();
+        self.context.declare_signature(name, captured.signature);
+        self.context.declare_declaration(Declaration {
+            name: name.rsplit('\\').next().unwrap_or(name).to_string(),
+            offset: name_offset,
+            params_src: captured.params_src,
+            params: captured.params,
+        });
         self.pending_body = Some(FunctionScope {
             typed_strings,
             close_depth: 0,
@@ -829,12 +936,13 @@ impl<'s> Scanner<'s> {
         });
     }
 
-    /// Copy a parameter list verbatim (through the closing `)`) and parse it
-    /// into a [`Signature`]. Shared by named declarations
-    /// ([`Scanner::capture_signature`]) and anonymous closures, whose
-    /// parameters shadow the enclosing scope but are not registered in the
-    /// context (they carry no name to look components up by).
-    fn copy_param_list(&mut self, out: &mut String) -> Signature {
+    /// Copy a parameter list verbatim (through the closing `)`) and parse
+    /// it into a [`Signature`] plus its position facts. Shared by named
+    /// declarations ([`Scanner::capture_signature`]) and anonymous
+    /// closures, whose parameters shadow the enclosing scope but are not
+    /// registered in the context (they carry no name to look components up
+    /// by — only [`CapturedParams::signature`] feeds a closure's scope).
+    fn copy_param_list(&mut self, out: &mut String) -> CapturedParams {
         let start = self.pos;
         let mut depth = 0usize;
         while self.pos < self.b.len() {
@@ -867,11 +975,27 @@ impl<'s> Scanner<'s> {
         }
         let params_src = &self.src[start.min(self.pos)..self.pos];
         let signature = parse_params(params_src);
+        // Each parameter name's absolute offset: the first `$identifier` of
+        // its comma-separated segment ([`parse_params`]'s own rule), located
+        // within the same verbatim span the signature was parsed from, so
+        // the positions cannot drift from the names.
+        let params = split_top_level(params_src, b',')
+            .iter()
+            .filter_map(|segment| {
+                let (name, dollar) = first_dollar_span(segment)?;
+                let segment_start = segment.as_ptr() as usize - params_src.as_ptr() as usize;
+                Some((name, start.min(self.pos) + segment_start + dollar))
+            })
+            .collect();
         if self.pos < self.b.len() && self.b[self.pos] == b')' {
             out.push(')');
             self.pos += 1;
         }
-        signature
+        CapturedParams {
+            signature,
+            params_src: params_src.to_string(),
+            params,
+        }
     }
 
     /// Strings, comments and heredocs are compound tokens; copies one and
@@ -1680,8 +1804,11 @@ fn split_top_level(src: &str, sep: u8) -> Vec<&str> {
     parts
 }
 
-/// The first `$name` identifier in a parameter segment: the parameter name.
-fn first_dollar_identifier(segment: &str) -> Option<String> {
+/// The first `$name` identifier in a parameter segment: the parameter name
+/// and the byte offset of its `$` within the segment. Types never contain
+/// `$` (the [`parse_params`] invariant), so the first `$identifier` is the
+/// name.
+fn first_dollar_span(segment: &str) -> Option<(String, usize)> {
     let bytes = segment.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -1692,12 +1819,17 @@ fn first_dollar_identifier(segment: &str) -> Option<String> {
                 e += 1;
             }
             if e > s {
-                return Some(segment[s..e].to_string());
+                return Some((segment[s..e].to_string(), i));
             }
         }
         i += 1;
     }
     None
+}
+
+/// The first `$name` identifier in a parameter segment: the parameter name.
+fn first_dollar_identifier(segment: &str) -> Option<String> {
+    first_dollar_span(segment).map(|(name, _)| name)
 }
 
 /// The `did you mean` help for a mismatched close tag (§21.1): when the
