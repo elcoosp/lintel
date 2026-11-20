@@ -193,7 +193,11 @@ final class Loader
         return $body;
     }
 
-    /** One `\n`-terminated line from the socket, or `null` on EOF/error. */
+    /**
+     * One `\n`-terminated line from the socket, or `null` on EOF/error.
+     *
+     * @param resource $stream the socket the daemon handshake returned
+     */
     private static function socketLine($stream): ?string
     {
         $line = \fgets($stream);
