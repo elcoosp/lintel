@@ -106,7 +106,19 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
             return;
         }
-        $pairs = $decoded['prod']['artifacts'] ?? null;
+        // `prod` is a known manifest section (T-31's `lintel build
+        // --manifest` shape) — validated like the top-level object, so
+        // the `artifacts` lookup indexes a real array.
+        $prod = $decoded['prod'] ?? null;
+        if (!\is_array($prod)) {
+            $io->writeError(
+                'lintel: lintel.json at ' . $root
+                . ': "prod" must be an object; skipping the prod function autoload'
+            );
+
+            return;
+        }
+        $pairs = $prod['artifacts'] ?? null;
         if ($pairs === null || $pairs === []) {
             // No (or empty) prod section — a dev-only project, or a stdout
             // build: nothing to inject is not an error.
@@ -148,14 +160,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
         $package = $composer->getPackage();
+        // Composer's autoloader contract types `getAutoload()` as the
+        // manifest's autoload map (`files?: list<string>` among them) —
+        // no re-narrowing needed.
         $autoload = $package->getAutoload();
-        if (!\is_array($autoload)) {
-            $autoload = [];
-        }
         $existing = $autoload['files'] ?? [];
-        if (!\is_array($existing)) {
-            $existing = [];
-        }
         if (!\in_array($entry, $existing, true)) {
             $existing[] = $entry;
         }
