@@ -8,7 +8,10 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use lintel_core::{builtin_rules, compile, compile_with, Options, Target};
+use lintel_core::{
+    builtin_rules, compile, compile_analyzed, compile_with, ChildHint, ChildKind, Options, Target,
+    TypeHints,
+};
 
 /// ~200 lines of plain PHP with strings, comments, heredocs and no JSX.
 fn passthrough_source() -> String {
@@ -199,6 +202,65 @@ fn typed_children_source() -> String {
     }
     src.push_str("    </main>;\n}\n");
     src
+}
+
+/// A dashboard whose dynamic children alternate between an `int`-typed
+/// parameter and an untyped one (doc §7.3-Y2 type-driven elision,
+/// `docs/type-elision.md`): measures the analyze pass — the PHPStan-proven
+/// int children fold raw, the unproven keep the wrapper — and DRIFT-CHECKS
+/// the elision counters the acceptance requires the pass to report.
+fn analyze_children_source() -> String {
+    let mut src = String::from(
+        "<?php\nfunction Dashboard(int $page, $offset): Html {\n    return <main class=\"dash\">\n",
+    );
+    for i in 0..20 {
+        let _ = writeln!(
+            src,
+            "        <p class=\"row-{i}\">page {{$page}} of {{$offset}} rows</p>"
+        );
+    }
+    src.push_str("    </main>;\n}\n");
+    src
+}
+
+/// The analyze hints for [`analyze_children_source`]: one `int` hint per
+/// dashboard row, keyed by the row's absolute source line (the artifact is
+/// line-preserved) — derived the same way the bridge's report keys them.
+fn analyze_children_hints(src: &str) -> TypeHints {
+    let mut hints = Vec::new();
+    for (index, line) in src.lines().enumerate() {
+        if line.contains("page {{$page}} of") {
+            hints.push(ChildHint {
+                line: u32::try_from(index + 1).expect("line fits u32"),
+                expr: "$page".to_string(),
+                kind: ChildKind::Int,
+            });
+        }
+    }
+    assert_eq!(hints.len(), 20, "one hint per dashboard row");
+    TypeHints::from_entries(hints)
+}
+
+/// The `analyze_children` path drift-check (the §21.2 lesson): exactly the
+/// proven children elide, and the counters the §7.3-Y2 acceptance requires
+/// the pass to report are the ones it reports.
+fn check_analyze_children_counters(src: &str, table: &TypeHints) {
+    let out = compile_analyzed(src, &Options::default(), table, builtin_rules())
+        .expect("analyze children compile");
+    assert_eq!(out.dynamic_children, 40, "every child counted");
+    assert_eq!(out.considered, 40, "every child reaches the analyze step");
+    assert_eq!(out.elided, 20, "the proven int children elide");
+    assert_eq!(out.elision_rate(), Some(0.5));
+    assert!(
+        !out.output.php.contains("\\Lintel\\c($page)"),
+        "{}",
+        out.output.php
+    );
+    assert!(
+        out.output.php.contains("\\Lintel\\c($offset)"),
+        "{}",
+        out.output.php
+    );
 }
 
 /// The same signature-checked file, but every invocation omits the required
@@ -581,9 +643,34 @@ fn cross_file_bench(c: &mut Criterion) {
     group.finish();
 }
 
+/// The §7.3-Y2 analyze bench (`docs/type-elision.md`): the proven children
+/// fold raw while the unproven keep the wrapper, drift-checked against the
+/// elision counters the acceptance requires the pass to report.
+fn analyze_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("analyze");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("analyze_children", |b| {
+        let src = analyze_children_source();
+        let table = analyze_children_hints(&src);
+        check_analyze_children_counters(&src, &table);
+        b.iter(|| {
+            compile_analyzed(
+                black_box(&src),
+                black_box(&Options::default()),
+                black_box(&table),
+                builtin_rules(),
+            )
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench,
+    analyze_bench,
     sourcemap_bench,
     json_bench,
     visitor_bench,
