@@ -6,12 +6,38 @@
 # fuzz targets do not exist yet, so the target preflights and points at T-09
 # instead of pretending.
 
-.PHONY: ci golden fuzz bench lint-php test-php stan-php check-php
+.PHONY: ci golden fuzz bench lint-php test-php stan-php check-php workflows playground size-budget docs-site
 
-ci:  ## fmt, clippy -D warnings, test, php lint, phpunit, phpstan
+workflows:  ## actionlint over .github/workflows (parse-validates every workflow edit)
+	@if ! command -v actionlint >/dev/null 2>&1; then \
+		echo "make workflows: actionlint is not installed."; \
+		echo "Install user-space with: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)"; \
+		exit 1; \
+	fi
+	actionlint
+
+playground:  ## rebuild the committed T-13 wasm bundle into playground/assets/
+	@if ! rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then \
+		echo "make playground: the wasm32-unknown-unknown target is missing (rustup target add wasm32-unknown-unknown)"; \
+		exit 1; \
+	fi
+	cargo build --profile wasm-release --target wasm32-unknown-unknown -p lintel-wasm
+	wasm-bindgen --target web --no-typescript \
+		--out-dir playground/assets \
+		target/wasm32-unknown-unknown/wasm-release/lintel_wasm.wasm
+
+size-budget:  ## the T-13 acceptance test: bundle + page gzip under 1 MB
+	LINTEL_WASM_SIZE_CHECK=1 cargo test -p lintel-wasm --test size_budget
+
+docs-site:  ## build + link-check the T-17 docs site into docs-site/build/
+	cargo run -p lintel-docs --quiet
+
+ci:  ## workflows, fmt, clippy, test, docs-site link check, php lint, phpunit, phpstan
+	$(MAKE) workflows
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
 	cargo test --workspace --all-features
+	$(MAKE) docs-site
 	bash scripts/php-gates.sh
 
 golden:  ## the executable golden fixtures + the line-preservation invariant
@@ -24,7 +50,7 @@ fuzz:  ## 60s smoke (requires cargo-fuzz + the T-09 fuzz targets)
 		echo "Install with: cargo install cargo-fuzz"; \
 		exit 1; \
 	fi
-	cargo fuzz run compile_fuzz -- -max_total_time=60
+	cargo +nightly fuzz run compile_fuzz -- -max_total_time=60
 
 bench:  ## Docker, pinned PHP 8.6 digest; writes bench/results/
 	@if docker info >/dev/null 2>&1; then \
