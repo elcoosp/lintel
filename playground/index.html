@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lintel playground — JSX for PHP, compiled in your browser</title>
+  <meta name="description" content="The Lintel compiler running as WebAssembly: write JSX-in-PHP on the left, see the compiled plain PHP on the right. Works offline after the first load.">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a class="home" href="../">Lintel</a>
+      <h1>Playground</h1>
+      <span class="version" id="lintel-version" title="compiler version"></span>
+    </div>
+    <div class="controls">
+      <label class="control">
+        <span>Target</span>
+        <select id="target" aria-label="lowering target">
+          <option value="string">string (sync)</option>
+          <option value="stream">stream (generator)</option>
+          <option value="rfc">rfc (native lowering)</option>
+        </select>
+      </label>
+      <label class="control">
+        <span>Examples</span>
+        <select id="example" aria-label="example source">
+          <option value="" disabled selected>Load an example…</option>
+        </select>
+      </label>
+      <button id="share" type="button" title="Copy a shareable permalink to this source and target">Copy permalink</button>
+    </div>
+  </header>
+
+  <main class="panes">
+    <section class="pane">
+      <div class="pane-head">
+        <h2>Source <code>.lintel.php</code></h2>
+        <span class="hint">JSX is recognized at expression starts (doc 4.1)</span>
+      </div>
+      <textarea id="source" spellcheck="false" aria-label="Lintel source"></textarea>
+    </section>
+
+    <section class="pane">
+      <div class="pane-head">
+        <h2>Compiled PHP</h2>
+        <button id="copy" type="button" title="Copy the compiled PHP">Copy compiled</button>
+      </div>
+      <pre id="compiled" aria-live="polite"><code id="compiled-code"></code></pre>
+    </section>
+  </main>
+
+  <section class="diagnostics" id="diagnostics-panel">
+    <div class="pane-head">
+      <h2>Diagnostics <span id="diag-count" class="badge" hidden></span></h2>
+    </div>
+    <ul id="diagnostics" aria-live="polite"></ul>
+  </section>
+
+  <footer>
+    <p>
+      The compiler runs entirely in this tab as WebAssembly — no server, no network.
+      Permalinks carry the source and target in the URL hash. The page works offline
+      after the first load (service worker).
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
