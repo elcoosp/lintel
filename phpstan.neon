@@ -7,3 +7,9 @@ parameters:
         - php/runtime/.phpunit.cache (?)
         - php/lintel/vendor
         - php/lintel/.phpunit.cache (?)
+        - php/lintel-phpstan/vendor
+        - php/lintel-phpstan/.phpunit.cache (?)
+        # The bridge's fixtures are `.lintel.php` sources — compiler input,
+        # not PHP (the bridge's own integration test drives PHPStan over
+        # their compiled artifacts with its own ruleset).
+        - php/lintel-phpstan/tests/fixture
