@@ -12,6 +12,16 @@ fn framed(body: &str) -> Vec<u8> {
     format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
 }
 
+/// A client message serialized with `serde_json`: the client speaks real
+/// `JSON`, so its messages are never hand-escaped. (M0 triage: the three
+/// previously "load-flaky" failures were the hand-rolled escaping —
+/// `COMPONENT_SOURCE`'s `\L`/`\A` backslashes and an embedded literal
+/// newline are invalid JSON escapes, so every such didOpen died as
+/// -32700 and no document ever opened. Deterministic, not load-related.)
+fn message(value: &serde_json::Value) -> String {
+    value.to_string()
+}
+
 /// Run the server over the given client messages, returning everything it
 /// wrote, split into (framed header, body) chunks.
 fn session(messages: &[String]) -> String {
@@ -41,17 +51,60 @@ fn bodies(session: &str) -> Vec<serde_json::Value> {
     out
 }
 
+// Component-shaped names only: the inventory records invocations with a
+// capitalized first letter or a `\` path (docs/component-inventory.md), so
+// a lowercase `<salute>` is an HTML element and hover rightly misses it.
 const COMPONENT_SOURCE: &str = concat!(
     "<?php\n\nnamespace App\\Lsp;\n\nuse Lintel\\Html;\n\n",
-    "function salute(string $name, ?Html $children = null): Html\n{\n",
+    "function Salute(string $name, ?Html $children = null): Html\n{\n",
     "    return <div class=\"salute\">{$name}{$children}</div>;\n}\n\n",
-    "echo <salute name=\"LSP\" />;\n"
+    "echo <Salute name=\"LSP\" />;\n"
 );
+
+/// The `didOpen` message for `text` at `uri`.
+fn open_message(uri: &str, text: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "php",
+                "version": 1,
+                "text": text,
+            },
+        },
+    }))
+}
+
+/// The 0-based UTF-16 position of `needle`'s first byte in `text`, the
+/// way a real client computes it from its own line model (newline-counted
+/// line, byte-delta character on the ASCII fixtures).
+fn position_of(text: &str, needle: &str) -> (u32, u32) {
+    let offset = text.find(needle).expect("the needle exists in the source");
+    let line = u32::try_from(text[..offset].matches('\n').count()).unwrap_or(0);
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    (line, u32::try_from(offset - line_start).unwrap_or(0))
+}
+
+/// The request envelope for one document-scoped LSP query.
+fn request(id: i32, method: &str, uri: &str, line: u32, character: u32) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": method,
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+        },
+    }))
+}
+
+const EXIT: &str = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
 
 #[test]
 fn initialize_advertises_diagnostics_and_hover() {
-    let session =
-        session(&["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}".into()]);
+    let session = session(&[message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+    }))]);
     let bodies = bodies(&session);
     let init = &bodies[0];
     assert_eq!(init["id"], 1);
@@ -65,17 +118,13 @@ fn initialize_advertises_diagnostics_and_hover() {
 
 #[test]
 fn did_open_publishes_mapped_diagnostics() {
-    // A static `onclick` attribute is the §7.2 warning lint (LNT03xx):
-    // compiling succeeds, so publishDiagnostics carries it with a mapped
-    // range; a parse error publishes an error-severity diagnostic.
-    let open = format!(
-        "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\
-         \"textDocument\":{{\"uri\":\"file:///proj/Page.lintel.php\",\"languageId\":\"php\",\
-         \"version\":1,\"text\":\"{}\"}}}}}}",
-        COMPONENT_SOURCE.replace('"', "\\\"").replace('\n', "\\n")
-    );
-    let exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".to_string();
-    let session = session(&[open, exit]);
+    // A clean source publishes an empty list (the clear contract); a
+    // warning rides publishDiagnostics with a mapped range; a parse error
+    // publishes an error-severity diagnostic.
+    let session = session(&[
+        open_message("file:///proj/Page.lintel.php", COMPONENT_SOURCE),
+        EXIT.to_string(),
+    ]);
     let bodies = bodies(&session);
     let published = bodies
         .iter()
@@ -85,7 +134,6 @@ fn did_open_publishes_mapped_diagnostics() {
         published["params"]["uri"].as_str(),
         Some("file:///proj/Page.lintel.php")
     );
-    // The clean source publishes an empty list (the clear contract).
     assert_eq!(
         published["params"]["diagnostics"].as_array().map(Vec::len),
         Some(0)
@@ -95,14 +143,10 @@ fn did_open_publishes_mapped_diagnostics() {
 #[test]
 fn did_open_publishes_error_and_warning_severities() {
     let bad = "<?php\nreturn <button onclick=\"track('cta')\">go</button>;\n";
-    let open = format!(
-        "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\
-         \"textDocument\":{{\"uri\":\"file:///proj/Bad.lintel.php\",\"languageId\":\"php\",\
-         \"version\":1,\"text\":\"{}\"}}}}}}",
-        bad.replace('"', "\\\"")
-    );
-    let exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".to_string();
-    let session = session(&[open, exit]);
+    let session = session(&[
+        open_message("file:///proj/Bad.lintel.php", bad),
+        EXIT.to_string(),
+    ]);
     let bodies = bodies(&session);
     let published = bodies
         .iter()
@@ -123,37 +167,21 @@ fn did_open_publishes_error_and_warning_severities() {
 
 #[test]
 fn hover_renders_the_declared_signature() {
-    // `function salute(string $name, ?Html $children = null): Html` is
-    // declared above; hovering over `<salute` shows its parameters. The
+    // `function Salute(string $name, ?Html $children = null): Html` is
+    // declared above; hovering over `<Salute` shows its parameters. The
     // tag sits after `echo <` on the last source line.
-    let tag_offset = COMPONENT_SOURCE
-        .find("<salute")
-        .expect("the invocation exists")
-        + 1; // inside the name, past the `<`
-    let line = COMPONENT_SOURCE[..tag_offset].matches('\n').count() as u32;
-    let line_start = COMPONENT_SOURCE
-        .rsplit_once('\n')
-        .map_or(0, |(head, _)| COMPONENT_SOURCE.len() - head.len() - 1);
-    let _ = line_start;
-    let character = (tag_offset
-        - COMPONENT_SOURCE
-            .split('\n')
-            .take(usize::try_from(line).unwrap_or(0))
-            .map(|l| l.len() + 1)
-            .sum::<usize>()) as u32;
-    let open = format!(
-        "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\
-         \"textDocument\":{{\"uri\":\"file:///proj/Salute.lintel.php\",\"languageId\":\"php\",\
-         \"version\":1,\"text\":\"{}\"}}}}}}",
-        COMPONENT_SOURCE.replace('"', "\\\"").replace('\n', "\\n")
-    );
-    let hover = format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{{\
-         \"textDocument\":{{\"uri\":\"file:///proj/Salute.lintel.php\"}},\
-         \"position\":{{\"line\":{line},\"character\":{character}}}}}}}"
-    );
-    let exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".to_string();
-    let session = session(&[open, hover, exit]);
+    let (line, character) = position_of(COMPONENT_SOURCE, "<Salute");
+    let session = session(&[
+        open_message("file:///proj/Salute.lintel.php", COMPONENT_SOURCE),
+        request(
+            2,
+            "textDocument/hover",
+            "file:///proj/Salute.lintel.php",
+            line,
+            character + 1,
+        ),
+        EXIT.to_string(),
+    ]);
     let bodies = bodies(&session);
     let response = bodies
         .iter()
@@ -165,25 +193,18 @@ fn hover_renders_the_declared_signature() {
         "the signature renders as markdown: {hover}"
     );
     let value = hover["contents"]["value"].as_str().expect("value");
-    assert!(value.contains("salute"), "{value}");
+    assert!(value.contains("Salute"), "{value}");
     assert!(value.contains("`name!`"), "required params marked: {value}");
     assert!(value.contains("`children`"), "{value}");
 }
 
 #[test]
 fn hover_off_a_component_is_null() {
-    let open = format!(
-        "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\
-         \"textDocument\":{{\"uri\":\"file:///proj/S.lintel.php\",\"languageId\":\"php\",\
-         \"version\":1,\"text\":\"{}\"}}}}}}",
-        COMPONENT_SOURCE.replace('"', "\\\"").replace('\n', "\\n")
-    );
-    let hover = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\
-                 \"textDocument\":{\"uri\":\"file:///proj/S.lintel.php\"},\
-                 \"position\":{\"line\":0,\"character\":0}}}"
-        .to_string();
-    let exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".to_string();
-    let session = session(&[open, hover, exit]);
+    let session = session(&[
+        open_message("file:///proj/S.lintel.php", COMPONENT_SOURCE),
+        request(3, "textDocument/hover", "file:///proj/S.lintel.php", 0, 0),
+        EXIT.to_string(),
+    ]);
     let bodies = bodies(&session);
     let response = bodies
         .iter()
@@ -194,10 +215,15 @@ fn hover_off_a_component_is_null() {
 
 #[test]
 fn unknown_requests_answer_method_not_found_and_shutdown_exits() {
-    let unknown = "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"workspace/symbol\",\"params\":{}}";
-    let shutdown = "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"shutdown\"}";
-    let exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".to_string();
-    let session = session(&[unknown.into(), shutdown.into(), exit]);
+    let session = session(&[
+        message(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 9, "method": "workspace/symbol", "params": {},
+        })),
+        message(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 10, "method": "shutdown",
+        })),
+        EXIT.to_string(),
+    ]);
     let bodies = bodies(&session);
     let not_found = bodies
         .iter()
@@ -209,4 +235,469 @@ fn unknown_requests_answer_method_not_found_and_shutdown_exits() {
         .find(|body| body.get("id") == Some(&serde_json::json!(10)))
         .expect("shutdown answers null");
     assert!(shutdown_response["result"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// M1 (§17.1 Q3 LSP card): completion, go-to-definition and signature help.
+// Every scenario drives the same mock-client loop; every request position
+// is computed client-side and every response position must round-trip
+// through the line-preservation guarantee.
+// ---------------------------------------------------------------------------
+
+/// The M1 fixture: a declared component with typed and required params, a
+/// component invocation, and an HTML element.
+const M1_SOURCE: &str = concat!(
+    "<?php\n\nnamespace App\\Lsp;\n\nuse Lintel\\Html;\n\n",
+    "function Card(string $title, int $count, ?Html $children = null): Html\n{\n",
+    "    return <div class=\"card\">{$title}{$children}</div>;\n}\n\n",
+    "echo <Card title=\"Hi\" />;\n",
+    "echo <a href=\"https://example.com\">go</a>;\n"
+);
+
+/// A component declared and invoked in one file — the fixtures for the
+/// tag-position scenarios (a prop/signature lookup needs the same-file
+/// declaration the scanner records).
+const CARD_SOURCE: &str = concat!(
+    "<?php\n\nuse Lintel\\Html;\n\n",
+    "function Card(string $title, int $count, ?Html $children = null): Html\n{\n",
+    "    return <div class=\"card\">{$title}{$children}</div>;\n}\n\n",
+    "echo <Card title=\"Hi\" />;\n"
+);
+
+/// The cursor position of `needle`'s first byte, offset by `into` bytes
+/// into the needle (the way a client places the caret inside a token).
+fn position_at(text: &str, needle: &str, into: usize) -> (u32, u32) {
+    let (line, character) = position_of(text, needle);
+    (line, character + u32::try_from(into).unwrap_or(0))
+}
+
+/// The cursor position of an exact byte offset — needle-free, for
+/// positions a needle search cannot pin down (two `(`s in one file).
+fn position_of_offset(text: &str, offset: usize) -> (u32, u32) {
+    let line = u32::try_from(text[..offset].matches('\n').count()).unwrap_or(0);
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    (line, u32::try_from(offset - line_start).unwrap_or(0))
+}
+
+/// A client-side UTF-16 position: the 0-based line and the UTF-16 code
+/// units from the line start — the LSP contract, verified against the
+/// server's own mapping on multibyte fixtures.
+fn utf16_position(text: &str, needle: &str) -> (u32, u32) {
+    let offset = text.find(needle).expect("the needle exists in the source");
+    let line = u32::try_from(text[..offset].matches('\n').count()).unwrap_or(0);
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let utf16: usize = text[line_start..offset].chars().map(char::len_utf16).sum();
+    (line, u32::try_from(utf16).unwrap_or(0))
+}
+
+fn m1_session(id: i32, method: &str, line: u32, character: u32) -> (String, serde_json::Value) {
+    let session = session(&[
+        open_message("file:///proj/M1.lintel.php", M1_SOURCE),
+        request(id, method, "file:///proj/M1.lintel.php", line, character),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(id)))
+        .expect("the response arrives")
+        .clone();
+    (session, response)
+}
+
+#[test]
+fn initialize_advertises_completion_definition_and_signature_help() {
+    let session = session(&[message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+    }))]);
+    let bodies = bodies(&session);
+    let capabilities = &bodies[0]["result"]["capabilities"];
+    assert_eq!(capabilities["definitionProvider"], true);
+    let triggers = capabilities["completionProvider"]["triggerCharacters"]
+        .as_array()
+        .expect("completion triggers");
+    assert!(
+        triggers.iter().any(|t| t.as_str() == Some("<")),
+        "completion triggers on `<`: {triggers:?}"
+    );
+    let signature_triggers = capabilities["signatureHelpProvider"]["triggerCharacters"]
+        .as_array()
+        .expect("signature triggers");
+    assert!(
+        signature_triggers.iter().any(|t| t.as_str() == Some("("))
+            && signature_triggers.iter().any(|t| t.as_str() == Some(",")),
+        "signature help triggers on `(` and `,`: {signature_triggers:?}"
+    );
+}
+
+#[test]
+fn completion_after_lt_offers_elements_and_components() {
+    // Mid-edit: the tag is not closed yet — completion still works.
+    let source = "<?php\n\nfunction Card(): Html { return <div />; }\n\necho <";
+    let (line, character) = position_at(source, "<", 1);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            20,
+            "textDocument/completion",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(20)))
+        .expect("the completion response arrives");
+    let items = response["result"].as_array().expect("a completion list");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("Card")),
+        "declared components are offered: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("div")),
+        "HTML elements are offered: {items:?}"
+    );
+}
+
+#[test]
+fn completion_filters_by_the_partial_name() {
+    let source = "<?php\n\nfunction Card(): Html { return <div />; }\n\necho <Ca";
+    let (line, character) = position_at(source, "<Ca", 3);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            21,
+            "textDocument/completion",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(21)))
+        .expect("the completion response arrives");
+    let items = response["result"].as_array().expect("a completion list");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("Card")),
+        "the partial name filters to matching labels: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item["label"].as_str() != Some("div")),
+        "non-matching labels are filtered: {items:?}"
+    );
+}
+
+#[test]
+fn completion_on_a_component_tag_space_offers_props() {
+    // After the tag's space: prop names from the scanned signature, with
+    // already-passed props filtered out.
+    let source = CARD_SOURCE;
+    let (line, character) = position_at(source, "<Card title", 6);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            22,
+            "textDocument/completion",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(22)))
+        .expect("the completion response arrives");
+    let items = response["result"].as_array().expect("a completion list");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("count")),
+        "the remaining required prop is offered: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item["label"].as_str() != Some("title")),
+        "already-passed props are filtered: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item["label"].as_str() != Some("children")),
+        "`children` is JSX children, not an attribute: {items:?}"
+    );
+}
+
+#[test]
+fn completion_on_an_html_element_offers_its_attributes() {
+    let source = "echo <a href=\"https://example.com\">go</a>;";
+    // Cursor after the space following `<a`, before `href`.
+    let (line, character) = position_at(source, "href", 0);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            23,
+            "textDocument/completion",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(23)))
+        .expect("the completion response arrives");
+    let items = response["result"].as_array().expect("a completion list");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("target")),
+        "element-specific attributes are offered: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"].as_str() == Some("id")),
+        "global attributes are offered: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item["label"].as_str() != Some("colspan")),
+        "other elements' attributes are not offered: {items:?}"
+    );
+}
+
+#[test]
+fn completion_inside_a_quoted_value_is_empty() {
+    let source = CARD_SOURCE;
+    // Cursor inside the quoted value `Hi` of the invocation.
+    let (line, character) = position_at(source, "\"Hi\"", 1);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            24,
+            "textDocument/completion",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(24)))
+        .expect("the completion response arrives");
+    assert!(
+        response["result"].as_array().map_or(true, Vec::is_empty),
+        "no attribute completion inside a quoted value: {response}"
+    );
+}
+
+#[test]
+fn definition_on_a_component_tag_jumps_to_the_declaration() {
+    let (line, character) = position_at(M1_SOURCE, "<Card", 2);
+    let (_session, response) = m1_session(30, "textDocument/definition", line, character);
+    let location = &response["result"];
+    assert!(location.is_object(), "a Location comes back: {response}");
+    let declared = M1_SOURCE
+        .find("function Card")
+        .expect("the declaration exists");
+    let name_offset = declared + "function ".len();
+    let expected = utf16_position(M1_SOURCE, "function Card");
+    let expected = (
+        expected.0,
+        expected.1 + u32::try_from("function ".len()).unwrap_or(0),
+    );
+    let _ = name_offset;
+    assert_eq!(location["uri"].as_str(), Some("file:///proj/M1.lintel.php"));
+    assert_eq!(location["range"]["start"]["line"], expected.0, "{location}");
+    assert_eq!(
+        location["range"]["start"]["character"], expected.1,
+        "the definition anchors on the declared name: {location}"
+    );
+}
+
+#[test]
+fn definition_on_a_prop_jumps_to_the_parameter() {
+    // Cursor on the `title` prop of `<Card title="Hi" />`.
+    let (line, character) = position_at(M1_SOURCE, "title=\"Hi\"", 0);
+    let (_session, response) = m1_session(31, "textDocument/definition", line, character);
+    let location = &response["result"];
+    assert!(location.is_object(), "a Location comes back: {response}");
+    let expected = utf16_position(M1_SOURCE, "$title");
+    assert_eq!(location["range"]["start"]["line"], expected.0, "{location}");
+    assert_eq!(
+        location["range"]["start"]["character"], expected.1,
+        "the prop resolves to the parameter it names: {location}"
+    );
+}
+
+#[test]
+fn definition_off_a_component_is_null() {
+    let (line, character) = position_at(M1_SOURCE, "echo", 0);
+    let (_session, response) = m1_session(32, "textDocument/definition", line, character);
+    assert!(
+        response["result"].is_null(),
+        "nothing to resolve off a component: {response}"
+    );
+}
+
+#[test]
+fn signature_help_inside_a_component_tag_marks_required_params() {
+    // Cursor after the already-passed `title` attribute: the help shows
+    // the typed parameter list, `title!`-style required marks, and the
+    // active parameter advances past the passed attribute.
+    let source = CARD_SOURCE;
+    let (line, character) = position_at(source, "\"Hi\" />", 0);
+    let session = session(&[
+        open_message("file:///proj/M2.lintel.php", source),
+        request(
+            33,
+            "textDocument/signatureHelp",
+            "file:///proj/M2.lintel.php",
+            line,
+            character,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(33)))
+        .expect("the signature help response arrives");
+    let help = &response["result"];
+    let signature = &help["signatures"][0];
+    let label = signature["label"].as_str().expect("a signature label");
+    assert!(label.contains("Card"), "{label}");
+    assert!(
+        label.contains("title!"),
+        "required params keep their ! mark: {label}"
+    );
+    assert!(label.contains("children"), "{label}");
+    assert_eq!(
+        help["activeParameter"], 1,
+        "the passed title activates count: {help}"
+    );
+}
+
+#[test]
+fn signature_help_on_a_php_call_paren_and_comma() {
+    // The call form inside a `{expr}` child: `(` after the component name
+    // and `,` between arguments both show the typed list, with the active
+    // parameter advancing per comma.
+    let source = concat!(
+        "<?php\n\nuse Lintel\\Html;\n\n",
+        "function Card(string $title, int $count, ?Html $children = null): Html\n{\n",
+        "    return <div>{$title}{$children}</div>;\n}\n\n",
+        "echo <div>{Card(\"Hi\", 2)}</div>;\n"
+    );
+    let open_offset = source.find("Card(").expect("the call exists") + "Card".len();
+    let comma_offset = source.find(',').expect("the comma exists");
+    // Exact offsets: the file's first `(` is the declaration's, not the
+    // call's, so a needle search cannot pin the trigger positions.
+    for (id, offset, expected_active) in
+        [(40, open_offset + 1, 0_u32), (41, comma_offset + 1, 1_u32)]
+    {
+        let (line, character) = position_of_offset(source, offset);
+        let session = session(&[
+            open_message("file:///proj/M3.lintel.php", source),
+            request(
+                id,
+                "textDocument/signatureHelp",
+                "file:///proj/M3.lintel.php",
+                line,
+                character,
+            ),
+            EXIT.to_string(),
+        ]);
+        let bodies = bodies(&session);
+        let response = bodies
+            .iter()
+            .find(|body| body.get("id") == Some(&serde_json::json!(id)))
+            .expect("the signature help response arrives");
+        let help = &response["result"];
+        let label = help["signatures"][0]["label"].as_str().expect("a label");
+        assert!(label.contains("Card"), "{label}");
+        assert_eq!(
+            help["activeParameter"], expected_active,
+            "the call's argument position activates the matching parameter: {help}"
+        );
+        let _ = offset;
+    }
+}
+
+#[test]
+fn signature_help_off_a_call_is_null() {
+    let (line, character) = position_at(M1_SOURCE, "echo", 0);
+    let (_session, response) = m1_session(42, "textDocument/signatureHelp", line, character);
+    assert!(
+        response["result"].is_null(),
+        "no signature help away from any call: {response}"
+    );
+}
+
+#[test]
+fn definition_positions_round_trip_through_utf16() {
+    // Multibyte text before both the invocation and the declaration: the
+    // request position is computed in UTF-16 units (the client's unit),
+    // and the returned Location must land on the declaration in the same
+    // units — the line-preservation guarantee end to end.
+    let source = concat!(
+        "<?php\n\nnamespace App\\Lsp;\n\nuse Lintel\\Html;\n\n",
+        "// 卡片 é-component\n",
+        "function Card(string $title): Html { return <div>{$title}</div>; }\n\n",
+        "echo <Card title=\"你好\" />;\n"
+    );
+    let (line, character) = utf16_position(source, "<Card");
+    let session = session(&[
+        open_message("file:///proj/M4.lintel.php", source),
+        request(
+            50,
+            "textDocument/definition",
+            "file:///proj/M4.lintel.php",
+            line,
+            character + 1,
+        ),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    let response = bodies
+        .iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(50)))
+        .expect("the definition response arrives");
+    let location = &response["result"];
+    assert!(
+        location.is_object(),
+        "resolves through multibyte text: {response}"
+    );
+    let expected = utf16_position(source, "function Card");
+    let expected = (
+        expected.0,
+        expected.1 + u32::try_from("function ".len()).unwrap_or(0),
+    );
+    assert_eq!(location["range"]["start"]["line"], expected.0, "{location}");
+    assert_eq!(
+        location["range"]["start"]["character"], expected.1,
+        "the declaration position is a UTF-16 position: {location}"
+    );
 }
