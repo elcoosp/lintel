@@ -1,0 +1,220 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * The §7.3-Y2 analyze runner (architecture doc §7.3-Y2,
+ * `docs/type-elision.md`): the full `lintel analyze` path for one source
+ * file —
+ *
+ * 1. `Bridge::prepare()` compiles the source through the SAME `lintel`
+ *    binary the CLI uses (the single source of truth) and writes the
+ *    metadata sidecar + signature stub into a cache directory;
+ * 2. a PHPStan pass over the prepared cache — the type collector
+ *    (`LintelTypesCollector`) resolving every `\Lintel\c()` argument's
+ *    type against the stub signatures and the consumer's own analysis —
+ *    reports the proven child types;
+ * 3. the report is written as `<source>.lintel-types.json`, the types
+ *    file `lintel analyze <source>` consumes (its default sidecar path);
+ * 4. with `--compile`, the compiler runs the same `lintel analyze` lane
+ *    and prints the elided PHP.
+ *
+ * Usage: php bin/analyze.php <source.lintel.php> [--cache DIR] [--out PATH]
+ *        [--compile] [--lintel PATH]
+ * The lintel binary comes from `LINTEL_TEST_BIN` or `--lintel`; PHPStan
+ * must be vendored (`composer install` in this package).
+ */
+
+use Lintel\PhpStan\Bridge;
+
+require __DIR__ . '/../vendor/autoload.php';
+
+$fail = static function (string $message): never {
+    fwrite(STDERR, "lintel analyze: {$message}\n");
+    exit(1);
+};
+
+$args = array_slice($argv, 1);
+$source = null;
+$cache = null;
+$out = null;
+$compile = false;
+$lintel = null;
+for ($i = 0, $n = count($args); $i < $n; $i++) {
+    $arg = $args[$i];
+    $value = static function () use ($args, &$i): string {
+        $i++;
+        return $args[$i] ?? throw new InvalidArgumentException('the last flag needs a value');
+    };
+    if ($arg === '--compile') {
+        $compile = true;
+    } elseif (str_starts_with($arg, '--cache=')) {
+        $cache = substr($arg, 8);
+    } elseif ($arg === '--cache') {
+        $cache = $value();
+    } elseif (str_starts_with($arg, '--out=')) {
+        $out = substr($arg, 6);
+    } elseif ($arg === '--out') {
+        $out = $value();
+    } elseif (str_starts_with($arg, '--lintel=')) {
+        $lintel = substr($arg, 9);
+    } elseif ($arg === '--lintel') {
+        $lintel = $value();
+    } elseif ($source === null && ! str_starts_with($arg, '-')) {
+        $source = $arg;
+    } else {
+        $fail("unknown argument: {$arg}");
+    }
+}
+if ($source === null) {
+    $fail('usage: php bin/analyze.php <source.lintel.php> [--cache DIR] [--out PATH] [--compile] [--lintel PATH]');
+}
+if (! is_file($source)) {
+    $fail("source does not exist: {$source}");
+}
+
+$phpstan = dirname(__DIR__) . '/vendor/phpstan/phpstan/phpstan';
+if (! is_file($phpstan)) {
+    $fail('phpstan is not vendored: run `composer install` in php/lintel-phpstan');
+}
+
+try {
+    $cacheDir = $cache ?? (sys_get_temp_dir() . '/lintel-analyze-' . uniqid());
+    $prepared = Bridge::prepare($source, $cacheDir);
+} catch (BridgeException $problem) {
+    $fail($problem->getMessage());
+}
+
+// The analyze ruleset: the bridge package's autoloader (the cache's shim),
+// the lintel runtime + the signature stubs, and the type collector — the
+// consumer's own phpstan.neon never registers the collector, so ordinary
+// runs see no type-report errors.
+$repo = dirname(__DIR__, 3);
+$stubs = array_filter([$repo . '/php/lintel-phpstan/resources/runtime.stub', $prepared->stub]);
+$stubList = '- ' . implode("\n        - ", $stubs);
+$neon = <<<NEON
+parameters:
+    level: max
+    tmpDir: {$cacheDir}/.phpstan-tmp
+    paths:
+        - {$cacheDir}
+    excludePaths:
+        analyseAndScan:
+            - *.lintel-meta.json
+            - *.lintel-stub.php
+        analyse:
+            - *.lintel-stub.php
+            - *.lintel-meta.json
+    stubFiles:
+        {$stubList}
+services:
+    -
+        class: Lintel\\PhpStan\\LintelTypesCollector
+        tags: [phpstan.rules.rule]
+NEON;
+$neonPath = $cacheDir . '/analyze.neon';
+file_put_contents($neonPath, $neon);
+
+/** PHPStan's turbo-extension startup warning precedes the real output on
+ * static PHP binaries; drop it (and blank lines) so the JSON parses. */
+$stripNoise = static function (string $output): string {
+    $lines = array_values(array_filter(
+        explode("\n", $output),
+        static fn (string $line): bool => trim($line) !== '' && ! str_starts_with($line, 'Warning:'),
+    ));
+    $joined = implode("\n", $lines);
+    $brace = strpos($joined, '{');
+    return $brace !== false ? substr($joined, $brace) : $joined;
+};
+
+$command = [PHP_BINARY, $phpstan, 'analyse', '--configuration', $neonPath, '--no-progress', '--error-format=json', '--memory-limit=1G'];
+$process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cacheDir);
+if (! is_resource($process)) {
+    $fail('cannot run phpstan');
+}
+$stdout = (string) stream_get_contents($pipes[1]);
+fclose($pipes[1]);
+$stderr = (string) stream_get_contents($pipes[2]);
+fclose($pipes[2]);
+$exit = proc_close($process);
+// 0 = clean, 1 = the type-report errors ARE the report — anything else is
+// a run failure.
+if ($exit !== 0 && $exit !== 1) {
+    $fail("phpstan ran with exit {$exit}: {$stderr}");
+}
+
+$decoded = json_decode($stripNoise($stdout), true);
+if (! is_array($decoded) || ! isset($decoded['files']) || ! is_array($decoded['files'])) {
+    $fail('phpstan json output has no "files" object');
+}
+
+// The type payloads ride as rule errors with the `lintel.types`
+// identifier; every other message in this run is unrelated analysis noise
+// the report ignores.
+$children = [];
+foreach ($decoded['files'] as $payload) {
+    if (! is_array($payload) || ! isset($payload['messages']) || ! is_array($payload['messages'])) {
+        continue;
+    }
+    foreach ($payload['messages'] as $message) {
+        if (! is_array($message) || ($message['identifier'] ?? null) !== 'lintel.types') {
+            continue;
+        }
+        $entry = json_decode((string) ($message['message'] ?? ''), true);
+        if (! is_array($entry) || ! isset($entry['line'], $entry['expr'], $entry['type'])) {
+            continue;
+        }
+        $children[] = $entry;
+    }
+}
+
+$reportPath = $out ?? ($source . '.lintel-types.json');
+$report = ['version' => 1, 'source' => (string) realpath($source), 'children' => $children];
+try {
+    file_put_contents($reportPath, (string) json_encode($report, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
+} catch (JsonException $problem) {
+    $fail("cannot write the report: {$problem->getMessage()}");
+}
+
+$elidable = count(array_filter($children, static fn (array $entry): bool => in_array(
+    $entry['type'],
+    ['int', 'float', 'numeric-string'],
+    true,
+)));
+fwrite(STDOUT, sprintf(
+    "analyze report: %s (%d child types, %d elidable)\n",
+    $reportPath,
+    count($children),
+    $elidable,
+));
+foreach ($children as $entry) {
+    fwrite(STDOUT, sprintf("  line %d %s: %s%s\n", $entry['line'], $entry['expr'], $entry['type'], isset($entry['value']) ? ' ' . var_export($entry['value'], true) : ''));
+}
+
+if (! $compile) {
+    exit(0);
+}
+
+// The final leg: the compiler's analyze lane over the same source with the
+// report just written.
+try {
+    $binary = $lintel ?? Bridge::binary();
+} catch (Bridge\Exception $problem) {
+    $fail($problem->getMessage());
+}
+$compiled = proc_open([$binary, 'analyze', $source, '--types=' . $reportPath], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+if (! is_resource($compiled)) {
+    $fail('cannot run the lintel binary');
+}
+$php = (string) stream_get_contents($pipes[1]);
+fclose($pipes[1]);
+$report2 = (string) stream_get_contents($pipes[2]);
+fclose($pipes[2]);
+$exit = proc_close($compiled);
+if ($exit !== 0) {
+    $fail("lintel analyze exited {$exit}: {$report2}");
+}
+fwrite(STDOUT, $php);
+fwrite(STDERR, $report2);
+exit(0);
