@@ -98,3 +98,11 @@ fn whitespace_runs_are_preserved_exactly() {
 fn js_like_code_in_script_php_string() {
     assert_passthrough("<?php\n$js = \"if (a < b && c > d) { x(); }\";\n");
 }
+
+/// `<<<"` with no label (the fuzzer's crash-5bee847c shape): PHP lexes no
+/// heredoc there, so the scanner must pass the bytes through verbatim —
+/// never slice at a non-char-boundary (scan.rs `copy_heredoc`).
+#[test]
+fn heredoc_start_without_label_passes_through() {
+    assert_passthrough("<?php\n$h = <<<\"\u{369}\";\n$n = <<<\u{369} <x></x>\n");
+}
