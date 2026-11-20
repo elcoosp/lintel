@@ -1464,6 +1464,98 @@ than preference:
   (~3.4–4.2 µs median) replaces the prior static-only ~1.9 µs figure; the
   sync lane still blocks ~15.2 ms.
 
+The fifteenth pass (CI repair + T-09 closure + T-18/T-19/T-20) recorded the
+following closures and deviations, each forced by a failing gate or a
+differential divergence rather than preference:
+
+- **F2 (CI repair — fuzz lane).** The fourteenth pass's fuzz lane was red on
+  `main` (run #44): `copy_heredoc` sliced `src` at a non-char-boundary when
+  `<<<` had no label and a quote skip landed inside a multi-byte char —
+  `crates/lintel-core/src/scan.rs` (`copy_heredoc`, the empty-label rewind).
+  PHP lexes `<<<"` with no identifier as no heredoc at all, so the scanner
+  rewinds to just after `<<<` and the bytes pass through verbatim. Fuzzer
+  verdict: **compiler bug fixed**. Regression:
+  `crates/lintel-core/tests/passthrough.rs::heredoc_start_without_label_passes_through`
+  (the minimized crash-5bee847c artifact no longer crashes; a 5-minute fuzz
+  run after the fix found nothing further).
+- **F2 (CI repair — bench lane).** The `bench` job failed at `make bench`:
+  the Dockerfile built with `bench/` as the build context, so the
+  `../php/runtime` path repository in `bench/composer.json` did not exist
+  inside the image and `composer install` aborted. `bench/Dockerfile` now
+  mirrors the repo layout (context = repo root, `WORKDIR /src/bench`,
+  `COPY php/runtime /src/php/runtime`), verified by a reproduction of the
+  stage-1 `composer install` against that exact layout. Verdict: **CI
+  wiring bug fixed** (no test was touched; the pinned `php:8.6-cli` digest
+  was re-verified against the Docker Hub registry, HTTP 200 same digest).
+- **T-09 differential closure.** The differential acceptance (§13.2) is
+  restored at `crates/lintel-core/tests/differential.rs` +
+  `crates/lintel-core/tests/differential/reference_renderer.php`: proptest
+  random JSX trees → compile → `php -l` (all three targets) → execute on
+  the string AND stream targets → compare stdout byte-for-byte with the
+  hand-written reference renderer. **220 generated templates green, 0
+  deleted or ignored** (plus 24 isolated reconciliation cases). Per-
+  divergence verdicts:
+  - *class lists* — reference bug fixed: the reference model's class-list
+    materializer (`r_clstpl` in `reference_renderer.php`) now walks
+    conditional (`'cls' => cond`), nested and empty-string entries per
+    §4.4; the compiler's `cls()` emission needed no change.
+  - *self-closing shapes* — no side was wrong: voids serialize `<br>`, a
+    non-void `<div />` expands `<div></div>` (§4.2), and the generator was
+    taught that JSX has no bare-void source form (Babel rejects `<br>`
+    with "Expected corresponding JSX closing tag" — the compiler's
+    LNT0102 matches).
+  - *spreads* — two fixes: (a) **runtime bug fixed** —
+    `php/runtime/src/functions.php` `attrs()` now routes an exact `srcset`
+    key through `srcset()` (§4.4's spread row: "each entry goes through
+    the same attribute rules"); a spread `srcset` previously bypassed
+    per-URL validation entirely (regression:
+    `spread_srcset_routes_like_the_attribute`); (b) reference fixed to the
+    same contract.
+  - *stream nesting (new divergence, found by the generated cases)* —
+    **runtime bug fixed**: `c()` escaped the chunks of a `Traversable`
+    child, so a nested streamed component rendered double-escaped
+    (`&lt;section…`). The stream target's chunks are compiler-produced
+    markup (literals) or already-escaped data, so `c()` now walks a
+    `Traversable` raw while plain arrays stay escaped-data
+    (`php/runtime/src/functions.php` `c()`); the reference model already
+    encoded the §10 contract.
+  - The remaining isolated cases pin static URL folds verbatim (§4.4's
+    static row), URL/entity-encoded allowlist behavior, every §4.5 child
+    class, component named-arg/bare-prop/spread semantics, raw-text
+    bodies, style charset, fragments, comments, and the LNT0202/LNT0301
+    compile rejections.
+- **T-19 launch honesty (migrate alias).** §16 post #3 names
+  `lintel migrate --to=native`; the command now **exists** as a thin alias
+  over `build --target=rfc` (`crates/lintel-cli/src/lib.rs` `parse` /
+  `parse_args` — card-named freeze exception). `--to=native` and
+  `--to native` are accepted, other values and `--target` overrides are
+  rejected with a pointer at `docs/rfc-alignment.md`;
+  `crates/lintel-cli/tests/cli.rs::migrate_is_a_thin_alias_for_build_target_rfc`
+  pins all three spellings, `migrate_rejects_other_to_values_and_target_overrides`
+  pins the rejections, and `usage_errors_cover_flags_paths_and_modes`
+  was updated for the widened missing-command message (contract text
+  change, not a weakened assertion).
+- **T-18 release engineering.** v0.1.0 declared once in
+  `[workspace.package]` and inherited by the five crates; composer package
+  versions deliberately stay tag-derived (an explicit `version` field
+  fails `composer validate` with a publish advisory, exit 2 — the tag is
+  the bump); `LICENSE-MIT`/`LICENSE-APACHE`/`CHANGELOG.md`/`SECURITY.md`/
+  `CODE_OF_CONDUCT.md` authored; `.github/workflows/release.yml` builds
+  the §12.1 matrix with SHA256SUMS + build-provenance attestation. The
+  local dry run (release build → archive → checksums) and the installer's
+  tamper test are green; **tagging and publishing stay
+  DEFERRED-TO-MAINTAINER**.
+- **T-19/T-20 assets.** OG image `docs/og.png` (1280×640), VHS tape
+  `docs/demo.tape` rendered by the new `launch-assets` CI job (VHS/ffmpeg
+  are absent in this sandbox — the CI render job is the card's sanctioned
+  alternative), `docs/launch/posts.md` (the three §16 variants, `wc -m`
+  = 166/159/131 ≤ 280, every claim linked to a reproducible artifact),
+  `docs/faq.md`, `install.sh` (checksum-verifying installer, dry run
+  green) and `scripts/walkthrough.sh` (timed newcomer walkthrough:
+  install → init → edit → `build --in-place` → render over HTTP, 1 s
+  locally vs the 600 s budget; macOS/Windows legs DEFERRED-TO-CI as the
+  card allows, in the new `install-smoke` matrix job).
+
 The thirteenth pass (T-11/T-14/T-15) recorded five deviations, each forced
 by a failing gate rather than preference:
 
