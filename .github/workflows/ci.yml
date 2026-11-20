@@ -20,3 +20,23 @@ jobs:
         run: cargo test --workspace --all-features
       - name: Benches (smoke)
         run: cargo test --workspace --benches
+
+  php:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install PHP dev tooling (PHPUnit, PHPStan)
+        run: composer install --working-dir=php/runtime --no-interaction --no-progress
+      - name: Rust PHP gates (php -l on every golden output + init demo execution)
+        run: cargo test --workspace --all-features
+        env:
+          PHP_BIN: php
+      - name: PHPUnit threat corpus (§7.2)
+        run: php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
+      - name: PHPStan (level max)
+        run: php php/runtime/vendor/bin/phpstan analyse --no-progress --memory-limit=1G
