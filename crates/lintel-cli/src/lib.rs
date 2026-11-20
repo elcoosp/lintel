@@ -27,17 +27,21 @@ use std::path::{Path, PathBuf};
 
 use lintel_core::{builtin_rule_metas, compile, Diagnostic, Options, Target};
 
+mod manifest;
+pub mod watch;
+
 /// The usage text `lintel --help` prints and usage errors point at.
 pub const USAGE: &str = "\
 lintel — the JSX-for-PHP compiler CLI (architecture doc §6.7 subset)
 
 USAGE:
-    lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place]
+    lintel build <paths>... [--target=string|stream|rfc] [--format=text|json] [--out DIR | --in-place] [--manifest [PATH]]
     lintel check <paths>... [--target=string|stream|rfc] [--format=text|json]
     lintel stats <paths>... [--format=text|json]
     lintel rules [--format=text|json]
     lintel init [DIR] [--demo N]
     lintel migrate <paths>... [--to=native] [--format=text|json] [--out DIR | --in-place]
+    lintel watch [paths]... [--socket PATH] [--foreground]
     lintel --help | --version
 
 ARGS:
@@ -45,7 +49,9 @@ ARGS:
     [DIR]         where `init` scaffolds the demo (default: the working directory)
 
 COMMANDS:
-    build    compile sources to plain PHP: stdout by default, --out or --in-place
+    build    compile sources to plain PHP: stdout by default, --out or --in-place;
+             with --manifest also write the T-31 `lintel.json` function-component
+             manifest (see MANIFEST below)
     check    compile diagnostics-only; exit 1 when any error-severity diagnostic fires
     stats    report each file's component shape (declared + invoked) without
              emitting PHP; exit 1 only when a file fails to parse
@@ -68,8 +74,29 @@ FLAGS:
                     unchanged)
     --out <dir>     write each source as <dir>/<name>.php instead of stdout
     --in-place      write each source as <name>.php next to it
+    --manifest [PATH]
+                    after building, scan the compiled sources for top-level
+                    `function Name(...): Html` declarations and write the
+                    T-31 function-component manifest; `--manifest=PATH`
+                    writes PATH, bare `--manifest` writes `lintel.json` in
+                    the working directory. A bare `--manifest` never consumes
+                    the next token — paths and flags interleave freely, so
+                    use the `=` form to name a path. `build` only — `migrate`
+                    emits RFC-parity artifacts no autoloader can require
     --help, -h      print this help
     --version       print the version line
+
+MANIFEST (T-31):
+    `lintel build --manifest` writes/updates the project's `lintel.json`,
+    preserving every existing key (the user's `functions` globs) and
+    setting two: `components` maps each declared component name to its
+    source path relative to the manifest, and `prod.artifacts` maps each
+    compiled source to its artifact (only when the build wrote artifacts
+    via --out/--in-place). Function-only components are not PSR-4
+    autoloadable: the Composer plugin's prod shim requires the artifacts
+    and the dev loader (§6.10) requires the sources eagerly — skipping
+    whichever source the shim already loaded, so the two lanes never
+    redeclare a function.
 
 STATS REPORT:
     One section per file: the path header, then one `declared Name(params)`
@@ -148,6 +175,9 @@ enum Invocation {
         target: Target,
         format: Format,
         destination: Destination,
+        /// The T-31 manifest to write after the build (`--manifest [PATH]`);
+        /// `None` keeps `build` manifest-free (back-compat).
+        manifest: Option<PathBuf>,
     },
     Check {
         paths: Vec<PathBuf>,
@@ -174,6 +204,16 @@ enum Invocation {
     /// and the exit code is always 0.
     Rules {
         format: Format,
+    },
+    /// `lintel watch [paths] [--socket PATH] [--foreground]`: the T-12
+    /// daemon — a resident compiler behind a Unix socket (TCP fallback on
+    /// Windows) with an mtime+size cache, invalidated by the `notify`
+    /// file watcher. Without `--foreground` the command spawns itself
+    /// detached and exits once the socket answers.
+    Watch {
+        paths: Vec<PathBuf>,
+        socket: PathBuf,
+        foreground: bool,
     },
     Help,
     Version,
@@ -210,6 +250,7 @@ pub fn run(
             target,
             format,
             destination,
+            manifest,
         } => {
             let sources = collect_sources(&paths)?;
             Ok(build(
@@ -217,6 +258,7 @@ pub fn run(
                 target,
                 format,
                 &destination,
+                manifest.as_deref(),
                 stdout,
                 stderr,
             ))
@@ -250,6 +292,29 @@ pub fn run(
             Ok(0)
         }
         Invocation::Rules { format } => rules(format, stdout),
+        Invocation::Watch {
+            paths,
+            socket,
+            foreground,
+        } => {
+            let sources = collect_sources(&paths)?;
+            if foreground {
+                return Ok(watch::run_foreground(&socket, &sources, stdout, stderr));
+            }
+            let mut foreground_args: Vec<String> = vec![
+                "watch".into(),
+                "--socket".into(),
+                socket.display().to_string(),
+                "--foreground".into(),
+            ];
+            foreground_args.extend(sources.iter().map(|path| path.display().to_string()));
+            Ok(watch::spawn_background(
+                &socket,
+                &foreground_args,
+                stdout,
+                stderr,
+            ))
+        }
     }
 }
 
@@ -259,6 +324,7 @@ struct ParsedArgs {
     target: Target,
     format: Format,
     destination: Destination,
+    manifest: Option<PathBuf>,
     out_seen: bool,
     in_place_seen: bool,
 }
@@ -287,6 +353,7 @@ fn parse_args(
         },
         format: Format::default(),
         destination: Destination::Stdout,
+        manifest: None,
         out_seen: false,
         in_place_seen: false,
     };
@@ -297,56 +364,37 @@ fn parse_args(
         match arg {
             "--help" | "-h" => return Ok(ControlFlow::Break(Invocation::Help)),
             "--version" => return Ok(ControlFlow::Break(Invocation::Version)),
-            "--in-place" if is_build => {
-                parsed.in_place_seen = true;
-                parsed.destination = Destination::InPlace;
-            }
-            "--in-place" => return Err(CliError("--in-place is a `build` flag".into())),
             s if s.starts_with("--target=") && is_migrate => {
-                return Err(CliError(
-                    "`migrate` compiles with the native RFC lowering; use \
-                     `lintel build --target=…` to pick a target"
-                        .into(),
-                ))
+                return Err(CliError(MIGRATE_TARGET_ONLY.into()));
             }
-            "--target" if is_migrate => {
-                return Err(CliError(
-                    "`migrate` compiles with the native RFC lowering; use \
-                     `lintel build --target=…` to pick a target"
-                        .into(),
-                ))
-            }
+            "--target" if is_migrate => return Err(CliError(MIGRATE_TARGET_ONLY.into())),
             s if s.starts_with("--target=") => {
                 parsed.target = parse_target(&s["--target=".len()..])?;
             }
             "--target" => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError(
-                        "--target needs a value: string, stream or rfc".into(),
-                    ));
-                };
-                index += 1;
-                parsed.target = parse_target(value)?;
+                let value = value_flag(
+                    args,
+                    &mut index,
+                    "--target needs a value: string, stream or rfc",
+                )?;
+                parsed.target = parse_target(&value)?;
             }
-            s if s.starts_with("--to=") && is_migrate => {
-                let value = &s["--to=".len()..];
+            "--to" if is_migrate => {
+                let value = value_flag(args, &mut index, "--to needs a value: native")?;
                 if value != "native" {
                     return Err(CliError(format!(
-                        "`migrate` only supports `--to=native` today (got `--to={value}`): \
+                        "`migrate` only supports `--to=native` today (got `--to {value}`): \
                          the native RFC lowering is the migration target \
                          (docs/rfc-alignment.md)"
                     )));
                 }
                 parsed.target = Target::Rfc;
             }
-            "--to" if is_migrate => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError("--to needs a value: native".into()));
-                };
-                index += 1;
+            s if s.starts_with("--to=") && is_migrate => {
+                let value = &s["--to=".len()..];
                 if value != "native" {
                     return Err(CliError(format!(
-                        "`migrate` only supports `--to=native` today (got `--to {value}`): \
+                        "`migrate` only supports `--to=native` today (got `--to={value}`): \
                          the native RFC lowering is the migration target \
                          (docs/rfc-alignment.md)"
                     )));
@@ -361,35 +409,119 @@ fn parse_args(
                 parsed.format = parse_format(&s["--format=".len()..])?;
             }
             "--format" => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError("--format needs a value: text or json".into()));
-                };
-                index += 1;
-                parsed.format = parse_format(value)?;
+                let value = value_flag(args, &mut index, "--format needs a value: text or json")?;
+                parsed.format = parse_format(&value)?;
             }
-            s if s.starts_with("--out=") && is_build => {
-                parsed.out_seen = true;
-                parsed.destination = Destination::Dir(PathBuf::from(&s["--out=".len()..]));
-            }
-            s if s.starts_with("--out=") => {
-                return Err(CliError("--out is a `build` flag".into()));
-            }
-            "--out" if is_build => {
-                let Some(value) = args.get(index) else {
-                    return Err(CliError("--out needs a directory argument".into()));
-                };
-                index += 1;
-                parsed.out_seen = true;
-                parsed.destination = Destination::Dir(PathBuf::from(value));
-            }
-            "--out" => return Err(CliError("--out is a `build` flag".into())),
             s if s.starts_with('-') => {
-                return Err(CliError(format!("unknown flag `{s}`: see `lintel --help`")))
+                match build_flag(arg, args, &mut index, &mut parsed, is_build, is_migrate) {
+                    Ok(Some(())) => {}
+                    Ok(None) => {
+                        return Err(CliError(format!(
+                            "unknown flag `{arg}`: see `lintel --help`"
+                        )))
+                    }
+                    Err(problem) => return Err(problem),
+                }
             }
             path => parsed.paths.push(PathBuf::from(path)),
         }
     }
     Ok(ControlFlow::Continue(parsed))
+}
+
+/// The `migrate` target error: migrate compiles with the native RFC
+/// lowering; a per-invocation target choice has nothing to annotate.
+const MIGRATE_TARGET_ONLY: &str = "`migrate` compiles with the native RFC lowering; use \
+     `lintel build --target=…` to pick a target";
+
+/// The `build`-only output flags — `--in-place`, `--out`, `--manifest`.
+/// Returns `Ok(None)` when `arg` is not one of them (the caller falls
+/// through to the unknown-flag error), `Ok(Some(()))` when it consumed
+/// the flag.
+///
+/// # Errors
+///
+/// A build-only flag under `check`/`stats`, or a malformed value, returns
+/// [`CliError`].
+fn build_flag(
+    arg: &str,
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut ParsedArgs,
+    is_build: bool,
+    is_migrate: bool,
+) -> Result<Option<()>, CliError> {
+    // A build-only flag under `check`/`stats` keeps its specific error (it
+    // names the flag and the command that owns it) instead of falling
+    // through to the generic unknown-flag message.
+    if let Some(name) = arg
+        .strip_prefix("--out=")
+        .map(|_| "--out")
+        .or((arg == "--out").then_some("--out"))
+        .or((arg == "--in-place").then_some("--in-place"))
+    {
+        if !is_build {
+            return Err(CliError(format!("{name} is a `build` flag")));
+        }
+    } else if arg == "--manifest" || arg.starts_with("--manifest=") {
+        // `migrate` shares `build`'s output flags but never takes a
+        // manifest: its RFC-parity artifacts are lowered for the future
+        // native runtime, not for a `files` autoloader.
+        if !is_build || is_migrate {
+            return Err(CliError(
+                "--manifest is a `build` flag (migrate emits RFC-parity artifacts no \
+                 autoloader can require)"
+                    .into(),
+            ));
+        }
+    } else {
+        return Ok(None);
+    }
+    if let Some(value) = arg.strip_prefix("--out=") {
+        parsed.out_seen = true;
+        parsed.destination = Destination::Dir(PathBuf::from(value));
+        return Ok(Some(()));
+    }
+    if arg == "--out" {
+        let value = value_flag(args, index, "--out needs a directory argument")?;
+        parsed.out_seen = true;
+        parsed.destination = Destination::Dir(PathBuf::from(value));
+        return Ok(Some(()));
+    }
+    if arg == "--in-place" {
+        parsed.in_place_seen = true;
+        parsed.destination = Destination::InPlace;
+        return Ok(Some(()));
+    }
+    if let Some(value) = arg.strip_prefix("--manifest=") {
+        parsed.manifest = Some(PathBuf::from(value));
+        return Ok(Some(()));
+    }
+    if arg == "--manifest" {
+        // Bare `--manifest` writes the default `lintel.json` and never
+        // consumes the next token — paths and flags interleave freely, so
+        // a following path is a build input, not a value.
+        parsed.manifest = Some(PathBuf::from("lintel.json"));
+        return Ok(Some(()));
+    }
+    Ok(None)
+}
+
+/// Consume the space form of a value-taking flag: `--flag VALUE`. The
+/// inline `--flag=VALUE` form is handled by the caller's prefix match; the
+/// next token is always the value (paths and flags interleave freely, so a
+/// flag's value is unambiguous only in the `=` form — the space form is
+/// reserved for flags whose value is mandatory).
+///
+/// # Errors
+///
+/// A missing value returns [`CliError`] with the caller's exact message.
+fn value_flag(args: &[String], index: &mut usize, missing: &str) -> Result<String, CliError> {
+    let Some(value) = args.get(*index) else {
+        return Err(CliError(missing.into()));
+    };
+    *index += 1;
+    Ok(value.clone())
 }
 
 /// Parse `args` (the program name is already stripped) into an
@@ -398,7 +530,7 @@ fn parse_args(
 fn parse(args: &[String]) -> Result<Invocation, CliError> {
     let Some(command) = args.first() else {
         return Err(CliError(
-            "missing command: build, check, stats or migrate".into(),
+            "missing command: build, check, stats, rules, init, watch or migrate".into(),
         ));
     };
     match command.as_str() {
@@ -416,9 +548,21 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             let (path, demo) = parse_init(&args[1..])?;
             return Ok(Invocation::Init { path, demo });
         }
+        "watch" => {
+            let (paths, socket, foreground) = match parse_watch(&args[1..])? {
+                ControlFlow::Break(invocation) => return Ok(invocation),
+                ControlFlow::Continue(parsed) => parsed,
+            };
+            return Ok(Invocation::Watch {
+                paths,
+                socket,
+                foreground,
+            });
+        }
         other => {
             return Err(CliError(format!(
-                "unknown command `{other}`: expected build, check, stats, rules, init or migrate"
+                "unknown command `{other}`: expected build, check, stats, rules, init, watch \
+                 or migrate"
             )))
         }
     }
@@ -449,6 +593,7 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             target: parsed.target,
             format: parsed.format,
             destination: parsed.destination,
+            manifest: parsed.manifest,
         }),
         "check" => Ok(Invocation::Check {
             paths: parsed.paths,
@@ -559,6 +704,54 @@ fn parse_init(args: &[String]) -> Result<(PathBuf, Option<usize>), CliError> {
     Ok((path.unwrap_or_else(|| PathBuf::from(".")), demo))
 }
 
+/// Parse the `watch` invocation: `lintel watch [paths]... [--socket PATH]
+/// [--foreground]`. Paths default to the working directory (the daemon
+/// watches it recursively); `--socket` names the socket path (default:
+/// the per-working-directory socket under the system temp dir, see
+/// [`watch::default_socket`]); `--foreground` runs the daemon in-process
+/// instead of spawning a detached background process.
+/// What `watch` parsed: the paths, the socket and the foreground bit.
+type WatchArgs = (Vec<PathBuf>, PathBuf, bool);
+
+fn parse_watch(args: &[String]) -> Result<ControlFlow<Invocation, WatchArgs>, CliError> {
+    let mut paths: Vec<PathBuf> = vec![];
+    let mut socket: Option<PathBuf> = None;
+    let mut foreground = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--help" | "-h" => return Ok(ControlFlow::Break(Invocation::Help)),
+            "--version" => return Ok(ControlFlow::Break(Invocation::Version)),
+            s if s.starts_with("--socket=") => {
+                socket = Some(PathBuf::from(&s["--socket=".len()..]));
+            }
+            "--socket" => {
+                let value = value_flag(args, &mut index, "--socket needs a path argument")?;
+                socket = Some(PathBuf::from(value));
+            }
+            "--foreground" => foreground = true,
+            s if s.starts_with('-') => {
+                return Err(CliError(format!(
+                    "unknown flag `{s}`: `lintel watch` takes --socket and --foreground only"
+                )))
+            }
+            path => paths.push(PathBuf::from(path)),
+        }
+    }
+    for path in &paths {
+        if !path.exists() {
+            return Err(CliError(format!("no such path: {}", path.display())));
+        }
+    }
+    let socket = socket.unwrap_or_else(watch::default_socket);
+    if paths.is_empty() {
+        paths.push(PathBuf::from("."));
+    }
+    Ok(ControlFlow::Continue((paths, socket, foreground)))
+}
+
 /// The lowering target named by a `--target` value (doc 5.3).
 fn parse_target(value: &str) -> Result<Target, CliError> {
     match value {
@@ -653,19 +846,25 @@ fn rules(format: Format, stdout: &mut dyn Write) -> Result<i32, CliError> {
 /// Compile every source with `build` semantics: PHP goes to the
 /// destination (stdout, `--out` directory, or `--in-place` sibling), a
 /// failed file writes nothing and is rendered to `stderr` in the requested
-/// [`Format`], and warnings render without failing the build. Returns 0
-/// when every file compiled, 1 when at least one did not. (The return is a
-/// plain code: per-file failures are reported in-band, never propagated as
-/// `Err`.)
+/// [`Format`], and warnings render without failing the build. With
+/// `manifest` set, the successfully compiled sources are scanned for
+/// top-level `function Name(...): Html` declarations after the loop and
+/// the T-31 manifest is written (a manifest failure fails the build the
+/// same way a failed artifact write does). Returns 0 when every file
+/// compiled, 1 when at least one did not. (The return is a plain code:
+/// per-file failures are reported in-band, never propagated as `Err`.)
 fn build(
     sources: &[PathBuf],
     target: Target,
     format: Format,
     destination: &Destination,
+    manifest: Option<&Path>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
     let mut failed = false;
+    let mut components: Vec<(String, PathBuf)> = Vec::new();
+    let mut artifacts: Vec<(PathBuf, PathBuf)> = Vec::new();
     for source in sources {
         let src = match fs::read_to_string(source) {
             Ok(src) => src,
@@ -680,6 +879,14 @@ fn build(
                 for warning in &out.warnings {
                     emit_diagnostic(warning, &src, format, stderr);
                 }
+                if manifest.is_some() {
+                    for found in manifest::scan_function_components(&src) {
+                        components.push((found.name, source.clone()));
+                    }
+                    if let Some(artifact) = artifact_path(source, destination) {
+                        artifacts.push((source.clone(), artifact));
+                    }
+                }
                 if let Err(e) = write_output(source, &out.php, destination, stdout) {
                     let _ = writeln!(stderr, "lintel: cannot write {}: {e}", source.display());
                     failed = true;
@@ -693,7 +900,31 @@ fn build(
             }
         }
     }
+    if let Some(manifest_path) = manifest {
+        if let Err(problem) = manifest::write_manifest(manifest_path, &components, &artifacts) {
+            let _ = writeln!(
+                stderr,
+                "lintel: cannot write the manifest {}: {problem}",
+                manifest_path.display()
+            );
+            failed = true;
+        }
+    }
     i32::from(failed)
+}
+
+/// Where this source's compiled artifact lands (the T-31 manifest's
+/// `prod.artifacts` value): `<dir>/<name>.php` under `--out`, the sibling
+/// `<name>.php` under `--in-place`, and nothing for a stdout build.
+fn artifact_path(source: &Path, destination: &Destination) -> Option<PathBuf> {
+    match destination {
+        Destination::Stdout => None,
+        Destination::Dir(dir) => Some(dir.join(output_name(source))),
+        Destination::InPlace => {
+            let parent = source.parent().unwrap_or(Path::new("."));
+            Some(parent.join(output_name(source)))
+        }
+    }
 }
 
 /// Emit one diagnostic to the error sink in the requested [`Format`]:
