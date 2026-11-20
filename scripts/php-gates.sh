@@ -13,17 +13,22 @@ fail=0
 lint() {
     echo "== php -l =="
     local bad=0
+    # `.lintel.php` sources are compiler INPUT (the JSX language), not
+    # PHP — the same exclusion phpstan.neon documents for the bridge's
+    # fixtures; `php -l` lints the tracked PHP, never Lintel sources.
     while IFS= read -r -d '' f; do
         if ! php -l "$f" > /dev/null 2>&1; then
             echo "LINT FAIL: $f"
             php -l "$f"
             bad=1
         fi
-    done < <(cd "$REPO_ROOT" && git ls-files -z -- '*.php' \
-        && find bench -name '*.php' -not -path '*/vendor/*' -print0 2>/dev/null \
-        && find php -path '*/vendor' -prune -o -name '*.php' -not -path '*/.phpunit.cache/*' -print0 2>/dev/null \
-        && find scripts -name '*.php' -print0 2>/dev/null \
-        && find crates -name '*.php' -print0 2>/dev/null)
+    done < <(cd "$REPO_ROOT" && {
+        git ls-files -z -- '*.php' | grep -zvE '\.lintel\.php$'
+        find bench -name '*.php' -not -path '*/vendor/*' -print0 2>/dev/null
+        find php \( -path '*/vendor' -o -name '*.lintel.php' \) -prune -o -name '*.php' -not -path '*/.phpunit.cache/*' -print0 2>/dev/null
+        find scripts -name '*.php' -print0 2>/dev/null
+        find crates -name '*.php' -print0 2>/dev/null
+    })
     if [ "$bad" = 0 ]; then echo "php -l: OK"; fi
     return $bad
 }
@@ -62,10 +67,13 @@ stan() {
 
 gate="${1:-}"
 case "$gate" in
-    lint) lint ;;
-    check) check ;;
+    # A subcommand must propagate its own failure — CI calls one gate per
+    # step (`bash scripts/php-gates.sh lint`), so an exit-0-on-red here
+    # would blind the whole php job.
+    lint) lint || fail=1 ;;
+    check) check || fail=1 ;;
     test) test ;;
-    stan) stan ;;
+    stan) stan || fail=1 ;;
     *)
         lint || fail=1
         check || fail=1
