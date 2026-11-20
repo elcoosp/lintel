@@ -1,0 +1,28 @@
+{
+    "name": "lintel/runtime",
+    "description": "The Lintel PHP runtime: the escaping helpers compiled markup calls (architecture doc §6.8)",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "files": ["src/functions.php"]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lintel\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.1"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    },
+    "scripts": {
+        "test": "phpunit --configuration phpunit.xml",
+        "stan": "phpstan analyse --memory-limit=1G --no-progress"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
