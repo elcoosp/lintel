@@ -31,7 +31,7 @@ lint() {
 check() {
     echo "== composer validate =="
     local rc=0
-    for dir in php/runtime php/lintel bench; do
+    for dir in php/runtime php/lintel php/lintel-phpstan bench; do
         if composer validate --working-dir="$REPO_ROOT/$dir" --no-check-all --no-interaction > /dev/null 2>&1; then
             echo "composer validate $dir: OK"
         else
@@ -49,6 +49,9 @@ test() {
         php "$REPO_ROOT/php/lintel/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/lintel/phpunit.xml" || fail=1
     echo "== phpunit (php/runtime) =="
     php "$REPO_ROOT/php/runtime/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/runtime/phpunit.xml" || fail=1
+    echo "== phpunit (php/lintel-phpstan, the §17.1-Q1 bridge) =="
+    LINTEL_TEST_BIN="${LINTEL_TEST_BIN:-$REPO_ROOT/target/release/lintel}" \
+        php "$REPO_ROOT/php/lintel-phpstan/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/lintel-phpstan/phpunit.xml" || fail=1
 }
 
 stan() {
