@@ -135,7 +135,7 @@ fn build_streams_with_the_stream_target() {
     ]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
-        stdout.contains("static function (): \\Generator"),
+        stdout.contains("static function () use ($name): \\Generator"),
         "{stdout}"
     );
 }
