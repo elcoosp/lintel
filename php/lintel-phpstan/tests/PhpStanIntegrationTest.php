@@ -67,11 +67,29 @@ final class PhpStanIntegrationTest extends TestCase
     {
         // The `phpstan.includes` form: extension-installer carries the neon
         // path straight into PHPStan's config (no PHP class, no interface
-        // dependency).
+        // dependency). The manifest decodes into its validated known keys —
+        // a shape this package owns — instead of indexing mixed.
         $composer = json_decode((string) file_get_contents(dirname(__DIR__) . '/composer.json'), true);
-        $includes = $composer['extra']['phpstan']['includes'] ?? [];
+        if (! is_array($composer)) {
+            self::fail('composer.json decodes to a JSON object');
+        }
+        $extra = $composer['extra'] ?? null;
+        if (! is_array($extra)) {
+            self::fail('composer.json has no "extra" object');
+        }
+        $phpstanExtra = $extra['phpstan'] ?? null;
+        if (! is_array($phpstanExtra)) {
+            self::fail('composer.json has no "extra.phpstan" object');
+        }
+        $includes = $phpstanExtra['includes'] ?? null;
+        if (! is_array($includes)) {
+            self::fail('composer.json has no "extra.phpstan.includes" list');
+        }
         self::assertNotEmpty($includes);
         foreach ($includes as $include) {
+            if (! is_string($include)) {
+                self::fail('composer.json "extra.phpstan.includes" holds a non-string path');
+            }
             self::assertFileExists(dirname(__DIR__) . '/' . $include);
         }
     }
@@ -85,7 +103,7 @@ final class PhpStanIntegrationTest extends TestCase
         // The errors are filed on the SOURCE path, not the artifact shell.
         self::assertArrayHasKey($source, $errorsByFile, json_encode($errorsByFile, JSON_PRETTY_PRINT) ?: '');
         $lintel = array_filter($errorsByFile[$source], static fn (array $error): bool =>
-            ($error['identifier'] ?? '') === 'lintel.LNT0205' || ($error['identifier'] ?? '') === 'lintel.LNT0203');
+            self::identifierOf($error) === 'lintel.LNT0205' || self::identifierOf($error) === 'lintel.LNT0203');
         // Two rejections on `<Card />` (missing required title AND count)
         // plus the unknown prop and the second invocation's missing count.
         self::assertCount(4, $lintel, json_encode($errorsByFile, JSON_PRETTY_PRINT) ?: '');
@@ -113,9 +131,10 @@ final class PhpStanIntegrationTest extends TestCase
         [$errorsByFile, $raw] = $this->analyse();
         $artifact = $this->cacheDir . '/Types.php';
         self::assertArrayHasKey($artifact, $errorsByFile, json_encode($errorsByFile, JSON_PRETTY_PRINT) ?: '');
-        $typeErrors = array_filter($errorsByFile[$artifact], static fn (array $error): bool =>
-            str_contains((string) ($error['message'] ?? ''), 'expects string')
-            && str_contains((string) ($error['message'] ?? ''), 'int given'));
+        $typeErrors = array_filter($errorsByFile[$artifact], static fn (array $error): bool => str_contains(
+            self::messageOf($error),
+            'expects string',
+        ) && str_contains(self::messageOf($error), 'int given'));
         self::assertCount(
             1,
             $typeErrors,
@@ -136,28 +155,84 @@ final class PhpStanIntegrationTest extends TestCase
      * carries identifiers and tips, the raw run carries exact file:line —
      * and returns both.
      *
-     * @return array{0: list<array<string, mixed>>, 1: string}
+     * @return array{0: array<string, list<array<mixed, mixed>>>, 1: string}
      */
     private function analyse(): array
     {
         $phpstan = self::$phpstan ?? '';
         $base = [PHP_BINARY, $phpstan, 'analyse', '--configuration', $this->neon, '--no-progress', '--memory-limit=1G'];
         [$json] = $this->runPhpstanBoth([...$base, '--error-format=json']);
-        $decoded = json_decode(self::stripStartupNoise($json), true);
+        $decoded = self::decodePhpstanJson(self::stripStartupNoise($json));
         // The JSON error format keys messages by file — the rule re-files
         // LNT errors onto the source path; PHPStan's own analysis errors
         // keep the analysed path. Keep that grouping intact.
         $errorsByFile = [];
-        foreach ($decoded['files'] ?? [] as $file => $messages) {
-            foreach ($messages['messages'] ?? [] as $message) {
-                if (is_array($message)) {
-                    $errorsByFile[(string) $file][] = $message;
-                }
-            }
+        foreach ($decoded as $file => $payload) {
+            $errorsByFile[$file] = $payload['messages'];
         }
         [$rawOut, $rawErr] = $this->runPhpstanBoth([...$base, '--error-format=raw']);
         $raw = self::stripStartupNoise($rawOut . "\n" . $rawErr);
         return [$errorsByFile, $raw];
+    }
+
+    /**
+     * The phpstan JSON output decoded into its known shape —
+     * `{"files": {<path>: {"messages": [...]}}}` — with every level
+     * validated, so callers index real arrays instead of mixed. Message
+     * objects keep their decoded shape (`array<mixed, mixed>`): the
+     * fields the tests read go through `messageOf`/`identifierOf`.
+     *
+     * @return array<string, array{messages: list<array<mixed, mixed>>}>
+     */
+    private static function decodePhpstanJson(string $json): array
+    {
+        $decoded = json_decode($json, true);
+        if (! is_array($decoded)) {
+            self::fail('phpstan json output is not a JSON object');
+        }
+        $files = $decoded['files'] ?? null;
+        if (! is_array($files)) {
+            self::fail('phpstan json output has no "files" object');
+        }
+        $out = [];
+        foreach ($files as $path => $payload) {
+            if (! is_string($path) || $path === '' || ! is_array($payload)) {
+                continue;
+            }
+            $messages = [];
+            $rawMessages = $payload['messages'] ?? null;
+            if (is_array($rawMessages)) {
+                foreach ($rawMessages as $message) {
+                    if (is_array($message)) {
+                        $messages[] = $message;
+                    }
+                }
+            }
+            $out[$path] = ['messages' => $messages];
+        }
+        return $out;
+    }
+
+    /**
+     * The message text of a decoded phpstan error, '' when absent.
+     *
+     * @param array<mixed, mixed> $error
+     */
+    private static function messageOf(array $error): string
+    {
+        $message = $error['message'] ?? null;
+        return is_string($message) ? $message : '';
+    }
+
+    /**
+     * The identifier of a decoded phpstan error, '' when absent.
+     *
+     * @param array<mixed, mixed> $error
+     */
+    private static function identifierOf(array $error): string
+    {
+        $identifier = $error['identifier'] ?? null;
+        return is_string($identifier) ? $identifier : '';
     }
 
     /**
@@ -192,6 +267,8 @@ final class PhpStanIntegrationTest extends TestCase
      * package's own autoloader), the lintel runtime (the `Html`/`c()` /
      * helpers the compiled artifacts call), the signature stubs, and the
      * cache — the shape a consumer's phpstan.neon takes.
+     *
+     * @param list<string> $componentStubs
      */
     private function writeNeon(array $componentStubs): void
     {
@@ -221,14 +298,13 @@ NEON;
         file_put_contents($this->neon, $neon);
     }
 
-    /** Runs the phpstan phar and returns stdout (exit codes are data here). */
-    private function runPhpstan(array $command): string
-    {
-        [$stdout] = $this->runPhpstanBoth($command);
-        return $stdout;
-    }
-
-    /** @return array{0: string, 1: string} stdout, stderr */
+    /**
+     * Runs the phpstan phar in the cache working directory, returning
+     * stdout and stderr (exit codes are data here).
+     *
+     * @param list<string> $command
+     * @return array{0: string, 1: string} stdout, stderr
+     */
     private function runPhpstanBoth(array $command): array
     {
         // The working directory is the cache: PHPStan resolves the project
