@@ -3,9 +3,9 @@
         "date": "2026-11-20",
         "mode": "native",
         "php": "8.4.11",
-        "php_binary": "\/home\/z\/my-project\/tools\/php",
+        "php_binary": "\/home\/z\/my-project\/tools\/php\/php",
         "os": "Linux 5.10.134-013.15.kangaroo.al8.x86_64 x86_64",
-        "hostname": "c-6aff8d49-140d72b5-7a3143c35d5a",
+        "hostname": "c-6b005be3-140d72b5-7bc55e3733be",
         "lintel_bin": "\/home\/z\/my-project\/lintel\/target\/release\/lintel",
         "lintel_version": "lintel 0.1.0",
         "settings": [
@@ -19,8 +19,8 @@
     },
     "compile_throughput": {
         "files": 100,
-        "cold_files_per_s": 9728.337157704807,
-        "warm_files_per_s": 7399.583581034394
+        "cold_files_per_s": 23053.92589914922,
+        "warm_files_per_s": 24040.050724507026
     },
     "opcode_counts": {
         "S1": null,
@@ -37,175 +37,175 @@
             "results": {
                 "S1": {
                     "lintel": {
-                        "median_ns": 914,
-                        "p95_ns": 1007,
-                        "min_ns": 901,
+                        "median_ns": 915,
+                        "p95_ns": 990,
+                        "min_ns": 906,
                         "peak_bytes": 6291456
                     },
                     "rfc": {
-                        "median_ns": 18254.5,
-                        "p95_ns": 24376,
-                        "min_ns": 18111,
+                        "median_ns": 18080,
+                        "p95_ns": 19129,
+                        "min_ns": 17950,
                         "peak_bytes": 6291456
                     },
                     "echo": {
-                        "median_ns": 511,
-                        "p95_ns": 536,
-                        "min_ns": 490,
+                        "median_ns": 520.5,
+                        "p95_ns": 544,
+                        "min_ns": 492,
                         "peak_bytes": 6291456
                     },
                     "blade": {
-                        "median_ns": 13839.5,
-                        "p95_ns": 34664,
-                        "min_ns": 13614,
+                        "median_ns": 13934.5,
+                        "p95_ns": 14920,
+                        "min_ns": 13632,
                         "peak_bytes": 6291456
                     },
                     "twig": {
-                        "median_ns": 5161,
-                        "p95_ns": 5370,
-                        "min_ns": 5115,
+                        "median_ns": 5161.5,
+                        "p95_ns": 5282,
+                        "min_ns": 5114,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 12194,
-                        "p95_ns": 12846,
-                        "min_ns": 12043,
+                        "median_ns": 12343.5,
+                        "p95_ns": 23769,
+                        "min_ns": 12060,
                         "peak_bytes": 8388608
                     }
                 },
                 "S2": {
                     "lintel": {
-                        "median_ns": 1271912.5,
-                        "p95_ns": 1354735,
-                        "min_ns": 1257304,
+                        "median_ns": 1289007.5,
+                        "p95_ns": 11082593,
+                        "min_ns": 1264149,
                         "peak_bytes": 8388608
                     },
                     "rfc": {
-                        "median_ns": 2793964,
-                        "p95_ns": 2925691,
-                        "min_ns": 2761987,
+                        "median_ns": 2849858.5,
+                        "p95_ns": 29113311,
+                        "min_ns": 2781599,
                         "peak_bytes": 8388608
                     },
                     "echo": {
-                        "median_ns": 774842,
-                        "p95_ns": 789543,
-                        "min_ns": 767726,
+                        "median_ns": 786034,
+                        "p95_ns": 7823099,
+                        "min_ns": 760998,
                         "peak_bytes": 8388608
                     },
                     "blade": {
-                        "median_ns": 1577277.5,
-                        "p95_ns": 1632347,
-                        "min_ns": 1562504,
+                        "median_ns": 3714986.5,
+                        "p95_ns": 4737405,
+                        "min_ns": 1598933,
                         "peak_bytes": 8388608
                     },
                     "twig": {
-                        "median_ns": 1830955.5,
-                        "p95_ns": 1883285,
-                        "min_ns": 1818499,
+                        "median_ns": 1884345.5,
+                        "p95_ns": 12084882,
+                        "min_ns": 1807290,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 932856,
-                        "p95_ns": 973771,
-                        "min_ns": 924212,
+                        "median_ns": 982393.5,
+                        "p95_ns": 7119795,
+                        "min_ns": 932104,
                         "peak_bytes": 8388608
                     }
                 },
                 "S3": {
                     "lintel": {
-                        "median_ns": 31289203.5,
-                        "p95_ns": 31586661,
-                        "min_ns": 31115999,
+                        "median_ns": 56124668.5,
+                        "p95_ns": 93486270,
+                        "min_ns": 31549803,
                         "peak_bytes": 17162240
                     },
                     "rfc": {
-                        "median_ns": 78991182.5,
-                        "p95_ns": 85623221,
-                        "min_ns": 74220683,
+                        "median_ns": 151709320.5,
+                        "p95_ns": 252230896,
+                        "min_ns": 116201753,
                         "peak_bytes": 36421632
                     },
                     "echo": {
-                        "median_ns": 7660595,
-                        "p95_ns": 7846277,
-                        "min_ns": 7631058,
+                        "median_ns": 10773071,
+                        "p95_ns": 38692057,
+                        "min_ns": 8010333,
                         "peak_bytes": 38518784
                     },
                     "blade": {
-                        "median_ns": 1630011062,
-                        "p95_ns": 1715260514,
-                        "min_ns": 1616781579,
+                        "median_ns": 1649476539.5,
+                        "p95_ns": 3463181180,
+                        "min_ns": 1627994576,
                         "peak_bytes": 38486016
                     },
                     "twig": {
-                        "median_ns": 152563131.5,
-                        "p95_ns": 153419034,
-                        "min_ns": 151859275,
+                        "median_ns": 153098825.5,
+                        "p95_ns": 162688744,
+                        "min_ns": 152084242,
                         "peak_bytes": 39702528
                     },
                     "plates": {
-                        "median_ns": 997159982.5,
-                        "p95_ns": 1097181846,
-                        "min_ns": 995022620,
+                        "median_ns": 992283235,
+                        "p95_ns": 1040753419,
+                        "min_ns": 987763523,
                         "peak_bytes": 38400000
                     }
                 },
                 "S4": {
                     "lintel": {
-                        "median_ns": 673725,
-                        "p95_ns": 861231,
-                        "min_ns": 661061,
+                        "median_ns": 671149.5,
+                        "p95_ns": 829095,
+                        "min_ns": 654274,
                         "peak_bytes": 37748736
                     },
                     "rfc": {
-                        "median_ns": 491752.5,
-                        "p95_ns": 512834,
-                        "min_ns": 489909,
+                        "median_ns": 490202,
+                        "p95_ns": 501861,
+                        "min_ns": 484645,
                         "peak_bytes": 37748736
                     },
                     "echo": {
-                        "median_ns": 181358,
-                        "p95_ns": 186291,
-                        "min_ns": 177864,
+                        "median_ns": 179567,
+                        "p95_ns": 189738,
+                        "min_ns": 178036,
                         "peak_bytes": 37748736
                     },
                     "blade": {
-                        "median_ns": 372669,
-                        "p95_ns": 378438,
-                        "min_ns": 367080,
+                        "median_ns": 369484,
+                        "p95_ns": 378077,
+                        "min_ns": 364479,
                         "peak_bytes": 37748736
                     },
                     "twig": {
-                        "median_ns": 611672.5,
-                        "p95_ns": 617541,
-                        "min_ns": 604768,
+                        "median_ns": 613525.5,
+                        "p95_ns": 620376,
+                        "min_ns": 600207,
                         "peak_bytes": 37748736
                     },
                     "plates": {
-                        "median_ns": 215813,
-                        "p95_ns": 221743,
-                        "min_ns": 212830,
+                        "median_ns": 215557,
+                        "p95_ns": 227698,
+                        "min_ns": 212154,
                         "peak_bytes": 37748736
                     }
                 },
                 "S5": {
                     "lintel-sync": {
-                        "ttfb_median_ns": 15185509,
-                        "ttfb_p95_ns": 15237704,
-                        "total_median_ns": 15185509,
-                        "total_p95_ns": 15237704,
+                        "ttfb_median_ns": 15200721.5,
+                        "ttfb_p95_ns": 15233975,
+                        "total_median_ns": 15200721.5,
+                        "total_p95_ns": 15233975,
                         "peak_bytes": 37748736
                     },
                     "lintel-stream": {
-                        "ttfb_median_ns": 1863,
-                        "ttfb_p95_ns": 2820,
-                        "total_median_ns": 15196828.5,
-                        "total_p95_ns": 15256619
+                        "ttfb_median_ns": 3061,
+                        "ttfb_p95_ns": 4445,
+                        "total_median_ns": 15216010.5,
+                        "total_p95_ns": 15294685
                     },
                     "echo-stream": {
-                        "ttfb_median_ns": 4596.5,
-                        "ttfb_p95_ns": 5763,
-                        "total_median_ns": 15202297,
-                        "total_p95_ns": 15583274
+                        "ttfb_median_ns": 4719.5,
+                        "ttfb_p95_ns": 7604,
+                        "total_median_ns": 15200667,
+                        "total_p95_ns": 15280552
                     }
                 }
             },
@@ -218,175 +218,175 @@
             "results": {
                 "S1": {
                     "lintel": {
-                        "median_ns": 922,
-                        "p95_ns": 982,
-                        "min_ns": 910,
+                        "median_ns": 918.5,
+                        "p95_ns": 987,
+                        "min_ns": 907,
                         "peak_bytes": 6291456
                     },
                     "rfc": {
-                        "median_ns": 18194,
-                        "p95_ns": 18620,
-                        "min_ns": 18013,
+                        "median_ns": 18132,
+                        "p95_ns": 21779,
+                        "min_ns": 17915,
                         "peak_bytes": 6291456
                     },
                     "echo": {
-                        "median_ns": 511.5,
-                        "p95_ns": 535,
-                        "min_ns": 494,
+                        "median_ns": 516.5,
+                        "p95_ns": 580,
+                        "min_ns": 487,
                         "peak_bytes": 6291456
                     },
                     "blade": {
-                        "median_ns": 13905,
-                        "p95_ns": 15060,
-                        "min_ns": 13634,
+                        "median_ns": 13750.5,
+                        "p95_ns": 14513,
+                        "min_ns": 13592,
                         "peak_bytes": 6291456
                     },
                     "twig": {
-                        "median_ns": 5167.5,
-                        "p95_ns": 5320,
-                        "min_ns": 5127,
+                        "median_ns": 5099,
+                        "p95_ns": 14324,
+                        "min_ns": 5045,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 12247,
-                        "p95_ns": 22100,
-                        "min_ns": 12092,
+                        "median_ns": 15310,
+                        "p95_ns": 26677,
+                        "min_ns": 11995,
                         "peak_bytes": 8388608
                     }
                 },
                 "S2": {
                     "lintel": {
-                        "median_ns": 1257363.5,
-                        "p95_ns": 1320372,
-                        "min_ns": 1249896,
+                        "median_ns": 1261344.5,
+                        "p95_ns": 1278883,
+                        "min_ns": 1249625,
                         "peak_bytes": 8388608
                     },
                     "rfc": {
-                        "median_ns": 2782096,
-                        "p95_ns": 2824861,
-                        "min_ns": 2762919,
+                        "median_ns": 2798508.5,
+                        "p95_ns": 2823694,
+                        "min_ns": 2769005,
                         "peak_bytes": 8388608
                     },
                     "echo": {
-                        "median_ns": 777523.5,
-                        "p95_ns": 810461,
-                        "min_ns": 768660,
+                        "median_ns": 777863.5,
+                        "p95_ns": 784639,
+                        "min_ns": 770873,
                         "peak_bytes": 8388608
                     },
                     "blade": {
-                        "median_ns": 1575850.5,
-                        "p95_ns": 1600232,
-                        "min_ns": 1559342,
+                        "median_ns": 1569279,
+                        "p95_ns": 1613671,
+                        "min_ns": 1548766,
                         "peak_bytes": 8388608
                     },
                     "twig": {
-                        "median_ns": 1830352,
-                        "p95_ns": 1856619,
-                        "min_ns": 1819553,
+                        "median_ns": 1828600.5,
+                        "p95_ns": 1891833,
+                        "min_ns": 1808114,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 933586,
-                        "p95_ns": 942220,
-                        "min_ns": 926157,
+                        "median_ns": 932618.5,
+                        "p95_ns": 966921,
+                        "min_ns": 924870,
                         "peak_bytes": 8388608
                     }
                 },
                 "S3": {
                     "lintel": {
-                        "median_ns": 31281845,
-                        "p95_ns": 33579553,
-                        "min_ns": 31039590,
+                        "median_ns": 31280413.5,
+                        "p95_ns": 31660465,
+                        "min_ns": 31027681,
                         "peak_bytes": 17162240
                     },
                     "rfc": {
-                        "median_ns": 80038452,
-                        "p95_ns": 86649772,
-                        "min_ns": 74630842,
+                        "median_ns": 79732638.5,
+                        "p95_ns": 85241245,
+                        "min_ns": 74395609,
                         "peak_bytes": 36421632
                     },
                     "echo": {
-                        "median_ns": 7906608.5,
-                        "p95_ns": 8055015,
-                        "min_ns": 7814255,
+                        "median_ns": 7699364.5,
+                        "p95_ns": 7813372,
+                        "min_ns": 7613241,
                         "peak_bytes": 38518784
                     },
                     "blade": {
-                        "median_ns": 1626065278.5,
-                        "p95_ns": 1921179893,
-                        "min_ns": 1613705834,
+                        "median_ns": 1636326676,
+                        "p95_ns": 1687764205,
+                        "min_ns": 1630000521,
                         "peak_bytes": 38486016
                     },
                     "twig": {
-                        "median_ns": 153950854.5,
-                        "p95_ns": 213510943,
-                        "min_ns": 152550519,
+                        "median_ns": 152512593,
+                        "p95_ns": 167656909,
+                        "min_ns": 151775142,
                         "peak_bytes": 39702528
                     },
                     "plates": {
-                        "median_ns": 1000840939,
-                        "p95_ns": 1024845624,
-                        "min_ns": 989386439,
+                        "median_ns": 994346391,
+                        "p95_ns": 1019652156,
+                        "min_ns": 984573610,
                         "peak_bytes": 38400000
                     }
                 },
                 "S4": {
                     "lintel": {
-                        "median_ns": 702648,
-                        "p95_ns": 999298,
-                        "min_ns": 654947,
+                        "median_ns": 671836,
+                        "p95_ns": 835434,
+                        "min_ns": 654621,
                         "peak_bytes": 37748736
                     },
                     "rfc": {
-                        "median_ns": 498212,
-                        "p95_ns": 588401,
-                        "min_ns": 484450,
+                        "median_ns": 491484.5,
+                        "p95_ns": 503060,
+                        "min_ns": 483200,
                         "peak_bytes": 37748736
                     },
                     "echo": {
-                        "median_ns": 183463,
-                        "p95_ns": 187458,
-                        "min_ns": 178995,
+                        "median_ns": 181466.5,
+                        "p95_ns": 189730,
+                        "min_ns": 177850,
                         "peak_bytes": 37748736
                     },
                     "blade": {
-                        "median_ns": 433768.5,
-                        "p95_ns": 486034,
-                        "min_ns": 367906,
+                        "median_ns": 371805,
+                        "p95_ns": 381730,
+                        "min_ns": 365816,
                         "peak_bytes": 37748736
                     },
                     "twig": {
-                        "median_ns": 666029.5,
-                        "p95_ns": 761742,
-                        "min_ns": 605083,
+                        "median_ns": 612727,
+                        "p95_ns": 623149,
+                        "min_ns": 600152,
                         "peak_bytes": 37748736
                     },
                     "plates": {
-                        "median_ns": 218991,
-                        "p95_ns": 239788,
-                        "min_ns": 212138,
+                        "median_ns": 215570.5,
+                        "p95_ns": 224691,
+                        "min_ns": 211819,
                         "peak_bytes": 37748736
                     }
                 },
                 "S5": {
                     "lintel-sync": {
-                        "ttfb_median_ns": 15210323,
-                        "ttfb_p95_ns": 15493751,
-                        "total_median_ns": 15210323,
-                        "total_p95_ns": 15493751,
+                        "ttfb_median_ns": 15288812,
+                        "ttfb_p95_ns": 15339820,
+                        "total_median_ns": 15288812,
+                        "total_p95_ns": 15339820,
                         "peak_bytes": 37748736
                     },
                     "lintel-stream": {
-                        "ttfb_median_ns": 2224.5,
-                        "ttfb_p95_ns": 3049,
-                        "total_median_ns": 15208971,
-                        "total_p95_ns": 15332860
+                        "ttfb_median_ns": 3558.5,
+                        "ttfb_p95_ns": 4632,
+                        "total_median_ns": 15267104.5,
+                        "total_p95_ns": 15362291
                     },
                     "echo-stream": {
-                        "ttfb_median_ns": 4941.5,
-                        "ttfb_p95_ns": 5892,
-                        "total_median_ns": 15205638.5,
-                        "total_p95_ns": 15244996
+                        "ttfb_median_ns": 5514.5,
+                        "ttfb_p95_ns": 7035,
+                        "total_median_ns": 15212563.5,
+                        "total_p95_ns": 15253314
                     }
                 }
             },
@@ -399,175 +399,175 @@
             "results": {
                 "S1": {
                     "lintel": {
-                        "median_ns": 923,
-                        "p95_ns": 997,
-                        "min_ns": 906,
+                        "median_ns": 918.5,
+                        "p95_ns": 1002,
+                        "min_ns": 910,
                         "peak_bytes": 6291456
                     },
                     "rfc": {
-                        "median_ns": 18156,
-                        "p95_ns": 18754,
-                        "min_ns": 18055,
+                        "median_ns": 18132,
+                        "p95_ns": 21955,
+                        "min_ns": 17980,
                         "peak_bytes": 6291456
                     },
                     "echo": {
-                        "median_ns": 511.5,
-                        "p95_ns": 542,
-                        "min_ns": 489,
+                        "median_ns": 509,
+                        "p95_ns": 530,
+                        "min_ns": 488,
                         "peak_bytes": 6291456
                     },
                     "blade": {
-                        "median_ns": 14016.5,
-                        "p95_ns": 24262,
-                        "min_ns": 13690,
+                        "median_ns": 13794,
+                        "p95_ns": 15651,
+                        "min_ns": 13585,
                         "peak_bytes": 6291456
                     },
                     "twig": {
-                        "median_ns": 5126,
-                        "p95_ns": 5846,
-                        "min_ns": 5087,
+                        "median_ns": 5118.5,
+                        "p95_ns": 5205,
+                        "min_ns": 5078,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 12281,
-                        "p95_ns": 13963,
-                        "min_ns": 12046,
+                        "median_ns": 12255.5,
+                        "p95_ns": 14648,
+                        "min_ns": 12006,
                         "peak_bytes": 8388608
                     }
                 },
                 "S2": {
                     "lintel": {
-                        "median_ns": 1256065,
-                        "p95_ns": 1276044,
-                        "min_ns": 1247659,
+                        "median_ns": 1274694.5,
+                        "p95_ns": 1385844,
+                        "min_ns": 1251551,
                         "peak_bytes": 8388608
                     },
                     "rfc": {
-                        "median_ns": 2802488,
-                        "p95_ns": 2888995,
-                        "min_ns": 2774112,
+                        "median_ns": 2819338.5,
+                        "p95_ns": 2978770,
+                        "min_ns": 2786658,
                         "peak_bytes": 8388608
                     },
                     "echo": {
-                        "median_ns": 779643.5,
-                        "p95_ns": 796900,
-                        "min_ns": 764973,
+                        "median_ns": 775338.5,
+                        "p95_ns": 824803,
+                        "min_ns": 760537,
                         "peak_bytes": 8388608
                     },
                     "blade": {
-                        "median_ns": 1564403.5,
-                        "p95_ns": 1607006,
-                        "min_ns": 1553056,
+                        "median_ns": 1585183,
+                        "p95_ns": 1701259,
+                        "min_ns": 1563889,
                         "peak_bytes": 8388608
                     },
                     "twig": {
-                        "median_ns": 1822003.5,
-                        "p95_ns": 1838684,
-                        "min_ns": 1812868,
+                        "median_ns": 1838000.5,
+                        "p95_ns": 1877104,
+                        "min_ns": 1820766,
                         "peak_bytes": 8388608
                     },
                     "plates": {
-                        "median_ns": 933252,
-                        "p95_ns": 946359,
-                        "min_ns": 927123,
+                        "median_ns": 954898.5,
+                        "p95_ns": 1048116,
+                        "min_ns": 932273,
                         "peak_bytes": 8388608
                     }
                 },
                 "S3": {
                     "lintel": {
-                        "median_ns": 31614882.5,
-                        "p95_ns": 31784142,
-                        "min_ns": 31409005,
+                        "median_ns": 31805587,
+                        "p95_ns": 32528415,
+                        "min_ns": 31552515,
                         "peak_bytes": 17162240
                     },
                     "rfc": {
-                        "median_ns": 81194732.5,
-                        "p95_ns": 86804069,
-                        "min_ns": 75063683,
+                        "median_ns": 82737956,
+                        "p95_ns": 91426183,
+                        "min_ns": 75768214,
                         "peak_bytes": 36421632
                     },
                     "echo": {
-                        "median_ns": 7867947,
-                        "p95_ns": 8125205,
-                        "min_ns": 7812953,
+                        "median_ns": 7767315.5,
+                        "p95_ns": 7887096,
+                        "min_ns": 7707863,
                         "peak_bytes": 38518784
                     },
                     "blade": {
-                        "median_ns": 1651685771.5,
-                        "p95_ns": 2423891406,
-                        "min_ns": 1627168465,
+                        "median_ns": 1645099553,
+                        "p95_ns": 1673977580,
+                        "min_ns": 1626136411,
                         "peak_bytes": 38486016
                     },
                     "twig": {
-                        "median_ns": 307959275.5,
-                        "p95_ns": 411085947,
-                        "min_ns": 156858708,
+                        "median_ns": 151878763.5,
+                        "p95_ns": 164358008,
+                        "min_ns": 150979477,
                         "peak_bytes": 39702528
                     },
                     "plates": {
-                        "median_ns": 2200602160,
-                        "p95_ns": 3672920857,
-                        "min_ns": 1916163655,
+                        "median_ns": 997749463,
+                        "p95_ns": 1027095060,
+                        "min_ns": 986275065,
                         "peak_bytes": 38400000
                     }
                 },
                 "S4": {
                     "lintel": {
-                        "median_ns": 742866.5,
-                        "p95_ns": 7860990,
-                        "min_ns": 699351,
+                        "median_ns": 680619.5,
+                        "p95_ns": 868641,
+                        "min_ns": 661440,
                         "peak_bytes": 37748736
                     },
                     "rfc": {
-                        "median_ns": 492178.5,
-                        "p95_ns": 6524390,
-                        "min_ns": 485129,
+                        "median_ns": 490444.5,
+                        "p95_ns": 503858,
+                        "min_ns": 483927,
                         "peak_bytes": 37748736
                     },
                     "echo": {
-                        "median_ns": 183613,
-                        "p95_ns": 238952,
-                        "min_ns": 177988,
+                        "median_ns": 181260.5,
+                        "p95_ns": 189107,
+                        "min_ns": 176982,
                         "peak_bytes": 37748736
                     },
                     "blade": {
-                        "median_ns": 386520.5,
-                        "p95_ns": 4459928,
-                        "min_ns": 367752,
+                        "median_ns": 374809,
+                        "p95_ns": 387957,
+                        "min_ns": 366880,
                         "peak_bytes": 37748736
                     },
                     "twig": {
-                        "median_ns": 613181,
-                        "p95_ns": 6672095,
-                        "min_ns": 601444,
+                        "median_ns": 612454,
+                        "p95_ns": 653153,
+                        "min_ns": 601345,
                         "peak_bytes": 37748736
                     },
                     "plates": {
-                        "median_ns": 221887,
-                        "p95_ns": 1617960,
-                        "min_ns": 212569,
+                        "median_ns": 215635.5,
+                        "p95_ns": 229139,
+                        "min_ns": 212040,
                         "peak_bytes": 37748736
                     }
                 },
                 "S5": {
                     "lintel-sync": {
-                        "ttfb_median_ns": 15254802,
-                        "ttfb_p95_ns": 38991206,
-                        "total_median_ns": 15254802,
-                        "total_p95_ns": 38991206,
+                        "ttfb_median_ns": 15203126,
+                        "ttfb_p95_ns": 15235261,
+                        "total_median_ns": 15203126,
+                        "total_p95_ns": 15235261,
                         "peak_bytes": 37748736
                     },
                     "lintel-stream": {
-                        "ttfb_median_ns": 2759.5,
-                        "ttfb_p95_ns": 4296,
-                        "total_median_ns": 15281666.5,
-                        "total_p95_ns": 38524581
+                        "ttfb_median_ns": 3080,
+                        "ttfb_p95_ns": 4266,
+                        "total_median_ns": 15223594,
+                        "total_p95_ns": 15289762
                     },
                     "echo-stream": {
-                        "ttfb_median_ns": 5807.5,
-                        "ttfb_p95_ns": 14817,
-                        "total_median_ns": 15244146,
-                        "total_p95_ns": 37851157
+                        "ttfb_median_ns": 4962.5,
+                        "ttfb_p95_ns": 6466,
+                        "total_median_ns": 15197254.5,
+                        "total_p95_ns": 15244108
                     }
                 }
             },
