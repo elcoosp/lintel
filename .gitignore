@@ -3,3 +3,9 @@ ship.toml
 .github/pr-body.md
 .phpunit.cache
 vendor
+node_modules
+docs-site/build
+fuzz/corpus
+fuzz/target
+fuzz/artifacts
+fuzz/coverage
