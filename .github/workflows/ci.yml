@@ -140,6 +140,64 @@ jobs:
           npm install --no-audit --no-fund
           npm test
 
+  launch-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the lintel binary the tape drives
+        run: cargo build --release -p lintel-cli
+      - name: Put the binary on PATH for the tape
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+      - name: "T-19 launch GIF: render docs/demo.tape (edit → refresh → compiled view)"
+        uses: charmbracelet/vhs-action@v2
+        with:
+          path: docs/demo.tape
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launch-gif
+          path: docs/demo.gif
+
+  install-smoke:
+    name: install-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+      - name: Build the release binary for this runner
+        run: cargo build --release -p lintel-cli
+      - name: Stage a local dist (archive + SHA256SUMS) the way release.yml does
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) ARCHIVE=lintel-linux-x64.tar.gz ;;
+            Darwin-arm64) ARCHIVE=lintel-macos-arm64.tar.gz ;;
+            Darwin-x86_64) ARCHIVE=lintel-macos-x64.tar.gz ;;
+            MINGW*) ARCHIVE=lintel-windows-x64.zip ;;
+          esac
+          mkdir -p dist
+          if [ "${ARCHIVE##*.}" = zip ]; then
+            cp target/release/lintel.exe dist/
+            (cd dist && 7z a lintel-windows-x64.zip lintel.exe && rm lintel.exe)
+          else
+            cp target/release/lintel dist/
+            (cd dist && tar -czf "$ARCHIVE" lintel && rm lintel)
+          fi
+          (cd dist && sha256sum lintel-* > SHA256SUMS)
+      - name: "T-20: install + render a component inside the 10-minute budget"
+        shell: bash
+        env:
+          LINTEL_RELEASE_ROOT: ${{ github.workspace }}/dist
+          LINTEL_RUNTIME_PATH: ${{ github.workspace }}/php/runtime/src/functions.php
+        run: bash scripts/walkthrough.sh
+
   fuzz:
     runs-on: ubuntu-latest
     steps:
