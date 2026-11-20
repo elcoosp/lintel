@@ -1,0 +1,7 @@
+parameters:
+    level: max
+    paths:
+        - php
+    excludePaths:
+        - php/runtime/vendor
+        - php/runtime/.phpunit.cache
