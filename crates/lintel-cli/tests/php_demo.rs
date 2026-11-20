@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lintel_cli::init;
+use lintel_cli::{init, init_demo, DEMO_SLUGS};
 
 /// Resolve the PHP binary: `PHP_BIN` overrides the default `php` on `PATH`.
 fn php_bin() -> Option<PathBuf> {
@@ -104,4 +104,103 @@ fn init_demo_lints_and_executes_under_php() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The per-demo execution assertions (card T-15: each demo must EXECUTE
+/// under PHP with asserted output, not merely compile).
+#[test]
+fn all_five_t15_demos_lint_and_execute_under_php() {
+    let Some(bin) = php_bin() else {
+        eprintln!("skip php_demo: no PHP binary (set PHP_BIN)");
+        return;
+    };
+    let runtime =
+        Path::new(&env!("CARGO_MANIFEST_DIR")).join("../../php/runtime/src/functions.php");
+    let dir = std::env::temp_dir().join(format!("lintel-demos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    for (n, slug) in DEMO_SLUGS.iter().enumerate() {
+        let demo = n + 1;
+        let demo_dir = dir.join(format!("demo{demo}"));
+        let report = init_demo(&demo_dir, Some(demo)).expect("init scaffolds the demo");
+        assert!(report.compiled.to_string_lossy().contains(slug));
+
+        // php -l on the compiled demo.
+        assert_lints(&bin, &report.compiled);
+
+        // Execute: require the runtime, then the compiled demo, capture echo.
+        let rendered = demo_dir.join("rendered.html");
+        let runner = demo_dir.join("runner.php");
+        std::fs::write(
+            &runner,
+            format!(
+                "<?php\nrequire {};\nob_start();\nrequire {};\nfile_put_contents({}, ob_get_clean());\n",
+                php_quote(&runtime),
+                php_quote(&report.compiled.clone()),
+                php_quote(&rendered),
+            ),
+        )
+        .expect("write runner");
+        let output = Command::new(&bin).arg(&runner).output().expect("spawn php");
+        assert!(
+            output.status.success(),
+            "demo {demo} failed to execute under PHP:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let html = std::fs::read_to_string(&rendered).expect("rendered demo output");
+        assert_demo_output(demo, &html);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Per-demo output assertions.
+fn assert_demo_output(demo: usize, html: &str) {
+    match demo {
+        1 => {
+            assert!(
+                html.contains("<h2 class=\"card__title\">Badges</h2>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("<span class=\"badge badge--accent\">new</span>"),
+                "{html}"
+            );
+            assert!(
+                html.contains("<span class=\"badge badge--plain\">stable</span>"),
+                "{html}"
+            );
+        }
+        2 => {
+            // Every payload is escaped as text; hostile URLs are blocked.
+            assert!(
+                html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+                "{html}"
+            );
+            assert!(html.contains("about:invalid#blocked"), "{html}");
+            assert!(!html.contains("<script>alert(1)</script>"), "{html}");
+            assert!(!html.contains("\" onmouseover=\""), "{html}");
+        }
+        3 => {
+            assert!(html.contains("10,000 rows, one pass"), "{html}");
+            assert_eq!(html.matches("<tr>").count(), 10_000, "10k rows rendered");
+            assert!(html.contains("<td>10000</td><td>row 10000</td>"), "{html}");
+        }
+        4 => {
+            assert!(html.contains("hx-post=\"/todos\""), "{html}");
+            assert!(html.contains("todo--done"), "{html}");
+            assert!(html.contains("hx-target=\"closest li\""), "{html}");
+            assert!(
+                html.contains("<script src=\"https://unpkg.com/htmx.org@2\" defer></script>"),
+                "{html}"
+            );
+        }
+        5 => {
+            assert!(html.contains("LNT0301"), "{html}");
+            assert!(html.contains("help: onclick"), "{html}");
+            assert_eq!(html.matches("<article").count(), 5, "five error cards");
+        }
+        _ => unreachable!("five demos"),
+    }
 }
