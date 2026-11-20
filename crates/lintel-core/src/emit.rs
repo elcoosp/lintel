@@ -104,13 +104,16 @@ impl Lowering for StringLowering {
 }
 
 /// Streaming lowering (doc 5.3 `stream`, §10): the root becomes an
-/// immediately-invoked `static function (): \Generator` closure whose body
-/// yields the markup one chunk at a time — literal runs become quoted string
-/// chunks, dynamic children/attributes ride through the same `\Lintel\`
-/// helpers as the string target, and component calls stay wrapped in
-/// `\Lintel\c()` so a component may return either a `\Generator` (streaming)
-/// or an `\Lintel\Html` (sync). The exact contract, including the deliberate
-/// deviations from doc §10, lives in `docs/stream-alignment.md`.
+/// immediately-invoked `static function () use (...): \Generator` closure
+/// whose body yields the markup one chunk at a time — literal runs become
+/// quoted string chunks, dynamic children/attributes ride through the same
+/// `\Lintel\` helpers as the string target, and component calls stay wrapped
+/// in `\Lintel\c()` so a component may return either a `\Generator`
+/// (streaming) or an `\Lintel\Html` (sync). The `use` list captures, by
+/// value, every enclosing local the body references — without it a dynamic
+/// streaming component reads undefined variables at runtime (§21.2 drift
+/// fix). The exact contract, including the deliberate deviations from doc
+/// §10, lives in `docs/stream-alignment.md`.
 #[derive(Debug, Default)]
 pub struct StreamLowering;
 
@@ -805,8 +808,258 @@ fn concat_stream(parts: Parts, base: u32, total: u32) -> String {
 
 /// Wrap a lowered body in the immediately-invoked generator closure the
 /// scanner splices in place of a stream-target JSX root (doc 5.3, §10).
+///
+/// The closure carries a by-value `use (...)` list for every enclosing
+/// local its body references (§21.2 drift fix): a `static function`
+/// closure inherits no scope, so without the list any dynamic streaming
+/// component reads undefined variables at runtime. Superglobals resolve in
+/// every scope and `$this` cannot enter a static closure, so neither is
+/// captured; names that appear only inside quoted literals are literals,
+/// not references, so they are skipped too. The set is computed from the
+/// assembled body, which makes nested component-children closures work
+/// transitively: the inner closure's own `use (...)` text is part of the
+/// outer body, so the outer captures the same names and the inner's
+/// capture evaluation finds them in its creation scope.
+#[must_use]
 fn stream_closure(body: &str) -> String {
-    format!("(static function (): \\Generator {{ {body} }})()")
+    let captures = collect_free_vars(body);
+    if captures.is_empty() {
+        format!("(static function (): \\Generator {{ {body} }})()")
+    } else {
+        let list = captures
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("(static function () use ({list}): \\Generator {{ {body} }})()")
+    }
+}
+
+/// Variables referenced outside quoted literals in one lowered closure
+/// body: the enclosing locals a by-value `use (...)` list must carry.
+///
+/// Byte-oriented like the scanner, and string-aware because the body mixes
+/// raw dynamic expressions with quoted chunks: single-quoted PHP strings
+/// never interpolate (the emitted literals are single-quoted), double-quoted
+/// strings and heredocs interpolate `$name` / `{$expr}` forms, nowdocs do
+/// not, and comments hold no code. Sorted for deterministic emission.
+#[must_use]
+fn collect_free_vars(code: &str) -> Vec<String> {
+    let b = code.as_bytes();
+    let mut vars: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' => i = skip_single_quoted(b, i),
+            b'"' => i = scan_double_quoted(code, &mut vars, i),
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                i = b[i..]
+                    .iter()
+                    .position(|c| *c == b'\n')
+                    .map_or(b.len(), |rel| i + rel);
+            }
+            b'#' if b.get(i + 1) != Some(&b'[') => {
+                i = b[i..]
+                    .iter()
+                    .position(|c| *c == b'\n')
+                    .map_or(b.len(), |rel| i + rel);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = code[i + 2..]
+                    .find("*/")
+                    .map_or(b.len(), |rel| i + 2 + rel + 2);
+            }
+            b'<' if b[i..].starts_with(b"<<<") => {
+                // Heredoc/nowdoc: the label may be quoted (nowdoc); the body
+                // starts after the label's line break.
+                let mut j = i + 3;
+                let nowdoc = b.get(j) == Some(&b'\'');
+                if nowdoc {
+                    j += 1;
+                }
+                let len = var_ident_len(b, j);
+                if len == 0 {
+                    i += 3;
+                    continue;
+                }
+                let label = code[j..j + len].to_string();
+                i = skip_heredoc(code, &mut vars, &label, !nowdoc, j + len);
+            }
+            b'$' if b.get(i + 1).is_some_and(|c| var_ident_start(*c)) => {
+                record_free_var(&mut vars, b, i);
+                i += 1 + var_ident_len(b, i + 1);
+            }
+            _ => i += 1,
+        }
+    }
+    vars.sort();
+    vars
+}
+
+/// Superglobals live in every scope, so a `use` list must not carry them.
+const SUPERGLOBAL_NAMES: &[&str] = &[
+    "$GLOBALS",
+    "$_SERVER",
+    "$_GET",
+    "$_POST",
+    "$_FILES",
+    "$_COOKIE",
+    "$_SESSION",
+    "$_REQUEST",
+    "$_ENV",
+];
+
+/// Whether `c` starts a PHP variable identifier: alphanumerics, `_` and
+/// UTF-8 continuation bytes — no backslash, so `$const\Foo::X` never reads
+/// as a bare variable (the scanner's own byte convention).
+fn var_ident_start(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_' || c >= 0x80
+}
+
+/// Length of the variable identifier starting at `b[start]`.
+fn var_ident_len(b: &[u8], start: usize) -> usize {
+    b[start..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_' || **c >= 0x80)
+        .count()
+}
+
+/// Record the `$name` whose `$` sits at `b[dollar]`, filtering the names a
+/// `use` list must not carry: `$this` cannot enter a static closure and
+/// superglobals resolve in every scope.
+fn record_free_var(vars: &mut Vec<String>, b: &[u8], dollar: usize) {
+    let len = var_ident_len(b, dollar + 1);
+    if len == 0 {
+        return;
+    }
+    let name = &b[dollar + 1..dollar + 1 + len];
+    if name.eq_ignore_ascii_case(b"this") {
+        return;
+    }
+    if let Ok(text) = std::str::from_utf8(name) {
+        if SUPERGLOBAL_NAMES
+            .iter()
+            .any(|global| global[1..].eq_ignore_ascii_case(text))
+        {
+            return;
+        }
+    }
+    let var = format!("${}", String::from_utf8_lossy(name));
+    if !vars.contains(&var) {
+        vars.push(var);
+    }
+}
+
+/// Single-quoted string starting at the `'`: no interpolation, escapes skip
+/// one byte; returns the index past the close (or end of input).
+fn skip_single_quoted(b: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'\'' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Double-quoted string starting at the `"`: capture `$name` tokens and
+/// `{$expr}` groups, honor escapes; returns the index past the close.
+fn scan_double_quoted(code: &str, vars: &mut Vec<String>, start: usize) -> usize {
+    let b = code.as_bytes();
+    let mut i = start + 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            b'$' if b.get(i + 1).is_some_and(|c| var_ident_start(*c)) => {
+                record_free_var(vars, b, i);
+                i += 1 + var_ident_len(b, i + 1);
+            }
+            b'{' if b.get(i + 1) == Some(&b'$') => i = scan_interpolation(code, vars, i + 1),
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// One `{ ... }` interpolation group (double-quoted `"{$a->b($c)}"`),
+/// scanned in code mode with nested braces and strings until the matching
+/// close; returns the index past the close.
+fn scan_interpolation(code: &str, vars: &mut Vec<String>, start: usize) -> usize {
+    let b = code.as_bytes();
+    let mut depth = 1usize;
+    let mut i = start;
+    while i < b.len() && depth > 0 {
+        match b[i] {
+            b'\'' => i = skip_single_quoted(b, i),
+            b'"' => i = scan_double_quoted(code, vars, i),
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'$' if b.get(i + 1).is_some_and(|c| var_ident_start(*c)) => {
+                record_free_var(vars, b, i);
+                i += 1 + var_ident_len(b, i + 1);
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Heredoc/nowdoc body, starting right after the `<<<[' ]LABEL` opener:
+/// heredoc interpolates (scan like a double-quoted string), a nowdoc does
+/// not; both end at a line holding only the (possibly indented) label.
+/// Returns the index of that line's end (or end of input).
+fn skip_heredoc(
+    code: &str,
+    vars: &mut Vec<String>,
+    label: &str,
+    interpolates: bool,
+    after_label: usize,
+) -> usize {
+    let b = code.as_bytes();
+    let mut i = after_label;
+    if b.get(i) == Some(&b'\'') {
+        i += 1;
+    }
+    let Some(rel) = code[i..].find('\n') else {
+        return b.len();
+    };
+    i += rel + 1;
+    while i < b.len() {
+        let line_end = b[i..]
+            .iter()
+            .position(|c| *c == b'\n')
+            .map_or(b.len(), |rel| i + rel);
+        let line = &code[i..line_end];
+        if line.trim_end_matches('\r').trim() == label {
+            return line_end;
+        }
+        if interpolates {
+            let mut j = i;
+            while j < line_end {
+                match b[j] {
+                    b'$' if b.get(j + 1).is_some_and(|c| var_ident_start(*c)) => {
+                        record_free_var(vars, b, j);
+                        j += 1 + var_ident_len(b, j + 1);
+                    }
+                    b'{' if b.get(j + 1) == Some(&b'$') => {
+                        j = scan_interpolation(code, vars, j + 1);
+                    }
+                    _ => j += 1,
+                }
+            }
+        }
+        i = line_end + 1;
+    }
+    i
 }
 
 /// Shared line-preserving concat: merge adjacent literals, interleave
