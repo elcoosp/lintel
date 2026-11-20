@@ -99,6 +99,35 @@ assert_contains "$out" '<h1>Hello, Plain PHP</h1>' "plain refresh still renders 
 test -d "$WORK/plain/cache" && ls "$WORK/plain/cache"/*.php > /dev/null \
     && echo "PASS: cache holds the compiled files"
 
+# ---- plain: the T-31 prod lane (function components via the manifest) ------
+step "plain: T-31 prod lane — build --manifest + dump-autoload, no dev loader"
+(cd "$WORK/plain" \
+    && "$LINTEL_BIN" build components --out build --manifest)
+test -f "$WORK/plain/build/hello.php" \
+    && echo "PASS: the build wrote the compiled artifact" \
+    || { echo "FAIL: build/hello.php missing"; exit 1; }
+grep -q '"prod"' "$WORK/plain/lintel.json" \
+    && echo "PASS: the manifest records the prod artifacts map" \
+    || { echo "FAIL: lintel.json has no prod section"; exit 1; }
+(cd "$WORK/plain" && composer dump-autoload --no-interaction > /dev/null 2>&1)
+test -f "$WORK/plain/vendor/lintel/functions.php" \
+    && echo "PASS: the plugin generated vendor/lintel/functions.php" \
+    || { echo "FAIL: the plugin did not generate the files shim"; exit 1; }
+cat > "$WORK/plain/public/prod.php" <<'PHP'
+<?php
+
+declare(strict_types=1);
+
+require __DIR__ . '/../vendor/autoload.php';
+// The prod entrypoint: NO Loader::boot, NO manual require — the function
+// component exists because the Composer `files` autoload requires the
+// compiled artifacts the manifest recorded (T-31).
+echo \Smoke\hello('Prod');
+PHP
+out="$(php "$WORK/plain/public/prod.php")"
+assert_contains "$out" '<section class="hello">' "plain prod render autoloads the function component"
+assert_contains "$out" '<h1>Hello, Prod</h1>' "plain prod render interpolates the prop"
+
 # ---- fresh Laravel skeleton -----------------------------------------------
 if [ "$SKIP_LARAVEL" = "--skip-laravel" ]; then
     printf '\nSKIP: laravel half (--skip-laravel)\n'
@@ -165,5 +194,60 @@ assert_contains "$out" 'v2 — recompiled on refresh' "laravel refresh re-compil
 step "laravel: the framework still boots with the loader wired"
 out="$(php "$WORK/laravel/artisan" route:list 2>&1 || true)"
 assert_contains "$out" "GET" "artisan route:list still runs"
+
+# ---- laravel: the T-31 acceptance ------------------------------------------
+# A fresh Laravel skeleton with a function component in app/Components/
+# autoloads and renders on refresh without manual `require`: `lintel build
+# --manifest` records the component, the Composer plugin injects the
+# `files` autoload, and the prod entrypoint calls the function directly.
+step "laravel: T-31 — app/Components function component via the manifest"
+mkdir -p "$WORK/laravel/app/Components"
+cat > "$WORK/laravel/app/Components/hello.lintel.php" <<'PHP'
+<?php
+
+namespace App\Components;
+
+use Lintel\Html;
+
+function hello(string $name): Html
+{
+    return <div class="laravel-t31">
+        <h1>T-31, {$name}</h1>
+        <p>Function components autoload in prod via the manifest.</p>
+    </div>;
+}
+PHP
+(cd "$WORK/laravel" \
+    && "$LINTEL_BIN" build app/Components --out bootstrap/cache/lintel --manifest)
+test -f "$WORK/laravel/bootstrap/cache/lintel/hello.php" \
+    && echo "PASS: the artifact landed in bootstrap/cache/lintel" \
+    || { echo "FAIL: bootstrap/cache/lintel/hello.php missing"; exit 1; }
+(cd "$WORK/laravel" && composer dump-autoload --no-interaction > /dev/null 2>&1)
+test -f "$WORK/laravel/vendor/lintel/functions.php" \
+    && echo "PASS: the plugin generated the files shim inside the Laravel skeleton" \
+    || { echo "FAIL: no vendor/lintel/functions.php in the Laravel skeleton"; exit 1; }
+grep -q "lintel/functions.php" "$WORK/laravel/vendor/composer/autoload_files.php" \
+    && echo "PASS: autoload_files.php includes the shim" \
+    || { echo "FAIL: autoload_files.php does not require the shim"; exit 1; }
+cat > "$WORK/laravel/lintel-t31.php" <<'PHP'
+<?php
+
+declare(strict_types=1);
+
+require __DIR__ . '/vendor/autoload.php';
+// The T-31 acceptance entrypoint: NO Loader::boot, NO manual require.
+echo \App\Components\hello('Laravel');
+PHP
+out="$(php "$WORK/laravel/lintel-t31.php")"
+assert_contains "$out" '<div class="laravel-t31">' "laravel T-31 render autoloads the function component"
+assert_contains "$out" '<h1>T-31, Laravel</h1>' "laravel T-31 render interpolates the prop"
+
+step "laravel: T-31 — refresh: edit, rebuild, redump, re-render"
+sed -i 's|<p>Function components autoload in prod via the manifest.</p>|<p>v2 — rebuilt through the manifest on refresh.</p>|' "$WORK/laravel/app/Components/hello.lintel.php"
+(cd "$WORK/laravel" \
+    && "$LINTEL_BIN" build app/Components --out bootstrap/cache/lintel --manifest \
+    && composer dump-autoload --no-interaction > /dev/null 2>&1)
+out="$(php "$WORK/laravel/lintel-t31.php")"
+assert_contains "$out" 'v2 — rebuilt through the manifest on refresh' "laravel T-31 refresh re-rendered the edited component"
 
 printf '\nALL T-11 SMOKE CHECKS PASSED\n'
