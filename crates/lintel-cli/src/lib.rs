@@ -26,8 +26,8 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use lintel_core::{
-    builtin_rule_metas, compile, compile_analyzed, ChildHint, ChildKind, Diagnostic, Options,
-    Target, TypeHints,
+    builtin_rule_metas, collect_inventory, compile, compile_analyzed, ChildHint, ChildKind,
+    Diagnostic, Options, Target, TypeHints,
 };
 
 mod manifest;
@@ -44,7 +44,7 @@ USAGE:
     lintel stats <paths>... [--format=text|json]
     lintel rules [--format=text|json]
     lintel init [DIR] [--demo N]
-    lintel migrate <paths>... [--to=native] [--format=text|json] [--out DIR | --in-place]
+    lintel migrate <paths>... [--to=native] [--format=text|json] [--dry-run] [--backup]
     lintel watch [paths]... [--socket PATH] [--foreground]
     lintel --help | --version
 
@@ -68,9 +68,16 @@ COMMANDS:
              paths, exit 0
     init     scaffold a runnable demo: hello.lintel.php source + compiled hello.php;
              with --demo N (1-5) scaffold one of the five T-15 demos instead
-    migrate  thin alias over `build --target=rfc`: emit the native-RFC-parity
-             lowering the future runtime consumes (docs/rfc-alignment.md);
-             `--to=native` is accepted and is the only value today
+    migrate  rewrite `.lintel.php` sources IN PLACE to the native RFC-parity
+             lowering (docs/rfc-alignment.md): each source compiles with
+             Target::Rfc and its JSX becomes `new \\Markup\\Element(...)` calls,
+             line-preserved, so the migrated file is the same PHP file the
+             future native runtime consumes. `--dry-run` prints a unified
+             diff per file and writes nothing; `--backup` keeps the original
+             bytes beside the rewrite as `<file>.bak`. A file that fails to
+             compile, or whose component invocations none of the migrated
+             sources declares, is refused untouched (exit 1); `--to=native`
+             is accepted and is the only value today
 
 FLAGS:
     --target=<t>    lowering target for build/check: string (default), stream
@@ -207,6 +214,18 @@ enum Invocation {
         /// `None` keeps `build` manifest-free (back-compat).
         manifest: Option<PathBuf>,
     },
+    /// `lintel migrate <paths> [--dry-run] [--backup]`: the Year-3
+    /// RFC-convergence migration — rewrite each source IN PLACE with the
+    /// native RFC-parity lowering (`new \Markup\Element` calls), refusing
+    /// files that fail to compile or whose components none of the migrated
+    /// sources declares. `--dry-run` prints the unified diff and writes
+    /// nothing; `--backup` keeps the original bytes as `<file>.bak`.
+    Migrate {
+        paths: Vec<PathBuf>,
+        format: Format,
+        dry_run: bool,
+        backup: bool,
+    },
     Check {
         paths: Vec<PathBuf>,
         target: Target,
@@ -296,32 +315,28 @@ pub fn run(
             format,
             destination,
             manifest,
-        } => {
-            let sources = collect_sources(&paths)?;
-            Ok(build(
-                &sources,
-                target,
-                format,
-                &destination,
-                manifest.as_deref(),
-                stdout,
-                stderr,
-            ))
-        }
+        } => run_build(
+            &paths,
+            target,
+            format,
+            &destination,
+            manifest.as_deref(),
+            stdout,
+            stderr,
+        ),
+        Invocation::Migrate {
+            paths,
+            format,
+            dry_run,
+            backup,
+        } => run_migrate(&paths, format, dry_run, backup, stdout, stderr),
         Invocation::Check {
             paths,
             target,
             format,
             types,
         } => {
-            if let Some(report) = &types {
-                if !report.is_file() {
-                    return Err(CliError(format!(
-                        "cannot read {}: no such file (--types names one analyze report file)",
-                        report.display()
-                    )));
-                }
-            }
+            check_types_report(types.as_deref())?;
             let sources = collect_sources(&paths)?;
             Ok(check(&sources, target, format, types.as_deref(), stderr))
         }
@@ -339,13 +354,10 @@ pub fn run(
             let report = init_demo(&path, demo)?;
             writeln!(
                 stdout,
-                "wrote {} ({} lines of .lintel.php)",
+                "wrote {} ({} lines of .lintel.php)\ncompiled {} — edit the source and run \
+                 `lintel build {}` to rebuild",
                 report.source.display(),
-                report.lines
-            )?;
-            writeln!(
-                stdout,
-                "compiled {} — edit the source and run `lintel build {}` to rebuild",
+                report.lines,
                 report.compiled.display(),
                 report.source.display()
             )?;
@@ -378,6 +390,66 @@ pub fn run(
     }
 }
 
+/// `build`: collect the sources, compile to the destination, report.
+///
+/// # Errors
+///
+/// Propagates [`collect_sources`]'s path errors.
+fn run_build(
+    paths: &[PathBuf],
+    target: Target,
+    format: Format,
+    destination: &Destination,
+    manifest: Option<&Path>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    Ok(build(
+        &collect_sources(paths)?,
+        target,
+        format,
+        destination,
+        manifest,
+        stdout,
+        stderr,
+    ))
+}
+
+/// `migrate`: collect the sources, rewrite in place, report.
+///
+/// # Errors
+///
+/// Propagates [`collect_sources`]'s path errors.
+fn run_migrate(
+    paths: &[PathBuf],
+    format: Format,
+    dry_run: bool,
+    backup: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    let sources = collect_sources(paths)?;
+    Ok(migrate(&sources, format, dry_run, backup, stdout, stderr))
+}
+
+/// `check`'s `--types` pre-check: an explicit report must exist (analyze
+/// reads sidecars; check demands the file).
+///
+/// # Errors
+///
+/// A `--types` path that does not exist returns [`CliError`].
+fn check_types_report(types: Option<&Path>) -> Result<(), CliError> {
+    if let Some(report) = types {
+        if !report.is_file() {
+            return Err(CliError(format!(
+                "cannot read {}: no such file (--types names one analyze report file)",
+                report.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Flags and paths collected after the command word (see [`parse_args`]).
 struct ParsedArgs {
     paths: Vec<PathBuf>,
@@ -391,6 +463,16 @@ struct ParsedArgs {
     types: Option<PathBuf>,
     out_seen: bool,
     in_place_seen: bool,
+    /// The `migrate`-only flags.
+    migrate: MigrateFlags,
+}
+
+/// The `migrate`-only flags: `--dry-run` prints the unified diff and
+/// writes nothing; `--backup` keeps the original bytes as `<file>.bak`
+/// beside the rewrite.
+struct MigrateFlags {
+    dry_run: bool,
+    backup: bool,
 }
 
 /// The `check`-only analyze report flag (§7.3-Y2): `build` rejects it.
@@ -452,6 +534,10 @@ fn parse_args(
         types: None,
         out_seen: false,
         in_place_seen: false,
+        migrate: MigrateFlags {
+            dry_run: false,
+            backup: false,
+        },
     };
     let mut index = 1;
     while index < args.len() {
@@ -488,6 +574,14 @@ fn parse_args(
                 return Err(CliError("--to is a `migrate` flag (values: native)".into()));
             }
             "--to" => return Err(CliError("--to is a `migrate` flag (values: native)".into())),
+            "--dry-run" if is_migrate => {
+                parsed.migrate.dry_run = true;
+            }
+            "--dry-run" => return Err(CliError("--dry-run is a `migrate` flag".into())),
+            "--backup" if is_migrate => {
+                parsed.migrate.backup = true;
+            }
+            "--backup" => return Err(CliError("--backup is a `migrate` flag".into())),
             "--types" => {
                 let value = value_flag(args, &mut index, "--types needs a value: the report file")?;
                 parsed.types = types_flag(value, is_build)?;
@@ -550,8 +644,12 @@ fn build_flag(
         .or((arg == "--out").then_some("--out"))
         .or((arg == "--in-place").then_some("--in-place"))
     {
-        if !is_build {
-            return Err(CliError(format!("{name} is a `build` flag")));
+        // `migrate` rewrites the source files themselves — an artifact
+        // destination contradicts the rewrite.
+        if !is_build || is_migrate {
+            return Err(CliError(format!(
+                "{name} is a `build` flag (migrate rewrites the source files in place)"
+            )));
         }
     } else if arg == "--manifest" || arg.starts_with("--manifest=") {
         // `migrate` shares `build`'s output flags but never takes a
@@ -690,12 +788,18 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
         }
     }
     match command.as_str() {
-        "build" | "migrate" => Ok(Invocation::Build {
+        "build" => Ok(Invocation::Build {
             paths: parsed.paths,
             target: parsed.target,
             format: parsed.format,
             destination: parsed.destination,
             manifest: parsed.manifest,
+        }),
+        "migrate" => Ok(Invocation::Migrate {
+            paths: parsed.paths,
+            format: parsed.format,
+            dry_run: parsed.migrate.dry_run,
+            backup: parsed.migrate.backup,
         }),
         "check" => Ok(Invocation::Check {
             paths: parsed.paths,
@@ -1014,6 +1118,296 @@ fn build(
         }
     }
     i32::from(failed)
+}
+
+/// `lintel migrate` (the Year-3 RFC-convergence card): rewrite each
+/// source IN PLACE with the native RFC-parity lowering. Safety rails,
+/// in order: a file that fails to compile is refused untouched (the
+/// rendered diagnostics go to the error sink), and a file whose component
+/// invocations none of the migrated sources declares is refused too — the
+/// rewrite must not leave a call the migrated set cannot resolve.
+/// `--dry-run` prints a unified diff per file and writes nothing;
+/// `--backup` keeps the original bytes beside the rewrite as
+/// `<file>.bak`. The exit code reports whether any file was refused.
+fn migrate(
+    sources: &[PathBuf],
+    format: Format,
+    dry_run: bool,
+    backup: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    // Pass 1: read every source and collect the declared component names
+    // across the whole migrated set (case-insensitive — PHP function
+    // lookups are case-insensitive, and the scanner's table agrees).
+    let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut read: Vec<(PathBuf, String)> = Vec::new();
+    let mut failed = false;
+    for source in sources {
+        match fs::read_to_string(source) {
+            Ok(src) => {
+                let parsed = lintel_core::scan::scan(&src);
+                for (name, _signature) in parsed.context.declared_signatures() {
+                    declared.insert(name.to_lowercase());
+                }
+                read.push((source.clone(), src));
+            }
+            Err(e) => {
+                let _ = writeln!(stderr, "lintel: cannot read {}: {e}", source.display());
+                failed = true;
+            }
+        }
+    }
+    // Pass 2: compile, resolve, rewrite.
+    for (source, src) in &read {
+        match compile(
+            src,
+            &Options {
+                target: Target::Rfc,
+            },
+        ) {
+            Err(problems) => {
+                for problem in &problems {
+                    emit_diagnostic(problem, src, format, stderr);
+                }
+                failed = true;
+            }
+            Ok(out) => {
+                if let Some((name, line)) = unresolved_invocation(src, &declared) {
+                    match format {
+                        Format::Text => {
+                            let _ = writeln!(
+                                stderr,
+                                "lintel: cannot migrate {}: the component `{}` (line {}) is declared in no migrated source — migrate its declaring file too",
+                                source.display(),
+                                name,
+                                line
+                            );
+                        }
+                        Format::Json => {
+                            let object = serde_json::json!({
+                                "file": source.display().to_string(),
+                                "line": line,
+                                "component": name,
+                                "message": "declared in no migrated source",
+                                "migrate": "refused",
+                            });
+                            let _ = writeln!(stderr, "{object}");
+                        }
+                    }
+                    failed = true;
+                    continue;
+                }
+                if out.php == *src {
+                    let _ = writeln!(stdout, "already migrated: {}", source.display());
+                    continue;
+                }
+                let rewritten = changed_line_count(src, &out.php);
+                if dry_run {
+                    let _ = writeln!(
+                        stdout,
+                        "would migrate {} ({} lines rewritten)",
+                        source.display(),
+                        rewritten
+                    );
+                    let _ = unified_diff(source, src, &out.php, stdout);
+                } else {
+                    if backup {
+                        let bak = PathBuf::from(format!("{}.bak", source.display()));
+                        if let Err(e) = fs::write(&bak, src) {
+                            let _ = writeln!(
+                                stderr,
+                                "lintel: cannot write the backup {}: {e}",
+                                bak.display()
+                            );
+                            failed = true;
+                            continue;
+                        }
+                    }
+                    if let Err(e) = fs::write(source, &out.php) {
+                        let _ =
+                            writeln!(stderr, "lintel: cannot rewrite {}: {e}", source.display());
+                        failed = true;
+                        continue;
+                    }
+                    let _ = writeln!(
+                        stdout,
+                        "migrated {} ({} lines rewritten)",
+                        source.display(),
+                        rewritten
+                    );
+                }
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+/// The first component invocation of `src` that neither the file itself
+/// nor any migrated source declares: `(name, 1-based line)`, or `None`
+/// when every invocation resolves. Cross-file components resolve through
+/// the migrated set (see [`migrate`]'s declared-name pass), never through
+/// the disk.
+fn unresolved_invocation(
+    src: &str,
+    declared: &std::collections::HashSet<String>,
+) -> Option<(String, usize)> {
+    let parsed = lintel_core::scan::scan(src);
+    let inventory = collect_inventory(&parsed.roots, &parsed.context);
+    inventory
+        .invocations
+        .iter()
+        .filter(|site| !site.declared_in_file && !declared.contains(&site.name.to_lowercase()))
+        .map(|site| {
+            let line = src[..site.offset.min(src.len())].matches('\n').count() + 1;
+            (site.name.clone(), line)
+        })
+        .next()
+}
+
+/// How many lines the rewrite actually changes (the report's number).
+fn changed_line_count(old: &str, new: &str) -> usize {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    old_lines
+        .iter()
+        .zip(new_lines.iter())
+        .filter(|(a, b)| a != b)
+        .count()
+        + old_lines.len().abs_diff(new_lines.len())
+}
+
+/// One line-pair edit-script entry.
+enum DiffOp<'a> {
+    Same(&'a str),
+    Del(&'a str),
+    Add(&'a str),
+}
+
+/// The context lines a unified-diff hunk carries around its changes.
+const DIFF_CONTEXT: usize = 2;
+
+/// The LCS edit script between two line lists (the lines are small; the
+/// `O(n·m)` table is fine for source files).
+fn diff_ops<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffOp<'a>> {
+    let n = old.len();
+    let m = new.len();
+    let mut table = vec![vec![0_u32; m + 1]; n + 1];
+    for (i, old_line) in old.iter().enumerate().rev() {
+        for (j, new_line) in new.iter().enumerate().rev() {
+            table[i][j] = if old_line == new_line {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+    let mut ops = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < n && j < m {
+        if old[i] == new[j] {
+            ops.push(DiffOp::Same(old[i]));
+            i += 1;
+            j += 1;
+        } else if table[i + 1][j] >= table[i][j + 1] {
+            ops.push(DiffOp::Del(old[i]));
+            i += 1;
+        } else {
+            ops.push(DiffOp::Add(new[j]));
+            j += 1;
+        }
+    }
+    ops.extend(old[i..].iter().map(|line| DiffOp::Del(line)));
+    ops.extend(new[j..].iter().map(|line| DiffOp::Add(line)));
+    ops
+}
+
+/// Print a unified diff (`--- a/<path>` … `@@ …` hunks, 2 context lines)
+/// of `old` → `new` to `stdout`. Returns whether anything was printed.
+fn unified_diff(
+    path: &Path,
+    old: &str,
+    new: &str,
+    stdout: &mut dyn Write,
+) -> std::io::Result<bool> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let ops = diff_ops(&old_lines, &new_lines);
+    if ops.iter().all(|op| matches!(op, DiffOp::Same(_))) {
+        return Ok(false);
+    }
+    // Per-op line numbers: where the op's line sits in the old and new
+    // file (1-based; a Del advances only the old counter, an Add only
+    // the new one).
+    let mut numbers: Vec<(u32, u32)> = Vec::with_capacity(ops.len());
+    let mut old_no = 1_u32;
+    let mut new_no = 1_u32;
+    for op in &ops {
+        numbers.push(match op {
+            DiffOp::Same(_) => {
+                let pair = (old_no, new_no);
+                old_no += 1;
+                new_no += 1;
+                pair
+            }
+            DiffOp::Del(_) => {
+                let pair = (old_no, new_no);
+                old_no += 1;
+                pair
+            }
+            DiffOp::Add(_) => {
+                let pair = (old_no, new_no);
+                new_no += 1;
+                pair
+            }
+        });
+    }
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| !matches!(op, DiffOp::Same(_)))
+        .map(|(index, _)| index)
+        .collect();
+    writeln!(stdout, "--- a/{}", path.display())?;
+    writeln!(stdout, "+++ b/{}", path.display())?;
+    let mut hunk_start = 0_usize;
+    while hunk_start < changed.len() {
+        // The hunk spans `changed[hunk_start..hunk_end]`, expanded by the
+        // context window and merged with the next change when the windows
+        // overlap.
+        let mut hunk_end = hunk_start + 1;
+        while hunk_end < changed.len()
+            && changed[hunk_end] <= changed[hunk_end - 1] + 2 * DIFF_CONTEXT + 1
+        {
+            hunk_end += 1;
+        }
+        let first = changed[hunk_start].saturating_sub(DIFF_CONTEXT);
+        let last = (changed[hunk_end - 1] + DIFF_CONTEXT).min(ops.len() - 1);
+        let old_start = numbers[first].0;
+        let new_start = numbers[first].1;
+        let old_count = ops[first..=last]
+            .iter()
+            .filter(|op| !matches!(op, DiffOp::Add(_)))
+            .count();
+        let new_count = ops[first..=last]
+            .iter()
+            .filter(|op| !matches!(op, DiffOp::Del(_)))
+            .count();
+        writeln!(
+            stdout,
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
+        )?;
+        for op in &ops[first..=last] {
+            match op {
+                DiffOp::Same(line) => writeln!(stdout, " {line}")?,
+                DiffOp::Del(line) => writeln!(stdout, "-{line}")?,
+                DiffOp::Add(line) => writeln!(stdout, "+{line}")?,
+            }
+        }
+        hunk_start = hunk_end;
+    }
+    Ok(true)
 }
 
 /// Where this source's compiled artifact lands (the T-31 manifest's
