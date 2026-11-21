@@ -34,6 +34,18 @@
 //! validated on access, buffer-synced files re-parsed immediately — so a
 //! component declared in a closed file is renamable, referenceable,
 //! symbol-listed and definition-resolvable.
+//!
+//! # The tree-sitter lane
+//!
+//! Every declaration table the queries read is a **merged** view: the
+//! persistent index's lintel-core scanner facts (the JSX-structure
+//! authority) unioned with the independent tree-sitter parse
+//! ([`tree_sitter`], the §17.1-Q3 "tree-sitter grammar" card) — a
+//! declaration only one lane sees still resolves, renames and lists
+//! references, and a file whose tree-sitter parse cannot see its
+//! declarations (a broken declaration header) falls back to the scanner
+//! alone. The lane rides the same persistent index: each entry carries
+//! its tree-sitter scan in `.lintel-cache/lsp-index.json`.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -55,6 +67,7 @@ use lintel_core::{collect_inventory, compile, Diagnostic, Options, Severity};
 mod code_action;
 mod format;
 mod index;
+mod tree_sitter;
 mod workspace;
 
 use index::WorkspaceIndex;
@@ -1207,21 +1220,25 @@ impl Server {
         self.index.fresh_text(uri).map(|(text, _)| text)
     }
 
-    /// The authoritative text + indexed declarations of one workspace
-    /// URI: an open document contributes its synced buffer (scanned —
-    /// the live buffer is the truth), a closed file its freshness-
-    /// validated index entry. This is the accessor the cross-file
-    /// queries and the index-backed definition share.
+    /// The authoritative text + merged declarations of one workspace URI:
+    /// an open document contributes its synced buffer (scanned by BOTH
+    /// lanes — the live buffer is the truth), a closed file its
+    /// freshness-validated index entry with the tree-sitter lane unioned
+    /// onto the scanner facts (`index::merged_file`). This is the
+    /// accessor the cross-file queries read — definition, rename,
+    /// references and symbols all consult the tree-sitter index in
+    /// addition to the lintel-core index through it.
     pub(crate) fn workspace_file(
         &mut self,
         uri: &str,
     ) -> Option<(String, Vec<index::IndexedComponent>)> {
         if let Some(document) = self.documents.get(uri) {
             let text = document.text.clone();
-            let declarations = index::scan_declarations(&text);
-            return Some((text, declarations));
+            let scanner = index::scan_declarations(&text);
+            let ts = tree_sitter::scan(&text);
+            return Some((text, tree_sitter::merge(scanner, &ts)));
         }
-        self.index.fresh_text(uri)
+        self.index.merged_file(uri)
     }
 
     /// `didOpen`: the document starts with the client's text.
@@ -1464,6 +1481,10 @@ impl Server {
         match focus.cursor {
             CursorInTag::Name { .. } if focus.span.is_component() => {
                 let name = focus.span.name.to_string();
+                // Same-file first: the scanner's declaration table, then
+                // the tree-sitter lane's view of the same buffer (a
+                // declaration only the independent parse sees), then the
+                // merged workspace walk.
                 let same_file = {
                     let document = self.documents.get(&uri)?;
                     let parsed = lintel_core::scan::scan(&document.text);
@@ -1475,7 +1496,22 @@ impl Server {
                             declaration.name.len(),
                         )
                     })
-                };
+                }
+                .or_else(|| {
+                    let document = self.documents.get(&uri)?;
+                    let ts = tree_sitter::scan(&document.text);
+                    ts.declarations
+                        .iter()
+                        .find(|declaration| declaration.name.to_lowercase() == name.to_lowercase())
+                        .map(|declaration| {
+                            byte_range_location(
+                                &parse_uri(&uri),
+                                &document.text,
+                                declaration.offset,
+                                declaration.name.len(),
+                            )
+                        })
+                });
                 same_file.or_else(|| self.workspace_definition(&name))
             }
             CursorInTag::Attributes { attrs, .. } if focus.span.is_component() => {
