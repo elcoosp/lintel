@@ -207,4 +207,48 @@ final class ComponentTesterTest extends TestCase
             putenv('LINTEL_BIN');
         }
     }
+
+    /**
+     * The Phase 9 M3 acceptance: `renderStreaming()` compiles through the
+     * §10 stream lowering and consumes the generator via `\Lintel\stream()`
+     * — the fully consumed stream output must equal the string target's
+     * byte for byte (the §10 sync-compat contract), hostile payload and
+     * nested markup included. One PHP process declares a component name
+     * once (and under one target — the stream artifact declares the same
+     * function name as the string artifact), so the parity fixture is the
+     * same component body under two names.
+     */
+    public function testRenderStreamingMatchesStringRender(): void
+    {
+        $body = 'function %s(string $label, int $n): Html'
+            . ' { return <b class="badge" data-n={$n}><i>pre</i>{$label}</b>; }';
+        $props = ['label' => 'Ada <script>alert(1)</script>', 'n' => 3];
+
+        $string = $this->tester()->render(sprintf($body, 'ParityBadge'), $props);
+        $streamed = $this->tester()->renderStreaming(sprintf($body, 'ParityBadgeStream'), $props);
+
+        self::assertSame($string, $streamed, 'the consumed stream equals the string render');
+        self::assertStringContainsString(
+            '&lt;script&gt;alert(1)&lt;/script&gt;',
+            $streamed,
+            'the stream lane escapes like the string lane',
+        );
+    }
+
+    /** The one-target-per-process constraint is loud: streaming a source
+     * whose component name the string target already declared refuses
+     * before the fatal. */
+    public function testRenderStreamingRefusesANameDeclaredByTheStringTarget(): void
+    {
+        $this->tester()->render(
+            'function Twin(string $x): Html { return <i>{$x}</i>; }',
+            ['x' => 'a'],
+        );
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('under one compile target');
+        $this->tester()->renderStreaming(
+            'function Twin(string $x): Html { return <i>{$x}</i>; }',
+            ['x' => 'a'],
+        );
+    }
 }
