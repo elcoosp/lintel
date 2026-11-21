@@ -5,7 +5,7 @@ Lintel's design starts from one rule: **escape by default, and reject the
 sinks escaping cannot fix.** Every dynamic value in emitted markup goes
 through a context-aware helper; every helper ships in
 `php/runtime/src/functions.php` and every one is exercised by the §7.2
-PHPUnit threat corpus in CI — 27 tests over the vector list below plus
+PHPUnit threat corpus in CI — 31 tests over the vector list below plus
 PHPStan level max over the runtime.
 
 ## The context matrix
