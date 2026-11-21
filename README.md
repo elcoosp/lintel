@@ -5,8 +5,9 @@
     Write components as JSX inside ordinary PHP and compile <code>.lintel.php</code> sources to plain PHP:
     string concatenation by default, generators for streaming SSR, or <code>\Markup\Element</code> calls aligned
     with the native PHP markup RFC. Non-JSX bytes pass through verbatim and every line keeps its number, so
-    Xdebug, PHPStan and stack traces point at the code you wrote. Pre-1.0: the compiler core and the
-    <code>lintel</code> CLI ship today; the PHP runtime helpers are the next milestone.
+    Xdebug, PHPStan and stack traces point at the code you wrote. The v1.0 feature set ships today:
+    the compiler, the PHP runtime helpers, streaming SSR with Suspense, the watch daemon, the LSP with
+    the tree-sitter lane, the WASM playground and the production deployment guides.
   </p>
   <p>
     <a href="https://github.com/elcoosp/lintel/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/elcoosp/lintel/ci.yml?style=flat-square&label=CI" alt="CI status"/></a>
@@ -185,7 +186,7 @@ Every seam has a runnable example under [`crates/lintel-core/examples/`](crates/
 ## Status
 
 > [!NOTE]
-> Lintel is pre-1.0 (v0.1). The scanner, parser, validation pass, all three lowering targets, escape elision, suppression directives, JSON diagnostics, the `NodeVisitor` seam and the `lintel init/build/check` CLI are implemented and tested. CI runs `cargo fmt --check`, pedantic Clippy with `-D warnings`, and the full test and bench suite on every push. The PHP runtime (`\Lintel\Html` and the `c/a/u/cls/sty/srcset/attrs` helpers), watch/daemon mode, the WASM playground, LSP and the rendering benchmarks are not built yet — emitted helper calls are forward references until the runtime lands. The [implementation status table](docs/architecture.md) (§21) reconciles shipped versus planned.
+> Lintel is at v1.0 readiness. Implemented and tested end to end: the scanner, parser, validation pass, all three lowering targets (`string`/`stream`/`rfc`), escape elision, suppression directives, JSON diagnostics, the `NodeVisitor` and rule-registry seams, the `lintel init/build/check/analyze/stats/rules/migrate/watch` CLI, the content-addressed incremental build cache, the PHP runtime (`\Lintel\Html` and the `c/a/u/cls/sty/srcset/attrs` helpers) with the §7.2 threat corpus, streaming with `<Suspense>` and the four server-adapter transports (RoadRunner end-to-end in CI), the Laravel and Symfony bridges, the persistent LSP workspace index with the tree-sitter lane, the WASM playground, the benchmark harness and the deployment guides. CI runs actionlint, `cargo fmt --check`, pedantic Clippy with `-D warnings`, cargo-deny, the full Rust and PHP suites, the fuzz lane over the seeded corpus and the docs link check on every push. The [implementation status table](docs/architecture.md) (§21) reconciles shipped versus planned.
 
 Questions and bugs: [GitHub issues](https://github.com/elcoosp/lintel/issues).
 
