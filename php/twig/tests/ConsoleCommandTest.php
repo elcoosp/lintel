@@ -19,25 +19,30 @@ use Symfony\Component\Console\Output\BufferedOutput;
  */
 final class ConsoleCommandTest extends TestCase
 {
-    /** `lintel:build` compiles the fixture: artifacts + manifest + exit 0. */
+    /** `lintel:build` compiles the fixture: artifacts + manifest + exit 0.
+     *
+     * The M0 cwd-hygiene regression: the bare `--manifest` write resolves
+     * against the workspace being compiled (the src/… + cache/ ancestor —
+     * the project root), never the process cwd, so this runs from wherever
+     * PHPUnit sits and the manifest must still land at `$root` with no
+     * stray `lintel.json` at the runner's cwd. */
     public function testBuildCommandCompilesIntoCacheDir(): void
     {
         $root = sys_get_temp_dir() . '/lintel-sf-console-' . bin2hex((string) random_bytes(4));
         \mkdir($root . '/src', 0777, true);
         \copy(__DIR__ . '/fixture/Badge.lintel.php', $root . '/src/Badge.lintel.php');
 
-        $back = \getcwd() ?: '.';
-        \chdir($root); // `--manifest` (bare) writes lintel.json to the cwd — console runs from the project root
-        try {
-            $cmd = new BuildCommand($root . '/cache', [$root . '/src']);
-            $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput());
-        } finally {
-            \chdir($back);
-        }
+        $runnerCwd = \getcwd() ?: '.';
+        $cmd = new BuildCommand($root . '/cache', [$root . '/src']);
+        $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput());
 
         self::assertSame(0, $rc, $out->fetch());
         self::assertFileExists($root . '/cache/Badge.php');
-        self::assertFileExists($root . '/lintel.json');
+        self::assertFileExists($root . '/lintel.json', 'the manifest lands at the workspace root');
+        self::assertFileDoesNotExist(
+            $runnerCwd . '/lintel.json',
+            'no stray manifest at the process cwd (M0 cwd hygiene)',
+        );
     }
 
     /** The binary's error diagnostics map to FAILURE and render RAW — the
