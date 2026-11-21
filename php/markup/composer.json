@@ -1,0 +1,40 @@
+{
+    "name": "markup/markup",
+    "description": "The Native Markup Expressions runtime: escape-by-default rendering of the \\Markup\\Element/Fragment/Html values the `--target=rfc` lowering emits (architecture doc Year 3 RFC convergence, docs/rfc-alignment.md)",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Markup\\": "src/"
+        },
+        "files": ["src/functions.php"]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Markup\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.1"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../runtime"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require-dev": {
+        "lintel/runtime": "*",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    },
+    "scripts": {
+        "test": "phpunit --configuration phpunit.xml",
+        "stan": "phpstan analyse --memory-limit=1G --no-progress"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "prefer-stable": true
+}
