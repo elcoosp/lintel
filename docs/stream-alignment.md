@@ -41,10 +41,13 @@ Details the doc does not pin down, decided here:
    a stream artifact). When the stream lowering is active, the scanner
    rewrites a declared `Html` spelling (canonical, `?Html` nullable,
    `\Lintel\Html` qualified) to the non-null `\Generator` **on the same
-   line** (line preservation holds). Unions (`Html|string` — the type
-   span stops at `|`) and body-less declarations (abstract/interface
-   `;`) copy verbatim; the string and rfc targets keep every declaration
-   exactly as written.
+   line** (line preservation holds) — for NAMED declarations AND for
+   braced anonymous closures (`static function (): Html { … }`, the M2
+   backlog pass: the closure's body returns the generator closure too).
+   Unions (`Html|string` — the type span stops at `|`) and body-less
+   declarations (abstract/interface `;`, an arrow `fn(): Html => …`) copy
+   verbatim; the string and rfc targets keep every declaration exactly as
+   written.
 2. **Chunks mirror the string target's parts.** Literal runs merge into one
    quoted string chunk (one `yield` per literal run, same merge rule as the
    string concat, doc 6.5); dynamic children/attributes ride through the same
