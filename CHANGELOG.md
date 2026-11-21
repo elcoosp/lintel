@@ -7,8 +7,43 @@ versions with SemVer, and the language spec versions separately
 
 ## [Unreleased]
 
+### Fixed
+
+- The Phase 7 bool-elision PHPStan fixture's report-resolution assertion
+  (`php/lintel-phpstan/tests/AnalyzeElisionTest.php`): the fixture typed the
+  hostile prop `string`, which wins the §7.3 elision ladder before the
+  analyze report is consulted, so the mis-proof case could never fire and
+  the suite stayed red. The fixture's prop is untyped now — the report's
+  `bool` claim is the only proof, the fold renders the constant `''`, and
+  the PHPStan suite is green (13 tests) with no skips.
+
 ### Added
 
+- **§17.1-Q3 testing helpers** (`php/lintel/src/Test/ComponentTester.php`,
+  `Lintel\Test\ComponentTester`): compile-and-render a component source
+  in one call without booting a framework — the source compiles on the fly
+  through the real binary (the §6.10 compile path), the component invokes
+  with named arguments, and the result renders through the §6.8 runtime's
+  `\Lintel\c()`. `assertRenders` / `assertRendersContaining` ride
+  PHPUnit's `Assert`; `render()` alone needs none. The suite's hostile
+  payloads prove escaping is under test too (child payloads escape, hostile
+  URLs block, quote breakouts escape).
+- **§17.1-Q3 advanced LSP surface** (`crates/lintel-lsp/src/workspace.rs`):
+  `textDocument/rename` (component + prop renames as a `WorkspaceEdit` over
+  the open documents — declaration and every tag/attribute usage, open and
+  close), `textDocument/references` (component tag usages / prop attribute
+  usages, declaration behind `includeDeclaration`), and `workspace/symbol`
+  (case-insensitive subsequence fuzzy search over declared components as
+  FUNCTION symbols). Targets must be declared in the open workspace; the
+  workspace is the open documents (the §17.1-Q3 persistent index stays
+  backlog).
+- **The Year-3 real `lintel migrate`**: no longer a thin `build
+  --target=rfc` alias — it rewrites `.lintel.php` sources IN PLACE with the
+  RFC-parity `new \Markup\Element` lowering (line-preserved),
+  `--dry-run` prints a unified diff and writes nothing, `--backup` keeps
+  the original bytes as `<file>.bak`, and files that fail to compile or
+  whose components no migrated source declares are refused untouched.
+  Cross-file components resolve through the migrated set's declared names.
 - **§10 server adapters** (`php/runtime/src/transports.php`): the
   `SwooleFlushTransport`, `ReactPHPFlushTransport`, `FrankenPHPFlushTransport`
   and `RoadRunnerFlushTransport` lanes on the existing `FlushTransport`
