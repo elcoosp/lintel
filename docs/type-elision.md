@@ -61,16 +61,21 @@ renders for the same value — the fold changes cost, never markup:
   baked into the artifact, not read at runtime. A multi-line value never
   inlines (line preservation, doc 13.4).
 
-### The deliberate non-elision: `bool`
+### The `bool` fold (M3)
 
-`c()` renders every bool as `''` (the §6.8 runtime contract the
-differential suite pins) while a raw bool interpolates as `'1'` — no fold
-preserves the rendered output: emitting the raw expression changes `true`
-from `''` to `'1'`, and inlining `''` would drop the expression's
-evaluation. `bool` therefore stays wrapped; the collector still REPORTS
-it (the report is a real type surface) and the compiler treats it as
-non-elidable. Recorded as the Y2 backlog item if a parity-safe fold is
-ever found.
+`c()` renders every bool as `''` — both `true` and `false` — while a raw
+interpolation renders `'1'`. The shipped fold emits
+`(($expr) ? '' : '')`: the ternary **evaluates the expression** (side
+effects ride along) and emits the constant `''`, byte-identical to
+`c()`'s output for both truth values. Nothing runtime-controlled reaches
+the markup — the emitted form has only two constant branches — so even a
+mis-proven type renders empty, never its content (stronger than the
+int/float rules, whose raw interpolation trusts the type at render time).
+A multi-line expression stays wrapped (the one-line ternary would shift
+the artifact's lines, doc 13.4). Goldens: `tests/analyze.rs` (the emitted
+shape, the multi-line guard, the mis-proven shape) and
+`AnalyzeElisionTest::testBoolFoldIsParitySafeSideEffectPreservingAndMisProofSafe`
+(execution: parity, side effects, and the lying-report threat case).
 
 ## The report contract
 
