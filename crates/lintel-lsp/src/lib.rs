@@ -22,15 +22,18 @@
 //! the session. Everything else answers method-not-found, so a client's
 //! later capabilities never mislead.
 //!
-//! # Cross-file signatures
+//! # Cross-file signatures and the workspace index
 //!
 //! Hover, completion and definition resolve **in the hovered file** (the
 //! same-file tables the same-file validation rules use). Folding in other
 //! files' signatures is the cross-file seam's job
-//! ([`lintel_core::scan::ScanContext::merged_with`]); definition positions
-//! deliberately do not merge (another file's byte offsets point into *its*
-//! source) — cross-file definition is the workspace-index seam's job and
-//! stays on the §17.1 Q3 backlog with tree-sitter and rename.
+//! ([`lintel_core::scan::ScanContext::merged_with`]); definition, rename,
+//! references and workspace symbols go cross-file through the **persistent
+//! workspace index** (the §17.1-Q3 card): `initialize` walks the workspace
+//! root and indexes every `.lintel.php` file's declarations — mtime+size
+//! validated on access, buffer-synced files re-parsed immediately — so a
+//! component declared in a closed file is renamable, referenceable,
+//! symbol-listed and definition-resolvable.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -51,7 +54,10 @@ use lintel_core::{collect_inventory, compile, Diagnostic, Options, Severity};
 
 mod code_action;
 mod format;
+mod index;
 mod workspace;
+
+use index::WorkspaceIndex;
 
 /// The server's name, advertised in `initialize`'s `serverInfo`.
 pub const SERVER_NAME: &str = "lintel-lsp";
@@ -89,10 +95,7 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
         let id = message.get("id").cloned();
         match (method, id) {
             ("exit", _) => return 0,
-            ("initialize", Some(id)) => write_response(
-                output,
-                &json!({"jsonrpc": "2.0", "id": id, "result": initialize_result()}),
-            ),
+            ("initialize", Some(id)) => initialize_session(&mut server, &params, output, &id),
             ("initialized", None) => {}
             ("shutdown", Some(id)) => {
                 write_response(output, &json!({"jsonrpc": "2.0", "id": id, "result": null}));
@@ -156,7 +159,7 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
                 method @ ("textDocument/rename" | "textDocument/references" | "workspace/symbol"),
                 Some(id),
             ) => {
-                workspace::respond(&server, method, output, &id, params);
+                workspace::respond(&mut server, method, output, &id, params);
             }
             (method, Some(id)) => {
                 write_response(
@@ -173,12 +176,14 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
 
 /// Answer one document query: deserialize `params` into `T`, run the
 /// handler, and write the result (a `null` result when the params do not
-/// parse or the handler has no answer — the spec's empty answer).
+/// parse or the handler has no answer — the spec's empty answer). The
+/// handler takes `&mut` because the workspace queries may refresh stale
+/// index entries on access.
 fn respond_query<T, R>(
     output: &mut dyn Write,
     id: &Value,
     params: Value,
-    handle: impl Fn(&T) -> Option<R>,
+    mut handle: impl FnMut(&T) -> Option<R>,
 ) where
     T: serde::de::DeserializeOwned,
     R: serde::Serialize,
@@ -189,6 +194,41 @@ fn respond_query<T, R>(
     write_response(
         output,
         &json!({"jsonrpc": "2.0", "id": id, "result": result}),
+    );
+}
+
+/// The workspace root `initialize` named: the first `workspaceFolders`
+/// entry's URI (the spec's preferred shape), else `rootUri` (the
+/// fallback), else `None` — a rootless client gets the
+/// open-documents-only workspace. Read off the raw params so any client
+/// shape that names a root works.
+fn initialize_root(params: &Value) -> Option<String> {
+    params
+        .get("workspaceFolders")
+        .and_then(Value::as_array)
+        .and_then(|folders| folders.first())
+        .and_then(|folder| folder.get("uri"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            params
+                .get("rootUri")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+/// The `initialize` arm of the dispatch: build the persistent workspace
+/// index over the root the client named (the §17.1-Q3 card — the walk
+/// reads the client's `workspaceFolders` or `rootUri`; a rootless client
+/// keeps the open-documents-only behavior), then answer with the
+/// capability set.
+fn initialize_session(server: &mut Server, params: &Value, output: &mut dyn Write, id: &Value) {
+    let root = initialize_root(params);
+    server.initialize(root.as_deref());
+    write_response(
+        output,
+        &json!({"jsonrpc": "2.0", "id": id, "result": initialize_result()}),
     );
 }
 
@@ -279,10 +319,14 @@ fn write_response(output: &mut dyn Write, message: &Value) {
     }
 }
 
-/// The server: the open documents and their last diagnostics.
+/// The server: the open documents, their last diagnostics, and the
+/// persistent workspace index (the §17.1-Q3 seam: the declarations of the
+/// closed files `initialize` walked, so rename/references/symbols and
+/// definition see the whole workspace, not only the open buffers).
 #[derive(Default)]
 struct Server {
     documents: HashMap<String, Document>,
+    index: WorkspaceIndex,
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,10 +1175,62 @@ const ELEMENT_ATTRS: &[(&str, &[&str])] = &[
 ];
 
 impl Server {
+    /// `initialize`: build the persistent workspace index over the root
+    /// the client named (the §17.1-Q3 card) — the walk parses every
+    /// `.lintel.php` declaration the open documents do not cover, backed
+    /// by the mtime+size on-disk cache. A rootless client keeps the
+    /// open-documents-only workspace.
+    fn initialize(&mut self, root: Option<&str>) {
+        self.index = WorkspaceIndex::for_root(root);
+    }
+
+    /// Every workspace URI the server knows: the open documents plus the
+    /// persistent index's files, sorted and deduped — the deterministic
+    /// walk order every cross-file query shares (open buffers win for
+    /// their own URIs; the index covers exactly the rest).
+    pub(crate) fn workspace_uris(&self) -> Vec<String> {
+        let mut uris: Vec<String> = self.documents.keys().cloned().collect();
+        uris.extend(self.index.uris());
+        uris.sort();
+        uris.dedup();
+        uris
+    }
+
+    /// The authoritative text of one workspace URI: an open document
+    /// contributes its synced buffer, a closed file its index entry (the
+    /// disk bytes, freshness-validated by mtime+size — a stale entry
+    /// re-parses on access).
+    pub(crate) fn workspace_text(&mut self, uri: &str) -> Option<String> {
+        if let Some(document) = self.documents.get(uri) {
+            return Some(document.text.clone());
+        }
+        self.index.fresh_text(uri).map(|(text, _)| text)
+    }
+
+    /// The authoritative text + indexed declarations of one workspace
+    /// URI: an open document contributes its synced buffer (scanned —
+    /// the live buffer is the truth), a closed file its freshness-
+    /// validated index entry. This is the accessor the cross-file
+    /// queries and the index-backed definition share.
+    pub(crate) fn workspace_file(
+        &mut self,
+        uri: &str,
+    ) -> Option<(String, Vec<index::IndexedComponent>)> {
+        if let Some(document) = self.documents.get(uri) {
+            let text = document.text.clone();
+            let declarations = index::scan_declarations(&text);
+            return Some((text, declarations));
+        }
+        self.index.fresh_text(uri)
+    }
+
     /// `didOpen`: the document starts with the client's text.
     fn did_open(&mut self, params: &DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let text = params.text_document.text.clone();
+        // The synced text re-parses into the index immediately — an open
+        // buffer's declarations are live for the cross-file queries too.
+        self.index.upsert_from_text(&uri, &text);
         self.documents.insert(uri, Document { text });
     }
 
@@ -1146,6 +1242,9 @@ impl Server {
             .last()
             .map(|change| change.text.clone())
         {
+            // Full sync re-parses the document's declarations into the
+            // index (the §17.1-Q3 card's invalidation rule).
+            self.index.upsert_from_text(&uri, &text);
             self.documents.insert(uri, Document { text });
         }
     }
@@ -1154,6 +1253,7 @@ impl Server {
     fn did_save(&mut self, params: &DidSaveTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         if let Some(text) = params.text.as_ref() {
+            self.index.upsert_from_text(&uri, text);
             self.documents.insert(uri, Document { text: text.clone() });
         }
     }
@@ -1331,39 +1431,56 @@ impl Server {
     }
 
     /// The go-to-definition target for `params`: a component tag (open or
-    /// close) resolves to the declared function's name span; a prop of a
-    /// component tag resolves to the parameter it names — both through the
-    /// scanner's `Declaration` table (the same walk that fills the
-    /// signature table), mapped through the line-preservation guarantee.
-    /// Same-file only: another file's offsets point into *its* source, and
-    /// cross-file definition is the workspace-index seam's job (§17.1 Q3
-    /// backlog).
+    /// close) resolves to the declared function's name span — same-file
+    /// first (the scanner's `Declaration` table), then across the
+    /// persistent workspace index (the §17.1-Q3 card): a component declared
+    /// in a closed file resolves to its declaration location (file, line
+    /// and column) there, mapped on the declaring file's own validated
+    /// bytes. A prop of a component tag resolves to the parameter it names
+    /// — same-file (the parameter's position needs the declaring file's
+    /// text, which the same-file table already provides). All positions
+    /// map through the line-preservation guarantee.
     #[must_use]
-    fn definition(&self, params: &lsp_types::GotoDefinitionParams) -> Option<Location> {
+    fn definition(&mut self, params: &lsp_types::GotoDefinitionParams) -> Option<Location> {
         let uri = params
             .text_document_position_params
             .text_document
             .uri
             .to_string();
-        let document = self.documents.get(&uri)?;
-        let cursor = offset_of_position(
-            &document.text,
-            params.text_document_position_params.position,
-        );
-        let focus = tag_focus_at(&document.text, cursor)
-            .or_else(|| in_flight_tag(&document.text, cursor))?;
-        let parsed = lintel_core::scan::scan(&document.text);
+        let cursor = {
+            let document = self.documents.get(&uri)?;
+            offset_of_position(
+                &document.text,
+                params.text_document_position_params.position,
+            )
+        };
+        // The cursor's tag facts resolve from the buffer (shared borrows
+        // only — the index-backed fallback below borrows `self` mutably).
+        let focus = {
+            let document = self.documents.get(&uri)?;
+            tag_focus_at(&document.text, cursor)
+                .or_else(|| in_flight_tag(&document.text, cursor))?
+        };
         match focus.cursor {
             CursorInTag::Name { .. } if focus.span.is_component() => {
-                let declaration = parsed.context.declaration_of(focus.span.name)?;
-                Some(byte_range_location(
-                    &parse_uri(&uri),
-                    &document.text,
-                    declaration.offset,
-                    declaration.name.len(),
-                ))
+                let name = focus.span.name.to_string();
+                let same_file = {
+                    let document = self.documents.get(&uri)?;
+                    let parsed = lintel_core::scan::scan(&document.text);
+                    parsed.context.declaration_of(&name).map(|declaration| {
+                        byte_range_location(
+                            &parse_uri(&uri),
+                            &document.text,
+                            declaration.offset,
+                            declaration.name.len(),
+                        )
+                    })
+                };
+                same_file.or_else(|| self.workspace_definition(&name))
             }
             CursorInTag::Attributes { attrs, .. } if focus.span.is_component() => {
+                let document = self.documents.get(&uri)?;
+                let parsed = lintel_core::scan::scan(&document.text);
                 let declaration = parsed.context.declaration_of(focus.span.name)?;
                 // The attribute name under the cursor resolves to the
                 // parameter it names (PHP named arguments are
@@ -1381,6 +1498,30 @@ impl Server {
             }
             _ => None,
         }
+    }
+
+    /// The cross-file half of definition (the §17.1-Q3 card): the first
+    /// workspace file whose declarations carry `name` — open buffers and
+    /// freshness-validated closed files alike, URI order — contributes its
+    /// declaration location, mapped on the declaring file's own text.
+    /// `None` when no indexed file declares it.
+    fn workspace_definition(&mut self, name: &str) -> Option<Location> {
+        for uri in self.workspace_uris() {
+            let Some((text, declarations)) = self.workspace_file(&uri) else {
+                continue;
+            };
+            for declaration in &declarations {
+                if declaration.name.to_lowercase() == name.to_lowercase() {
+                    return Some(byte_range_location(
+                        &parse_uri(&uri),
+                        &text,
+                        declaration.offset,
+                        declaration.name.len(),
+                    ));
+                }
+            }
+        }
+        None
     }
 
     /// The signature help for `params`: the typed parameter list with the
