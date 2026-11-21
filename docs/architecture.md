@@ -1361,7 +1361,7 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | T-31 PSR-4 function components | **done** | `crates/lintel-cli/src/manifest.rs` — `lintel build --manifest[=PATH]` scans successfully compiled sources for top-level `function Name(...): Html` (§6.10's T-31 note) and writes `lintel.json`: the user's `functions` globs preserved, `components` name→source, `prod.artifacts` source→artifact. Dev: `Loader::boot` eager-requires the sources **before** the PSR-4 fallback registers (class lane regression-guarded); prod: the plugin's `pre-autoload-dump` generates `<vendor>/lintel/functions.php` requiring each artifact (Composer's `$baseDir` convention) and appends it to the root package's `files` autoload — idempotent, in-memory — and records loaded sources in `$GLOBALS['lintelFromSource']`, which the loader consults to skip sources the shim already required (no lane double-declares a component). `scripts/dx-smoke.sh` proves the acceptance: a fresh Laravel skeleton with a component in `app/Components/` renders on refresh with no manual require |
 | T-12 Watch/daemon mode | **done (unblocked by T-14's spawn evidence; hardened in the Phase 10 pass)** | `crates/lintel-cli/src/watch.rs` — `lintel watch [paths] [--socket PATH] [--foreground]`: background mode detaches itself (`process_group(0)`) and poll-connects for readiness (the probe opens and closes WITHOUT sending — the Phase 2 probe sent the `quit` frame and stopped the daemon it had just verified; `docs/daemon-protocol.md` pins the contract); the daemon binds a Unix socket (loopback-TCP fallback on Windows, compile-checked; its socket tests are DEFERRED-TO-CI/MAINTAINER — no Windows runner in the sandbox), watches the roots with `notify` (invalidation on notify's own thread through a shared cache — the serve loop is a plain blocking accept, no poll latency; events under `.lintel-cache/` never invalidate — the cache's own writes must not churn the map), keeps the §21.2 mtime+size cache (hits re-verify the stat key; a missed event self-heals), recompiles lazily per request, and answers the **length-prefixed JSON protocol** (ten ASCII digits, newline, payload — `{"path":…}` → `{"ok":true,"php":…}` / `{"ok":false,"diag":[…]}`, `{"quit":true}` stops it; a malformed frame closes the connection, the daemon serves on). Every miss consults the workspace's content-addressed `.lintel-cache/` build cache — the same engine `lintel build` uses: a watch-triggered rebuild of unchanged content never recompiles, a reverted edit serves instantly, and the counters land in `.lintel-cache/stats.json` (flocked, like the LSP index's `lsp-index.json`, via fs2 — a watch daemon, a concurrent build and parallel LSP sessions cannot interleave a partial write). The loader's §6.10 handoff is live on the same framing (`php/lintel/src/Dev/Loader.php`, two connect attempts then the proc_open fallback). Measured p50/p99 vs spawn (the acceptance criterion, `tests/watch.rs`): daemon **26 µs / 36 µs** vs spawn **724 µs / 973 µs**; the cache integration, the concurrent-clients-with-builds lane and the raw wire framing are pinned by `tests/watch.rs` |
 | T-21 LSP foundation (subset) | **done (stretch)** | `crates/lintel-lsp` — `lsp-types` 0.97 + serde_json over injected `Read`/`Write` (stdio in production, in-memory mock clients in tests): `initialize` (full-text sync + hover + serverInfo), `textDocument/publishDiagnostics` on didOpen/didChange/didSave (errors and warnings; byte offsets → 0-based UTF-16 positions through the line-preservation guarantee; stable `LNTxxxx` code, `source: "lintel"`, `help:` in-message), `textDocument/hover` over `<ComponentName>` via `collect_inventory` + `ScanContext::signature_of` (markdown signature, required-`!` marks, §7.3 string-typed set), `-32601`/-`32700` errors, `shutdown`/`exit`. Same-file signatures at the foundation; everything this row once listed as Q3 backlog landed in later passes — cross-file folding (`ScanContext::merged_with`, eleventh pass), the persistent workspace index with definition/rename/references/workspace symbols (Phase 9/8), completion (the shipped five-capability surface) and the tree-sitter lane (Phase 11, the row below) |
-| T-14 Benchmark harness | **done (native results committed; Docker-pinned run wired to CI)** | `bench/` — `run.php` (worker/orchestrator), `lib/` (the §9.2 scenarios S1–S5, Blade/Twig/Plates engines, the measurement-only `\Markup\Element` reference shape so the `rfc` lane is executed, not skipped, metrics/SVG/Markdown writers); OPcache/JIT matrix over three PHP subprocess settings; ns/render median+p95 over 30 runs, peak memory, compile throughput (cold/warm: 23k/25k files/s native), opcode-count probe (null on this stripped static runtime — instrumentation unavailable; the CI job re-probes on the pinned image); `bench/results/` commits the raw JSON + summary Markdown + five SVG charts from the native run with full provenance. `bench/Dockerfile` pins `php:8.6-cli` by digest (a real registry digest queried 2026-11-20); `make bench` runs Docker-pinned when a daemon exists, native otherwise; the CI `bench` job runs the pinned reproduction |
+| T-14 Benchmark harness | **done (native results committed; Docker-pinned run wired to CI)** | `bench/` — `run.php` (worker/orchestrator), `lib/` (the §9.2 scenarios S1–S5, Blade/Twig/Plates engines, the measurement-only `\Markup\Element` reference shape so the `rfc` lane is executed, not skipped, metrics/SVG/Markdown writers); OPcache/JIT matrix over three PHP subprocess settings; ns/render median+p95 over 30 runs, peak memory, compile throughput (cold/warm: 23k/25k files/s native), opcode-count probe (null on this stripped static runtime — instrumentation unavailable; the CI job re-probes on the pinned image); `bench/results/` commits the raw JSON + summary Markdown + five SVG charts from the native run with full provenance. `bench/Dockerfile` pins `php:8.6-cli` by digest (a real registry digest queried 2026-11-20 and re-verified live by the Phase 13 preflight); `make bench` runs Docker-pinned when a daemon exists, native otherwise, `make bench-docker` is the pinned-only path the CI `bench` job runs, and `scripts/bench-docker-validate.sh` verifies the pin against the live registry + the entrypoint contract (nineteenth pass) |
 | T-15 Five demos | **done** | `lintel init --demo N` (1-5) scaffolds component-library, XSS-gallery (the §7.2 corpus, neutralized in text + URL positions), 10k-row table, HTMX todo, compile-error showcase (LNT cards as content); each ≤ 60 lines (max 31), compiles zero-diagnostics with line preservation pinned by a test, and **executes under PHP with asserted output** (`tests/php_demo.rs` reuses the php_demo gate pattern: `php -l`, render, per-demo assertions) |
 | §18 Makefile | **done** | repo-root `Makefile` with the four documented targets: `ci` (fmt, clippy -D warnings, test, php lint, phpunit, phpstan), `golden` (the golden + line-preservation tests), `fuzz` (preflights cargo-fuzz and points at T-09, which owns the targets), `bench` (Docker-pinned §9.2 reproduction, native fallback); `scripts/php-gates.sh` backs the PHP half |
 | T-01 cargo-deny drift | **closed** | `deny.toml` (advisories/licenses/bans/sources) + the CI cargo-deny step; `cargo deny check` green locally (intra-workspace path-dependency wildcards allowed with rationale; no speculative license allowances) |
@@ -1662,6 +1662,89 @@ by a failing gate rather than preference:
   anything (`cargo test --benches` red: left 0, right 20). The scanner now
   matches the emitted bytes; the analyze bench drift-checks 40 dynamic
   children / 20 elided / rate 0.5 as its doc comment promises.
+
+The nineteenth pass (Phase 13 — launch automation, CI completeness and
+asset validation) closed the "deferred-to-CI" backlog the Phase 12 §f
+list carried. Each closure was driven red → green by the new validators
+themselves, and every gate (fmt, clippy pedantic, tests parallel + serial,
+benches, cargo-deny, the PHP gates, the claims sweep, the docs-site link
+check) was re-run on the tree before the cards started and again after
+they landed:
+
+- **T-18 v1.0.0 release automation.** The workspace version is now
+  **1.0.0**, declared once in `[workspace.package]` (`cargo update -w`
+  refreshed the lock; `tests/cli.rs`'s version assertion reads
+  `CARGO_PKG_VERSION` — the hardcoded `0.1.0` string would have broken
+  every future bump). The release dry-run
+  (`scripts/release-dry-run.sh`: actionlint, one-version check, publish
+  -order topological check against the real `cargo metadata` graph,
+  CHANGELOG section check, composer target check, per-crate
+  `cargo publish --dry-run` packaging, the §12 structural promises) found
+  **two real release blockers before any tag existed**: the internal path
+  dependencies carried no version requirement (crates.io refuses the
+  manifest — every internal dep now pins `version = "1.0.0"` alongside
+  its path), and the publish order would have violated the graph —
+  `lintel-diag` is the graph's ROOT (`lintel-core` depends on it), so the
+  order is diag → core → lsp → cli. `.github/workflows/release.yml` now
+  extracts the release body from the CHANGELOG's `## [v1.0.0]` section
+  (cut from `[Unreleased]`; the dry-run previews the exact text), stages
+  the release as a DRAFT, guards the tag against the workspace version,
+  interleaves a `--dry-run` pre-flight with each real `cargo publish`
+  (a dependent's dry-run can only resolve its sibling's new registry
+  version after the previous publish, so pre-flight follows publish per
+  crate with an index-propagation wait), triggers the Packagist
+  update-package call for `lintel/lintel` + `markup/markup` and verifies
+  the tag becomes visible on `repo.packagist.org` before going green;
+  missing publish secrets fail loudly with setup instructions — never a
+  silent skip. Pre-tag, the local dry-run fully packages the graph root
+  and states exactly why the three dependents verify only in the release
+  job (chicken-and-egg: the sibling's 1.0.0 does not exist on crates.io
+  yet).
+- **T-14/CI completeness.** `make bench-docker` is the pinned
+  reproduction as its own target (no native fallback — the target IS the
+  docker path), and the CI `bench` job runs exactly it;
+  `make bench` keeps the docker-or-native auto behavior. The new
+  `scripts/bench-docker-validate.sh` preflight checks the pin format,
+  verifies the pinned digest against the LIVE Docker registry
+  (`registry-1.docker.io`, `library/php:8.6-cli` — the Phase 12 pin
+  re-verified, same digest), checks the entrypoint contract
+  (`CMD ["php", "run.php"]`, `BENCH_MODE=docker`,
+  `LINTEL_BIN=/lintel/lintel`, the results mount) and builds + smoke-runs
+  the image when a daemon exists, naming the CI bench job as the build
+  lane otherwise. The new `adapters-live` CI job closes the live-adapter
+  gap: `setup-php` installs ext-swoole (the live Swoole lane runs against
+  a real `Swoole\Http\Server` in a subprocess),
+  `frankenphp-linux-x86_64` v1.14.0 is downloaded (the live FrankenPHP
+  lane serves the streamed page through the REAL Caddy-based binary —
+  executed locally in this sandbox with the downloaded v1.14.0 build:
+  the §10 wire contract holds), and both lanes skip with a note naming
+  their job when the binary/ext is absent. The environment-probe test
+  asserts `SwooleFlushTransport::isAvailable()` MIRRORS the environment
+  (the old sandbox-only `assertFalse` would have failed the new job);
+  `StreamingTransportTest`'s php -S FPM lane keeps the `X-Accel-Buffering:
+  no` contract. The compiler side of the seam is executable too:
+  `crates/lintel-cli/tests/stream_transport_contract.rs` compiles a
+  stream-target page, drives the artifact through `FpmFlushTransport`
+  over `php -S` and asserts the wire contract (headers + source-order
+  body) on the raw bytes.
+- **T-19 launch assets.** `docs/demo.gif` is committed — rendered
+  locally with vhs 0.10 + ttyd (user-space install) from
+  `docs/demo.tape`: 365 frames, 1180×640, 717,784 bytes (< 5 MB), the
+  real edit → refresh → compiled-view session (the fifteenth pass's
+  "VHS/ffmpeg are absent in this sandbox" note is superseded by the
+  user-space toolchain). `scripts/validate-launch-assets.sh` enforces the
+  §16 criteria on the tree: the GIF exists, is a real GIF and < 5 MB;
+  `docs/og.png` is exactly 1280×640 (identify → PIL → `file` fallback
+  chain); `docs/launch/posts.md` carries exactly 3 posts, each
+  `wc -m`-measured ≤ 280; no `{N}` placeholder survives in a post; post
+  #2's payload count (31 hostile payloads) equals the §7.2 corpus case
+  count counted from `ThreatCorpusTest.php` (29 test methods, 1
+  provider-backed +3 = 31) AND the docs-site security page's stated
+  count; and the launch copy's S1 median (915 ns) equals
+  `bench/results/results-native-8.4.11-2026-11-20.json`'s
+  `median_ns` (§9.2 publishing rule). Post #2 now cites the corpus count
+  31 (the demo's 8-payload count stays in its evidence bullet) and post
+  #1's evidence carries the S1-median line the validator cross-checks.
 
 Two doc-open decisions resolved here: the installer never invents a live
 release URL (no releases exist before T-18; `LINTEL_BIN` and
