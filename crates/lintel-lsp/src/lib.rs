@@ -51,6 +51,7 @@ use lintel_core::{collect_inventory, compile, Diagnostic, Options, Severity};
 
 mod code_action;
 mod format;
+mod workspace;
 
 /// The server's name, advertised in `initialize`'s `serverInfo`.
 pub const SERVER_NAME: &str = "lintel-lsp";
@@ -151,6 +152,12 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
                     |p| server.formatting(p),
                 );
             }
+            (
+                method @ ("textDocument/rename" | "textDocument/references" | "workspace/symbol"),
+                Some(id),
+            ) => {
+                workspace::respond(&server, method, output, &id, params);
+            }
             (method, Some(id)) => {
                 write_response(
                     output,
@@ -205,6 +212,9 @@ pub fn initialize_result() -> InitializeResult {
             }),
             code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
             document_formatting_provider: Some(lsp_types::OneOf::Left(true)),
+            rename_provider: Some(lsp_types::OneOf::Left(true)),
+            references_provider: Some(lsp_types::OneOf::Left(true)),
+            workspace_symbol_provider: Some(lsp_types::OneOf::Left(true)),
             ..ServerCapabilities::default()
         },
         server_info: Some(ServerInfo {
