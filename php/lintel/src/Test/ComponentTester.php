@@ -35,9 +35,13 @@ use function unlink;
  * binary — the same compile path the §6.10 dev loader drives — requires
  * the artifact once, invokes the component with named arguments, and
  * renders the result through the §6.8 runtime's `\Lintel\c()` (the same
- * sink prod markup goes through). Escaping is therefore under test too:
- * a hostile payload that reaches the markup through a test prop proves
- * the compiled component escapes it, exactly as a framework boot would.
+ * sink prod markup goes through). `renderStreaming()` rides the §10
+ * stream lowering (`--target=stream`) and consumes the component's
+ * generator through `\Lintel\stream()` — the fully consumed stream output
+ * equals the string target's byte for byte (the §10 sync-compat
+ * contract). Escaping is therefore under test too: a hostile payload that
+ * reaches the markup through a test prop proves the compiled component
+ * escapes it, exactly as a framework boot would.
  *
  * ```php
  * $t = new ComponentTester();
@@ -48,18 +52,22 @@ use function unlink;
  * );
  * ```
  *
- * Two in-process constraints, both enforced loudly instead of fatalling:
- * - each unique source compiles once per tester (a second `render()` of
- *   the same source reuses the compiled component — PHP functions cannot
- *   be redeclared);
+ * Three in-process constraints, all enforced loudly instead of fatalling:
+ * - each unique source compiles once per tester per target (a second
+ *   `render()` of the same source reuses the compiled component — PHP
+ *   functions cannot be redeclared);
  * - two *different* sources may not declare the same component name in
  *   one PHP process — the second render throws before the fatal;
+ * - a component name compiles under ONE target per process: the stream
+ *   artifact declares the same function name as the string artifact, so
+ *   `render()` and `renderStreaming()` cannot share one source — the
+ *   parity fixtures rename the component instead;
  * - a component named after a PHP builtin (function names are
  *   case-insensitive, so `Stat` collides with `stat()`) can never be
  *   declared in any process — the guard refuses before the fatal.
  *
- * `render()` needs no PHPUnit; the `assert*` helpers ride
- * `PHPUnit\Framework\Assert`, so a consumer that only renders needs
+ * `render()`/`renderStreaming()` need no PHPUnit; the `assert*` helpers
+ * ride `PHPUnit\Framework\Assert`, so a consumer that only renders needs
  * nothing beyond the runtime the compiled components already call.
  */
 final class ComponentTester
@@ -70,7 +78,7 @@ final class ComponentTester
     /** The scratch directory holding this tester's sources + artifacts. */
     private string $scratch;
 
-    /** @var array<string, string> source hash → invoked FQ component name */
+    /** @var array<string, string> target-and-source hash → invoked FQ component name */
     private array $loaded = [];
 
     /** The next source's sequence number (unique scratch file names). */
@@ -116,6 +124,33 @@ final class ComponentTester
     }
 
     /**
+     * The §10 stream lane of {@see render()}: the same compile path under
+     * `--target=stream`, the invocation's generator consumed through
+     * `\Lintel\stream()` — the fully consumed output the §10 flush loop
+     * produces, which the sync-compat contract keeps equal to the string
+     * target's byte for byte.
+     *
+     * A source already rendered through `render()` cannot be streamed in
+     * the same process (the stream artifact declares the same function
+     * name) — the guard throws before the fatal; parity fixtures rename
+     * the component instead.
+     *
+     * @param array<string, mixed> $props named arguments for the component
+     *
+     * @throws \RuntimeException (see {@see render()})
+     */
+    public function renderStreaming(string $jsx, array $props = []): string
+    {
+        $component = $this->component($jsx, 'stream');
+        if (!\is_callable($component)) {
+            throw new \RuntimeException("the component {$component} is not callable");
+        }
+        $value = $component(...$props);
+
+        return \Lintel\stream($value);
+    }
+
+    /**
      * The rendered markup equals `$expectedHtml` byte for byte — the
      * assertion a component's golden-HTML test reads.
      *
@@ -149,13 +184,15 @@ final class ComponentTester
     /**
      * The FQ name of the source's first component (§4.7: a capitalized
      * function name), compiling + requiring the artifact exactly once per
-     * unique source.
+     * unique source AND target (`stream` re-lowers the same source; the
+     * two artifacts declare the same function name, so one process holds
+     * a component name under one target only).
      *
      * @throws \RuntimeException (see {@see render()})
      */
-    private function component(string $jsx): string
+    private function component(string $jsx, string $target = 'string'): string
     {
-        $hash = hash('xxh3', $jsx);
+        $hash = hash('xxh3', $target . "\0" . $jsx);
         if (array_key_exists($hash, $this->loaded)) {
             return $this->loaded[$hash];
         }
@@ -164,14 +201,17 @@ final class ComponentTester
         if (function_exists($fqn)) {
             throw new \RuntimeException(sprintf(
                 'component %s is already declared in this PHP process: a test source'
-                . ' may declare each component name once — rename the component'
-                . ' (function %s) in one of the sources',
+                . ' may declare each component name once — and under one compile'
+                . ' target (the stream artifact declares the same function name as'
+                . ' the string artifact, so render() and renderStreaming() cannot'
+                . ' share one source) — rename the component (function %s) in one'
+                . ' of the sources',
                 $fqn,
                 $name,
             ));
         }
         $artifact = $this->scratch . '/' . $hash . '.php';
-        file_put_contents($artifact, $this->compile($jsx));
+        file_put_contents($artifact, $this->compile($jsx, $target));
         require $artifact;
         if (!function_exists($fqn)) {
             throw new \RuntimeException(sprintf(
@@ -188,13 +228,14 @@ final class ComponentTester
 
     /**
      * Run the real binary over the source (`lintel build <file>` — the
-     * §6.10 compile path) and return the compiled PHP. A compile failure
-     * throws with the compiler's rendered diagnostics, so the test fails
-     * with the LNT message instead of a bare exit code.
+     * §6.10 compile path, `--target` picked by the caller) and return the
+     * compiled PHP. A compile failure throws with the compiler's rendered
+     * diagnostics, so the test fails with the LNT message instead of a
+     * bare exit code.
      *
      * @throws \RuntimeException when the binary cannot start or fails
      */
-    private function compile(string $jsx): string
+    private function compile(string $jsx, string $target = 'string'): string
     {
         ++$this->sources;
         $source = $this->scratch . '/s' . $this->sources . '.lintel.php';
@@ -207,7 +248,7 @@ final class ComponentTester
         }
         file_put_contents($source, $jsx);
         $process = @proc_open(
-            [$this->binary, 'build', $source],
+            [$this->binary, 'build', $source, "--target={$target}"],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );
