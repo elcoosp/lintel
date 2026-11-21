@@ -14,3 +14,7 @@ fuzz/coverage
 # consumes them from the dirty tree.
 /.github/pr-body.md
 /ship.toml
+
+# The M2 build cache and the M1 LSP index cache (workspace-local at ANY
+# level — the repo root, test fixtures, user workspaces — never committed).
+.lintel-cache/
