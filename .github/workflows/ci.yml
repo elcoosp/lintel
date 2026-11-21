@@ -229,3 +229,28 @@ jobs:
         run: cargo fuzz run compile_fuzz -- -max_total_time=600
         env:
           PHP_BIN: php
+
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+      - name: Build the lintel binary
+        run: cargo build --release -p lintel-cli
+      - name: Install the runtime package the RR worker loads
+        run: composer install --working-dir=php/runtime --no-interaction --no-progress
+      - name: Install RoadRunner (the version docs/deployment/roadrunner.md pins)
+        run: |
+          curl -fsSL --retry 2 -o /tmp/rr.tar.gz \
+            https://github.com/roadrunner-server/roadrunner/releases/download/v2025.1.15/roadrunner-2025.1.15-linux-amd64.tar.gz
+          mkdir -p /tmp/rr-bin && tar -xzf /tmp/rr.tar.gz --strip-components=1 -C /tmp/rr-bin
+          echo "/tmp/rr-bin" >> "$GITHUB_PATH"
+      - name: "M4 deployment acceptance — the RoadRunner guide end-to-end (docs/deployment/roadrunner.md)"
+        run: bash scripts/deployment-smoke.sh
+        env:
+          PHP_BIN: php
