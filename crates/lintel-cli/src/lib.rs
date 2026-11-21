@@ -23,13 +23,14 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::ops::ControlFlow;
-use std::path::{Path, PathBuf};
+use std::path::{absolute, Path, PathBuf};
 
 use lintel_core::{
     builtin_rule_metas, collect_inventory, compile, compile_analyzed, ChildHint, ChildKind,
     Diagnostic, Options, Target, TypeHints,
 };
 
+mod cache;
 mod manifest;
 pub mod watch;
 
@@ -88,6 +89,10 @@ FLAGS:
                     unchanged)
     --out <dir>     write each source as <dir>/<name>.php instead of stdout
     --in-place      write each source as <name>.php next to it
+    --no-cache      bypass the `.lintel-cache/` build cache: every source
+                    recompiles and nothing is stored (CI or debugging);
+                    `check`, `analyze`, `migrate` and `stats` never touch
+                    the cache
     --types PATH    the analyze report file (analyze compiles against it;
                     check renders its stale entries as advisories). Without
                     it analyze reads each source's own
@@ -98,7 +103,10 @@ FLAGS:
                     `function Name(...): Html` declarations and write the
                     T-31 function-component manifest; `--manifest=PATH`
                     writes PATH, bare `--manifest` writes `lintel.json` in
-                    the working directory. A bare `--manifest` never consumes
+                    the workspace root — the common ancestor of the build
+                    inputs and `--out` — never the process cwd, so the
+                    manifest lands with the sources it describes from any
+                    invocation directory. A bare `--manifest` never consumes
                     the next token — paths and flags interleave freely, so
                     use the `=` form to name a path. `build` only — `migrate`
                     emits RFC-parity artifacts no autoloader can require
@@ -116,6 +124,19 @@ MANIFEST (T-31):
     and the dev loader (§6.10) requires the sources eagerly — skipping
     whichever source the shim already loaded, so the two lanes never
     redeclare a function.
+
+CACHE (§9.3 warm-build target):
+    `lintel build` caches compiled PHP under `.lintel-cache/` in the
+    workspace root (the common ancestor of the build inputs and `--out`):
+    one `<content-hash>.php` entry per source content + target pair, with
+    a metadata sidecar (source path, target, options hash) and the cold
+    build's rendered warnings, which a warm build replays verbatim. The
+    key hashes the source CONTENT with the target (mtime lies after a git
+    checkout; string and stream artifacts differ), so an edited source or
+    a different `--target` misses and recompiles. `--no-cache` skips
+    lookup and store; `check`/`analyze` always re-validate. `.lintel-cache
+    /stats.json` records the last build's counters (`compiled`,
+    `cache_hits`, `bypassed`).
 
 STATS REPORT:
     One section per file: the path header, then one `declared Name(params)`
@@ -211,8 +232,13 @@ enum Invocation {
         format: Format,
         destination: Destination,
         /// The T-31 manifest to write after the build (`--manifest [PATH]`);
-        /// `None` keeps `build` manifest-free (back-compat).
-        manifest: Option<PathBuf>,
+        /// `None` keeps `build` manifest-free (back-compat). The bare form
+        /// resolves against the workspace being compiled at run time — see
+        /// [`ManifestArg`].
+        manifest: Option<ManifestArg>,
+        /// The M2 `--no-cache` bypass: every source recompiles, no cache
+        /// entry is read or stored (CI or debugging).
+        no_cache: bool,
     },
     /// `lintel migrate <paths> [--dry-run] [--backup]`: the Year-3
     /// RFC-convergence migration — rewrite each source IN PLACE with the
@@ -315,15 +341,31 @@ pub fn run(
             format,
             destination,
             manifest,
-        } => run_build(
-            &paths,
-            target,
-            format,
-            &destination,
-            manifest.as_deref(),
-            stdout,
-            stderr,
-        ),
+            no_cache,
+        } => {
+            // The bare `--manifest` default anchors to the workspace being
+            // compiled (the M0 cwd-hygiene card): the common ancestor of
+            // the build inputs and `--out` — never the process cwd, so a
+            // lane invoking the engine from anywhere else cannot scatter a
+            // stray `lintel.json` outside the workspace. The M2 build cache
+            // lives at the same root.
+            let manifest = manifest.map(|arg| match arg {
+                ManifestArg::Default => workspace_root(&paths, &destination).join("lintel.json"),
+                ManifestArg::Explicit(path) => path,
+            });
+            run_build(
+                &paths,
+                &BuildPlan {
+                    target,
+                    format,
+                    destination,
+                    manifest,
+                    no_cache,
+                },
+                stdout,
+                stderr,
+            )
+        }
         Invocation::Migrate {
             paths,
             format,
@@ -390,6 +432,30 @@ pub fn run(
     }
 }
 
+/// The `build` invocation's knobs, bundled so the engine entry points stay
+/// inside the pedantic argument budget (the M0 manifest resolution and the
+/// M2 cache bypass joined the original four). The manifest path arrives
+/// RESOLVED — the bare `--manifest` default was already anchored to the
+/// workspace by the caller.
+struct BuildPlan {
+    target: Target,
+    format: Format,
+    destination: Destination,
+    manifest: Option<PathBuf>,
+    no_cache: bool,
+}
+
+/// The running tally one `build` carries across its sources (the T-31
+/// scan, the artifact pairs, the counters the stats sidecar records).
+#[derive(Default)]
+struct BuildState {
+    failed: bool,
+    components: Vec<(String, PathBuf)>,
+    artifacts: Vec<(PathBuf, PathBuf)>,
+    compiled: usize,
+    cache_hits: usize,
+}
+
 /// `build`: collect the sources, compile to the destination, report.
 ///
 /// # Errors
@@ -397,19 +463,29 @@ pub fn run(
 /// Propagates [`collect_sources`]'s path errors.
 fn run_build(
     paths: &[PathBuf],
-    target: Target,
-    format: Format,
-    destination: &Destination,
-    manifest: Option<&Path>,
+    plan: &BuildPlan,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
+    // The M2 build cache lives at the workspace root — the same root the
+    // bare `--manifest` default anchors to — so warm and cold builds land
+    // the cache with the sources regardless of the process cwd. It rides
+    // the artifact-producing destinations (`--out`, `--in-place`) only: a
+    // stdout build (the §6.10 dev loader's compile lane, the tester) has
+    // no artifacts to warm and must leave no `.lintel-cache/` beside the
+    // sources it compiles. `--no-cache` keeps the stats sidecar honest
+    // (`bypassed: true`) while skipping lookup and store.
+    let cache = match plan.destination {
+        Destination::Stdout => None,
+        _ => Some(cache::BuildCache::at(&workspace_root(
+            paths,
+            &plan.destination,
+        ))),
+    };
     Ok(build(
         &collect_sources(paths)?,
-        target,
-        format,
-        destination,
-        manifest,
+        plan,
+        cache.as_ref(),
         stdout,
         stderr,
     ))
@@ -450,13 +526,31 @@ fn check_types_report(types: Option<&Path>) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The `--manifest` flag value (the M0 cwd-hygiene card): the bare form
+/// anchors the T-31 default to the workspace being compiled — the manifest
+/// lands with the sources it describes, never wherever the process happens
+/// to run — while an explicit `--manifest=PATH` writes exactly the path
+/// given, like every other explicit path argument.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum ManifestArg {
+    /// Bare `--manifest`: `lintel.json` in the workspace root (the common
+    /// ancestor of the build inputs and `--out`).
+    Default,
+    /// `--manifest=PATH`: the path exactly as given (cwd-relative like the
+    /// build inputs).
+    Explicit(PathBuf),
+}
+
 /// Flags and paths collected after the command word (see [`parse_args`]).
 struct ParsedArgs {
     paths: Vec<PathBuf>,
     target: Target,
     format: Format,
     destination: Destination,
-    manifest: Option<PathBuf>,
+    manifest: Option<ManifestArg>,
+    /// The M2 `--no-cache` bypass: build compiles every source and reads
+    /// no cache entry (CI or debugging).
+    no_cache: bool,
     /// The `check`-only analyze report (`--types`): when present, check
     /// renders the report's stale entries as advisories (§7.3-Y2,
     /// `docs/type-elision.md`).
@@ -531,6 +625,7 @@ fn parse_args(
         format: Format::default(),
         destination: Destination::Stdout,
         manifest: None,
+        no_cache: false,
         types: None,
         out_seen: false,
         in_place_seen: false,
@@ -662,6 +757,17 @@ fn build_flag(
                     .into(),
             ));
         }
+    } else if arg == "--no-cache" {
+        // The M2 cache bypass is a `build` concern: check/analyze must
+        // always re-validate (a cached acceptance is no acceptance),
+        // migrate rewrites in place, stats reads nothing.
+        if !is_build || is_migrate {
+            return Err(CliError(
+                "--no-cache is a `build` flag (check, analyze, migrate and stats never \
+                 touch the build cache)"
+                    .into(),
+            ));
+        }
     } else {
         return Ok(None);
     }
@@ -682,14 +788,20 @@ fn build_flag(
         return Ok(Some(()));
     }
     if let Some(value) = arg.strip_prefix("--manifest=") {
-        parsed.manifest = Some(PathBuf::from(value));
+        parsed.manifest = Some(ManifestArg::Explicit(PathBuf::from(value)));
         return Ok(Some(()));
     }
     if arg == "--manifest" {
         // Bare `--manifest` writes the default `lintel.json` and never
         // consumes the next token — paths and flags interleave freely, so
-        // a following path is a build input, not a value.
-        parsed.manifest = Some(PathBuf::from("lintel.json"));
+        // a following path is a build input, not a value. The default
+        // resolves against the workspace being compiled, not the process
+        // cwd (`ManifestArg::Default` → `workspace_root` at run time).
+        parsed.manifest = Some(ManifestArg::Default);
+        return Ok(Some(()));
+    }
+    if arg == "--no-cache" {
+        parsed.no_cache = true;
         return Ok(Some(()));
     }
     Ok(None)
@@ -794,6 +906,7 @@ fn parse(args: &[String]) -> Result<Invocation, CliError> {
             format: parsed.format,
             destination: parsed.destination,
             manifest: parsed.manifest,
+            no_cache: parsed.no_cache,
         }),
         "migrate" => Ok(Invocation::Migrate {
             paths: parsed.paths,
@@ -1020,6 +1133,50 @@ fn walk_dir(dir: &Path, sources: &mut Vec<PathBuf>) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The workspace being compiled: the deepest common ancestor of the build
+/// input paths and — when `--out` names an artifact directory — that
+/// directory. The bare `--manifest` default anchors `lintel.json` here and
+/// the `.lintel-cache` build cache lives here, so both land with the
+/// sources they describe regardless of the process cwd (the M0
+/// cwd-hygiene card). Relative inputs resolve against the process cwd
+/// first (they name the workspace the way the user spelled it); the
+/// resolved root is absolute, so the outputs never depend on where the
+/// process runs. A file input contributes its parent directory (its
+/// siblings are the workspace it compiles beside).
+fn workspace_root(paths: &[PathBuf], destination: &Destination) -> PathBuf {
+    let mut roots: Vec<PathBuf> = paths
+        .iter()
+        .map(|path| absolute(path).unwrap_or_else(|_| path.clone()))
+        .collect();
+    if let Destination::Dir(dir) = destination {
+        roots.push(absolute(dir).unwrap_or_else(|_| dir.clone()));
+    }
+    roots
+        .into_iter()
+        .map(|root| {
+            if root.is_file() {
+                root.parent().map(Path::to_path_buf).unwrap_or(root)
+            } else {
+                root
+            }
+        })
+        .reduce(|a, b| common_ancestor(&a, &b))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The deepest directory both paths sit under, lexically (neither path
+/// needs to exist; unrelated absolute roots share the filesystem root).
+fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    let a: Vec<_> = a.components().collect();
+    let b: Vec<_> = b.components().collect();
+    let shared = a
+        .iter()
+        .zip(b.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    a[..shared].iter().collect()
+}
+
 /// Render the built-in rule-registry listing to `stdout`
 /// (`docs/rule-registry.md`): text = one `<id> <codes> <summary>` line per
 /// rule in registry order (comma-joined `LNTxxxx` codes), JSON = one
@@ -1053,71 +1210,160 @@ fn rules(format: Format, stdout: &mut dyn Write) -> Result<i32, CliError> {
 /// Compile every source with `build` semantics: PHP goes to the
 /// destination (stdout, `--out` directory, or `--in-place` sibling), a
 /// failed file writes nothing and is rendered to `stderr` in the requested
-/// [`Format`], and warnings render without failing the build. With
-/// `manifest` set, the successfully compiled sources are scanned for
-/// top-level `function Name(...): Html` declarations after the loop and
-/// the T-31 manifest is written (a manifest failure fails the build the
-/// same way a failed artifact write does). Returns 0 when every file
-/// compiled, 1 when at least one did not. (The return is a plain code:
-/// per-file failures are reported in-band, never propagated as `Err`.)
+/// [`Format`], and warnings render without failing the build. The M2
+/// content-addressed cache (§9.3's warm-build target) reuses the compiled
+/// PHP of an unchanged source on the same target — the key hashes the
+/// source CONTENT with the target, and a hit replays the cold build's
+/// warnings verbatim so warm stderr matches cold; `--no-cache` skips both
+/// lookup and store. With a manifest in the plan, the successfully
+/// compiled sources are scanned for top-level `function Name(...): Html`
+/// declarations after the loop and the T-31 manifest is written (a
+/// manifest failure fails the build the same way a failed artifact write
+/// does). Returns 0 when every file compiled, 1 when at least one did not.
+/// (The return is a plain code: per-file failures are reported in-band,
+/// never propagated as `Err`.)
 fn build(
     sources: &[PathBuf],
-    target: Target,
-    format: Format,
-    destination: &Destination,
-    manifest: Option<&Path>,
+    plan: &BuildPlan,
+    cache: Option<&cache::BuildCache>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
-    let mut failed = false;
-    let mut components: Vec<(String, PathBuf)> = Vec::new();
-    let mut artifacts: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut state = BuildState::default();
     for source in sources {
         let src = match fs::read_to_string(source) {
             Ok(src) => src,
             Err(e) => {
                 let _ = writeln!(stderr, "lintel: cannot read {}: {e}", source.display());
-                failed = true;
+                state.failed = true;
                 continue;
             }
         };
-        match compile(&src, &Options { target }) {
-            Ok(out) => {
-                for warning in &out.warnings {
-                    emit_diagnostic(warning, &src, format, stderr);
-                }
-                if manifest.is_some() {
-                    for found in manifest::scan_function_components(&src) {
-                        components.push((found.name, source.clone()));
-                    }
-                    if let Some(artifact) = artifact_path(source, destination) {
-                        artifacts.push((source.clone(), artifact));
-                    }
-                }
-                if let Err(e) = write_output(source, &out.php, destination, stdout) {
-                    let _ = writeln!(stderr, "lintel: cannot write {}: {e}", source.display());
-                    failed = true;
-                }
+        // The cache key is a content hash keyed with the target: an
+        // unchanged source on the same target reuses the cold build's
+        // artifact without compiling (mtime is never consulted — it lies
+        // after a git checkout).
+        let cached = cache.filter(|_| !plan.no_cache).and_then(|cache| {
+            let key = cache::BuildCache::key(&src, plan.target);
+            cache.lookup(&key, plan.target).map(|hit| (key, hit))
+        });
+        match cached {
+            Some((key, hit)) => {
+                state.cache_hits += 1;
+                replay_warnings(&hit.warnings_text, &hit.warnings_json, plan.format, stderr);
+                emit_source(source, &src, &hit.php, plan, &mut state, stdout, stderr);
             }
-            Err(problems) => {
-                for problem in &problems {
-                    emit_diagnostic(problem, &src, format, stderr);
+            None => match compile(
+                &src,
+                &Options {
+                    target: plan.target,
+                },
+            ) {
+                Ok(out) => {
+                    state.compiled += 1;
+                    let warnings_text: Vec<String> = out
+                        .warnings
+                        .iter()
+                        .map(|warning| warning.render(&src))
+                        .collect();
+                    let warnings_json: Vec<String> = out
+                        .warnings
+                        .iter()
+                        .map(|warning| warning.to_json(&src))
+                        .collect();
+                    for warning in &out.warnings {
+                        emit_diagnostic(warning, &src, plan.format, stderr);
+                    }
+                    emit_source(source, &src, &out.php, plan, &mut state, stdout, stderr);
+                    if let (Some(cache), false) = (cache, plan.no_cache) {
+                        let key = cache::BuildCache::key(&src, plan.target);
+                        cache.store(
+                            &key,
+                            source,
+                            plan.target,
+                            &out.php,
+                            &warnings_text,
+                            &warnings_json,
+                        );
+                    }
                 }
-                failed = true;
-            }
+                Err(problems) => {
+                    for problem in &problems {
+                        emit_diagnostic(problem, &src, plan.format, stderr);
+                    }
+                    state.failed = true;
+                }
+            },
         }
     }
-    if let Some(manifest_path) = manifest {
-        if let Err(problem) = manifest::write_manifest(manifest_path, &components, &artifacts) {
+    if let Some(manifest_path) = &plan.manifest {
+        if let Err(problem) =
+            manifest::write_manifest(manifest_path, &state.components, &state.artifacts)
+        {
             let _ = writeln!(
                 stderr,
                 "lintel: cannot write the manifest {}: {problem}",
                 manifest_path.display()
             );
-            failed = true;
+            state.failed = true;
         }
     }
-    i32::from(failed)
+    if let Some(cache) = cache {
+        cache.record(&cache::CacheStats {
+            compiled: state.compiled,
+            cache_hits: state.cache_hits,
+            bypassed: plan.no_cache,
+        });
+    }
+    i32::from(state.failed)
+}
+
+/// Replay a cache hit's cold-build warnings so a warm build's stderr
+/// matches cold byte for byte in either `--format`.
+fn replay_warnings(
+    warnings_text: &[String],
+    warnings_json: &[String],
+    format: Format,
+    stderr: &mut dyn Write,
+) {
+    match format {
+        Format::Text => {
+            for warning in warnings_text {
+                let _ = write!(stderr, "{warning}");
+            }
+        }
+        Format::Json => {
+            for warning in warnings_json {
+                let _ = writeln!(stderr, "{warning}");
+            }
+        }
+    }
+}
+
+/// The shared tail of one successful source (cache hit or fresh compile):
+/// the T-31 manifest scan, the artifact pair, and the destination write
+/// (its failure marks the build).
+fn emit_source(
+    source: &Path,
+    src: &str,
+    php: &str,
+    plan: &BuildPlan,
+    state: &mut BuildState,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) {
+    if plan.manifest.is_some() {
+        for found in manifest::scan_function_components(src) {
+            state.components.push((found.name, source.to_path_buf()));
+        }
+        if let Some(artifact) = artifact_path(source, &plan.destination) {
+            state.artifacts.push((source.to_path_buf(), artifact));
+        }
+    }
+    if let Err(e) = write_output(source, php, &plan.destination, stdout) {
+        let _ = writeln!(stderr, "lintel: cannot write {}: {e}", source.display());
+        state.failed = true;
+    }
 }
 
 /// `lintel migrate` (the Year-3 RFC-convergence card): rewrite each
