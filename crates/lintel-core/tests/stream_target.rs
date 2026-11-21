@@ -99,6 +99,71 @@ fn stream_output_never_wraps_the_root_in_an_html_value() {
 }
 
 #[test]
+fn stream_target_rewrites_the_declared_html_return_type() {
+    // The Phase 9 parity bug: a stream artifact kept the author's
+    // `: Html` while its body returned the generator closure — the first
+    // real PHP consumer (`ComponentTester::renderStreaming()`) hit a
+    // `TypeError` under `strict_types` the moment it invoked the
+    // component. The declaration rewrites to `: \Generator` on the SAME
+    // line (line preservation holds), nullable and qualified spellings
+    // included; unions and body-less declarations stay verbatim.
+    let php = compiled_stream(
+        "<?php\nfunction Badge(string $label): Html\n{\n    return <b>{$label}</b>;\n}\n",
+    );
+    assert!(
+        php.contains("function Badge(string $label): \\Generator\n{"),
+        "the declared Html return type rewrites: {php}"
+    );
+    assert!(!php.contains("): Html"), "{php}");
+
+    let mixed = compiled_stream(concat!(
+        "<?php\n",
+        "function Nullable(?string $x): ?Html\n{\n    return <i>{$x}</i>;\n}\n",
+        "function Qualified(): \\Lintel\\Html\n{\n    return <u />;\n}\n",
+    ));
+    assert!(
+        mixed.contains("function Nullable(?string $x): \\Generator\n{"),
+        "nullable Html rewrites to the non-null Generator (the generator is never null): {mixed}"
+    );
+    assert!(
+        mixed.contains("function Qualified(): \\Generator\n{"),
+        "{mixed}"
+    );
+
+    let untouched = compiled_stream(concat!(
+        "<?php\n",
+        "function Union(): Html|string\n{\n    return <b>x</b>;\n}\n",
+        "function Helper(): int\n{\n    return 1;\n}\n",
+    ));
+    assert!(
+        untouched.contains("): Html|string"),
+        "a union copies verbatim (the span stops at `|`): {untouched}"
+    );
+    assert!(
+        untouched.contains("): int"),
+        "a non-Html type copies verbatim: {untouched}"
+    );
+
+    // The string target keeps every declaration verbatim.
+    let string_php = {
+        let opts = Options {
+            target: Target::String,
+        };
+        match compile(
+            "<?php\nfunction Badge(string $label): Html\n{\n    return <b>{$label}</b>;\n}\n",
+            &opts,
+        ) {
+            Ok(out) => out.php,
+            Err(problems) => panic!("expected clean compile: {problems:?}"),
+        }
+    };
+    assert!(
+        string_php.contains("): Html"),
+        "the string target returns Html values exactly as declared: {string_php}"
+    );
+}
+
+#[test]
 fn stream_target_preserves_line_count() {
     let src = "<?php\nfunction Page(): Html {\n    return <Layout title=\"A\">\n        <Row>one</Row>\n    </Layout>;\n}\n";
     let php = compiled_stream(src);
