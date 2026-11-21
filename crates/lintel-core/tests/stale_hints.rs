@@ -63,7 +63,7 @@ fn a_conflicting_entry_that_matched_is_not_stale() {
 #[test]
 fn an_empty_report_has_no_stale_hints() {
     let stale = lintel_core::stale_hints(SRC, &TypeHints::default());
-    assert!(stale.is_empty());
+    assert!(stale.is_empty(), "{stale:?}");
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn the_elision_still_applies_where_hints_are_fresh() {
         SRC,
         &Options::default(),
         &table,
-        &lintel_core::builtin_rules(),
+        lintel_core::builtin_rules(),
     )
     .expect("compiles");
     assert_eq!(out.elided, 1);
