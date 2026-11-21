@@ -9,7 +9,8 @@ repository = "https://github.com/elcoosp/lintel"
 publish = false
 
 [dependencies]
-lintel-diag = { path = "../lintel-diag" }
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintel-diag = { version = "1.0.0", path = "../lintel-diag" }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [lints]
