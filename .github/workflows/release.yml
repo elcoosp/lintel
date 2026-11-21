@@ -1,13 +1,19 @@
-# T-18 release engineering (architecture doc §15, §12.1): the `v*` tag
-# builds the five binaries (§12: linux x64/arm64 musl, macOS x64/arm64,
-# Windows x64), checksums them, attests build provenance (the "signatures"
-# leg — GitHub artifact attestation instead of minisign/cosign) and
-# publishes the GitHub release.
+# T-18 release engineering, the v1.0.0 automation (architecture doc §15,
+# §12): a pushed `v*` tag builds the five binaries (§12: linux x64/arm64
+# musl, macOS x64/arm64, Windows x64), checksums them (SHA256SUMS), attests
+# build provenance (actions/attest-build-provenance — GitHub artifact
+# attestation instead of minisign/cosign), extracts the release body from
+# the CHANGELOG's `## [v1.0.0]` section and stages the DRAFT release for
+# the maintainer's review. The publish job then ships the four publishable
+# crates to crates.io in dependency order (diag → core → lsp → cli, with
+# index-propagation waits and a `--dry-run` pre-flight per crate) and
+# triggers the Packagist updates for the composer packages (`lintel/lintel`
+# + `markup/markup`), verifying the tag landed before the job goes green.
 #
-# The actual `git tag v0.1.0 && git push --tags` and the Composer Packagist
-# `lintel/runtime` + `lintel/lintel` tag publishes stay the maintainer's
-# action (DEFERRED-TO-MAINTAINER): Packagist derives the composer versions
-# from the pushed tags.
+# The ONLY step left to the human: review the draft release and click
+# publish (scripts/release-dry-run.sh validates all of this offline, and
+# the tag guard below refuses a tag that disagrees with the workspace
+# version).
 
 name: release
 
@@ -59,6 +65,21 @@ jobs:
             archive: lintel-windows-x64.zip
     steps:
       - uses: actions/checkout@v4
+      # The tag guard: a `v*` tag that disagrees with the ONE workspace
+      # version ([workspace.package].version — every crate inherits it)
+      # refuses before anything builds. `v1.0.0` must mean every crate is
+      # 1.0.0; the release-dry-run checks the same equality offline.
+      - name: Tag guard — the tag must equal the workspace version
+        shell: bash
+        run: |
+          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read [workspace.package].version from Cargo.toml"; exit 1
+          fi
+          echo "workspace version: $VERSION; tag: $GITHUB_REF_NAME"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version v$VERSION — bump [workspace.package].version (or tag v$VERSION)"; exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -107,19 +128,116 @@ jobs:
         with:
           subject-path: |
             dist/lintel-*
-      - name: Publish the GitHub release
+      # The release body is the CHANGELOG's `## [v1.0.0]` section — the
+      # same text scripts/release-dry-run.sh previews, so what was
+      # reviewed offline is exactly what the draft carries.
+      - name: Extract the release body from the CHANGELOG
+        run: |
+          awk '/^## \[v1\.0\.0\]/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md carries no '## [v1.0.0]' section (or it is empty) — the release body would be empty"; exit 1
+          fi
+          echo "release body: $(wc -m < release-notes.md) chars from '## [v1.0.0]'"
+      - name: Stage the DRAFT GitHub release (binaries + SHA256SUMS + the changelog body)
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          body_path: release-notes.md
           files: |
             dist/lintel-*
             dist/SHA256SUMS
-          generate_release_notes: true
-      - name: Composer tag (DEFERRED-TO-MAINTAINER)
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Guard the publish secrets (loud failure, never a silent skip)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
         run: |
-          echo "The v-tag is pushed; the maintainer's remaining steps:"
-          echo "  1. confirm the release artifacts + SHA256SUMS attached above;"
-          echo "  2. Packagist picks the composer versions from this tag for"
-          echo "     lintel/runtime and lintel/lintel (or submit the tag URL at"
-          echo "     https://packagist.org/packages/submit);"
-          echo "  3. pin the SHA256SUMS digest into composer.json 'extra' for the"
-          echo "     installer plugin's checksum check (§12.3)."
+          missing=0
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set — add it under Settings → Secrets → Actions (a crates.io API token with publish scope for lintel-core/-diag/-lsp/-cli)"; missing=1
+          fi
+          if [ -z "$PACKAGIST_USERNAME" ] || [ -z "$PACKAGIST_TOKEN" ]; then
+            echo "::error::PACKAGIST_USERNAME / PACKAGIST_TOKEN are not set — add them under Settings → Secrets → Actions (a Packagist API token; the update-package call needs it)"; missing=1
+          fi
+          exit $missing
+      # The dry-run pre-flight: each crate must PACKAGE standalone (its
+      # packaged Cargo.toml + the verification build) before the real
+      # upload is attempted.
+      - name: cargo publish --dry-run (each publishable crate packages standalone)
+        run: |
+          for crate in lintel-diag lintel-core lintel-lsp lintel-cli; do
+            echo "== dry-run: $crate =="
+            cargo publish --dry-run --locked -p "$crate"
+          done
+      # The crates.io leg, interleaving the dry-run pre-flight with each
+      # real publish, in dependency order: lintel-diag first (it is the
+      # graph's root — lintel-core depends on IT), then lintel-core
+      # (lintel-lsp and lintel-cli depend on core), then lintel-lsp, then
+      # lintel-cli. Each dependent's `--dry-run` resolves its dependency's
+      # NEW registry version — which only exists after the previous real
+      # publish — so the pre-flight must follow the publish, with the wait
+      # letting the registry index propagate in between.
+      - name: cargo publish (diag → core → lsp → cli, dry-run pre-flight + publish per crate)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish --dry-run --locked -p lintel-diag
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-diag
+          sleep 20
+          cargo publish --dry-run --locked -p lintel-core
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-core
+          sleep 20
+          cargo publish --dry-run --locked -p lintel-lsp
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-lsp
+          sleep 20
+          cargo publish --dry-run --locked -p lintel-cli
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-cli
+      # The composer leg: Packagist derives package versions from the pushed
+      # tag, so the publish action is the update-package API call over the
+      # repo — it refreshes BOTH monorepo packages (lintel/lintel +
+      # markup/markup), then each is verified to carry the tag's version
+      # before the job goes green.
+      - name: Publish the composer packages to Packagist (lintel/lintel + markup/markup)
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          echo "triggering the Packagist update for the monorepo packages: lintel/lintel + markup/markup (source: this repository)"
+          http=$(curl -sS -o /tmp/packagist-response.json -w '%{http_code}' \
+            -X POST \
+            -H "Accept: application/json" \
+            -u "$PACKAGIST_USERNAME:$PACKAGIST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"repository": {"url": "https://github.com/elcoosp/lintel"}}' \
+            "https://packagist.org/api/update-package")
+          cat /tmp/packagist-response.json; echo
+          if [ "$http" != "200" ]; then
+            echo "::error::the Packagist update-package call failed (HTTP $http)"; exit 1
+          fi
+          for pkg in lintel/lintel markup/markup; do
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              sleep 10
+              if curl -fsSL "https://repo.packagist.org/p2/$pkg.json" | python3 -c "import json, os, sys; d = json.load(sys.stdin); vs = [v['version'] for v in d['packages'][list(d['packages'])[0]]]; sys.exit(0 if os.environ['TAG_VERSION'] in vs else 1)"; then
+                echo "$pkg: $TAG_VERSION visible on Packagist"
+                ok=1; break
+              fi
+              echo "$pkg: $TAG_VERSION not visible yet (attempt $attempt)"
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::$pkg does not expose $TAG_VERSION on Packagist after the update — check the package's source URL on packagist.org"; exit 1
+            fi
+          done
+      - name: The maintainer's remaining step (review the draft)
+        run: |
+          echo "Everything automated: five binaries + SHA256SUMS + provenance attestations on the DRAFT release;"
+          echo "crates.io carries lintel-core/-diag/-lsp/-cli at ${{ github.ref_name }}; Packagist serves both composer packages at ${{ github.ref_name }}."
+          echo "Remaining human step: review https://github.com/elcoosp/lintel/releases and click Publish."
