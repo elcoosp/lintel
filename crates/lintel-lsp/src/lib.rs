@@ -36,18 +36,21 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
-    Diagnostic as LspDiagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionItemKind, CompletionOptions,
+    CompletionParams, Diagnostic as LspDiagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover, HoverContents, HoverParams,
     InitializeResult, Location, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel,
     Position, PublishDiagnosticsParams, Range, ServerCapabilities, ServerInfo, SignatureHelp,
     SignatureHelpOptions, SignatureHelpParams, SignatureInformation, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    TextDocumentSyncKind, TextEdit, Uri,
 };
 use serde_json::{json, Value};
 
 use lintel_core::scan::Signature;
 use lintel_core::{collect_inventory, compile, Diagnostic, Options, Severity};
+
+mod code_action;
+mod format;
 
 /// The server's name, advertised in `initialize`'s `serverInfo`.
 pub const SERVER_NAME: &str = "lintel-lsp";
@@ -85,13 +88,10 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
         let id = message.get("id").cloned();
         match (method, id) {
             ("exit", _) => return 0,
-            ("initialize", Some(id)) => {
-                let result = initialize_result();
-                write_response(
-                    output,
-                    &json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                );
-            }
+            ("initialize", Some(id)) => write_response(
+                output,
+                &json!({"jsonrpc": "2.0", "id": id, "result": initialize_result()}),
+            ),
             ("initialized", None) => {}
             ("shutdown", Some(id)) => {
                 write_response(output, &json!({"jsonrpc": "2.0", "id": id, "result": null}));
@@ -115,37 +115,41 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
                 }
             }
             ("textDocument/hover", Some(id)) => {
-                let hover = serde_json::from_value::<HoverParams>(params)
-                    .ok()
-                    .and_then(|params| server.hover(&params));
-                write_response(
-                    output,
-                    &json!({"jsonrpc": "2.0", "id": id, "result": hover}),
-                );
+                respond_query::<HoverParams, Hover>(output, &id, params, |p| server.hover(p));
             }
             ("textDocument/completion", Some(id)) => {
-                let items = serde_json::from_value::<CompletionParams>(params)
-                    .ok()
-                    .and_then(|params| server.completion(&params));
-                write_response(
-                    output,
-                    &json!({"jsonrpc": "2.0", "id": id, "result": items}),
-                );
+                respond_query::<CompletionParams, Vec<CompletionItem>>(output, &id, params, |p| {
+                    server.completion(p)
+                });
             }
             ("textDocument/definition", Some(id)) => {
-                let location = serde_json::from_value::<lsp_types::GotoDefinitionParams>(params)
-                    .ok()
-                    .and_then(|params| server.definition(&params));
-                write_response(
+                respond_query::<lsp_types::GotoDefinitionParams, Location>(
                     output,
-                    &json!({"jsonrpc": "2.0", "id": id, "result": location}),
+                    &id,
+                    params,
+                    |p| server.definition(p),
                 );
             }
             ("textDocument/signatureHelp", Some(id)) => {
-                let help = serde_json::from_value::<SignatureHelpParams>(params)
-                    .ok()
-                    .and_then(|params| server.signature_help(&params));
-                write_response(output, &json!({"jsonrpc": "2.0", "id": id, "result": help}));
+                respond_query::<SignatureHelpParams, SignatureHelp>(output, &id, params, |p| {
+                    server.signature_help(p)
+                });
+            }
+            ("textDocument/codeAction", Some(id)) => {
+                respond_query::<CodeActionParams, Vec<CodeActionOrCommand>>(
+                    output,
+                    &id,
+                    params,
+                    |p| Some(server.code_actions(p)),
+                );
+            }
+            ("textDocument/formatting", Some(id)) => {
+                respond_query::<lsp_types::DocumentFormattingParams, Vec<TextEdit>>(
+                    output,
+                    &id,
+                    params,
+                    |p| server.formatting(p),
+                );
             }
             (method, Some(id)) => {
                 write_response(
@@ -158,6 +162,27 @@ pub fn run(input: &mut dyn Read, output: &mut dyn Write) -> i32 {
             (_unknown, None) => {} // unknown notification: ignore silently
         }
     }
+}
+
+/// Answer one document query: deserialize `params` into `T`, run the
+/// handler, and write the result (a `null` result when the params do not
+/// parse or the handler has no answer — the spec's empty answer).
+fn respond_query<T, R>(
+    output: &mut dyn Write,
+    id: &Value,
+    params: Value,
+    handle: impl Fn(&T) -> Option<R>,
+) where
+    T: serde::de::DeserializeOwned,
+    R: serde::Serialize,
+{
+    let result = serde_json::from_value::<T>(params)
+        .ok()
+        .and_then(|p| handle(&p));
+    write_response(
+        output,
+        &json!({"jsonrpc": "2.0", "id": id, "result": result}),
+    );
 }
 
 /// The `initialize` result: full-text document sync, hover, completion
@@ -178,6 +203,8 @@ pub fn initialize_result() -> InitializeResult {
                 trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
                 ..SignatureHelpOptions::default()
             }),
+            code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+            document_formatting_provider: Some(lsp_types::OneOf::Left(true)),
             ..ServerCapabilities::default()
         },
         server_info: Some(ServerInfo {
@@ -261,22 +288,25 @@ struct Server {
 
 /// The raw-text bodies (§4.7.1) whose `<` are data, not tags — matched
 /// exactly like the parser's own `raw_text` check.
-const RAW_TEXT_ELEMENTS: &[&str] = &["script", "style"];
+pub(crate) const RAW_TEXT_ELEMENTS: &[&str] = &["script", "style"];
 
 /// One tag the walk found, with the spans its handlers need.
-struct TagSpan<'t> {
+pub(crate) struct TagSpan<'t> {
     /// Byte offset of the opening `<` (a close tag: its own `<`).
-    open: usize,
+    pub(crate) open: usize,
     /// Byte offset just past the closing `>`; a raw-text element reports
     /// the span through its matching close tag's `>`, like the compiler's
     /// own element span.
-    close: usize,
+    pub(crate) close: usize,
     /// The tag name as written (`div`, `Card`, `Ui\\Button`).
-    name: &'t str,
+    pub(crate) name: &'t str,
     /// Byte span of the name inside `<Name` / `</Name`.
-    name_span: (usize, usize),
+    pub(crate) name_span: (usize, usize),
     /// A close tag (`</Name>`).
-    closing: bool,
+    pub(crate) closing: bool,
+    /// An open tag that closes itself (`<br />`) — the formatter's depth
+    /// walk must not count it as a nesting level.
+    pub(crate) self_closing: bool,
 }
 
 impl TagSpan<'_> {
@@ -319,7 +349,7 @@ struct TagFocus<'t> {
 /// or `<` inside a value (`title="a>b"`, `cond={a > b}`) cannot split the
 /// span. Raw-text elements report one span through their matching close
 /// tag, the way the compiler's scanner reads their bodies verbatim.
-fn tag_spans(text: &str) -> Vec<TagSpan<'_>> {
+pub(crate) fn tag_spans(text: &str) -> Vec<TagSpan<'_>> {
     let b = text.as_bytes();
     let mut spans = Vec::new();
     let mut i = 0;
@@ -353,9 +383,27 @@ fn tag_spans(text: &str) -> Vec<TagSpan<'_>> {
                     name,
                     name_span: (name_start, name_end),
                     closing: false,
+                    self_closing,
                 });
                 if raw {
-                    i = skip_raw_body(b, close, name);
+                    let body_end = skip_raw_body(b, close, name);
+                    // The raw body is data, but the close tag is still a
+                    // tag: record it so the formatter's depth walk pairs
+                    // the element.
+                    if let Some(close_open) = find_close_open(b, close, body_end, name) {
+                        let close_name_start = close_open + 2;
+                        let close_name_end = take_tag_name_end(b, close_name_start);
+                        let (close_end, _) = skip_attr_region(b, close_name_end);
+                        spans.push(TagSpan {
+                            open: close_open,
+                            close: close_end,
+                            name,
+                            name_span: (close_name_start, close_name_end),
+                            closing: true,
+                            self_closing: false,
+                        });
+                    }
+                    i = body_end;
                 } else {
                     i = close;
                 }
@@ -375,6 +423,7 @@ fn tag_spans(text: &str) -> Vec<TagSpan<'_>> {
                     name,
                     name_span: (name_start, name_end),
                     closing: true,
+                    self_closing: false,
                 });
                 i = close;
             }
@@ -436,6 +485,22 @@ fn skip_raw_body(b: &[u8], body_start: usize, name: &str) -> usize {
         i += 1;
     }
     b.len()
+}
+
+/// The `<` offset of the raw element's close tag (`</name>`) between the
+/// open tag's end and the body's end, or `None` (unclosed raw element).
+fn find_close_open(b: &[u8], body_start: usize, body_end: usize, name: &str) -> Option<usize> {
+    let mut needle = Vec::with_capacity(name.len() + 3);
+    needle.extend_from_slice(b"</");
+    needle.extend_from_slice(name.as_bytes());
+    let mut i = body_start;
+    while i + needle.len() <= b.len().min(body_end) {
+        if b[i..i + needle.len()] == needle[..] {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// A PHP single/double/backtick string starting at the quote at `start`:
@@ -680,6 +745,7 @@ fn in_flight_tag(text: &str, cursor: usize) -> Option<TagFocus<'_>> {
             name,
             name_span: (run_start, cursor),
             closing,
+            self_closing: false,
         },
         cursor: CursorInTag::Name { partial: name },
     })
@@ -1342,6 +1408,29 @@ impl Server {
         let active = u32::try_from(arg_index).unwrap_or(0);
         Some(component_signature_help(signature, name, active))
     }
+
+    /// The code actions for `params` over the document (the
+    /// `code_action` module computes them; the server only owns the
+    /// document lookup).
+    #[must_use]
+    fn code_actions(&self, params: &CodeActionParams) -> Vec<CodeActionOrCommand> {
+        let uri = params.text_document.uri.to_string();
+        let Some(document) = self.documents.get(&uri) else {
+            return Vec::new();
+        };
+        code_action::code_actions(&document.text, &parse_uri(&uri), params)
+    }
+
+    /// The re-indentation edits for `params` over the document (`None`
+    /// for an unknown document; an already-formatted document yields an
+    /// empty list).
+    #[must_use]
+    fn formatting(&self, params: &lsp_types::DocumentFormattingParams) -> Option<Vec<TextEdit>> {
+        let uri = params.text_document.uri.to_string();
+        let document = self.documents.get(&uri)?;
+        let edits = format::formatting_edits(&document.text);
+        Some(edits)
+    }
 }
 
 /// Compile `text` and map every diagnostic (errors and warnings alike —
@@ -1397,7 +1486,7 @@ fn to_lsp_diagnostic(diagnostic: &Diagnostic, text: &str) -> LspDiagnostic {
 /// past the end of a line (or of the document) clamp to the nearest
 /// boundary, so a hover never panics on a stale client cursor.
 #[must_use]
-fn offset_of_position(text: &str, position: Position) -> usize {
+pub(crate) fn offset_of_position(text: &str, position: Position) -> usize {
     let mut line = 0_u32;
     let mut utf16 = 0_u32;
     for (index, c) in text.char_indices() {
@@ -1421,7 +1510,7 @@ fn offset_of_position(text: &str, position: Position) -> usize {
 /// A byte offset → the LSP 0-based UTF-16 position (the inverse mapping
 /// of [`offset_of_position`], via the same walk so they agree exactly).
 #[must_use]
-fn position_of_offset(text: &str, offset: usize) -> Position {
+pub(crate) fn position_of_offset(text: &str, offset: usize) -> Position {
     let mut line = 0_u32;
     let mut utf16 = 0_u32;
     for (index, c) in text.char_indices() {
