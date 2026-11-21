@@ -7,7 +7,11 @@ versions with SemVer, and the language spec versions separately
 
 ## [Unreleased]
 
-The unreleased set closes the v1.0.0 scope (architecture §17.1 Q4). The
+Nothing yet — new work lands here first; the v1.0.0 scope is cut below.
+
+## [v1.0.0]
+
+This release closes the v1.0.0 scope (architecture §17.1 Q4). The
 language spec the compiler implements is the §4 set with its executable
 goldens; the stability promise is the SemVer contract these notes keep;
 and the comprehensive feature set — compiler, runtime, streaming and the
@@ -15,8 +19,11 @@ server adapters, the Laravel/Symfony bridges, the LSP with its
 tree-sitter lane, the watch daemon, the incremental build cache, the
 playground, the benchmark harness and the deployment guides — is
 reconciled in §21 with every claim backed by a test, a benchmark or a CI
-lane. Tagging and publishing stay with the maintainer (T-18's carried
-note).
+lane. The `v*` tag triggers the T-18 release workflow: five binaries,
+SHA256SUMS, build-provenance attestation and a draft GitHub release for
+the maintainer's review, with the crates.io publishes and the Packagist
+updates in the same workflow; the maintainer reviews the draft and
+publishes.
 
 ### Added
 
