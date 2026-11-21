@@ -217,7 +217,7 @@ fn hover_off_a_component_is_null() {
 fn unknown_requests_answer_method_not_found_and_shutdown_exits() {
     let session = session(&[
         message(&serde_json::json!({
-            "jsonrpc": "2.0", "id": 9, "method": "workspace/symbol", "params": {},
+            "jsonrpc": "2.0", "id": 9, "method": "workspace/executeCommand", "params": {},
         })),
         message(&serde_json::json!({
             "jsonrpc": "2.0", "id": 10, "method": "shutdown",
@@ -946,4 +946,369 @@ fn formatting_normalizes_tag_indentation_and_keeps_php_and_text() {
     assert_eq!(lines[7], "    </div>", "{lines:?}");
     assert_eq!(lines[8], "    );", "PHP tail untouched");
     assert_eq!(lines[9], "}");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: rename / find references / workspace symbols (§17.1 Q3)
+// ---------------------------------------------------------------------------
+
+/// The declaring document: `Salute` declared and once invoked paired.
+const RENAME_DECLARE_SOURCE: &str = concat!(
+    "<?php\n\n",
+    "function Salute(string $name, int $age): Html\n{\n",
+    "    return <div>{$name}</div>;\n}\n\n",
+    "echo <Salute name=\"a\" age={1}>inner</Salute>;\n"
+);
+
+/// The invoking document: `Salute` resolved cross-file.
+const RENAME_INVOKE_SOURCE: &str = concat!(
+    "<?php\n\n",
+    "function Page(): Html\n{\n",
+    "    return <Salute name=\"LSP\" age={2} />;\n}\n"
+);
+
+const DECLARE_URI: &str = "file:///ws/Salute.lintel.php";
+const INVOKE_URI: &str = "file:///ws/Page.lintel.php";
+
+/// Open both rename-fixture documents.
+fn rename_session(extra: &[String]) -> String {
+    let mut messages = vec![
+        open_message(DECLARE_URI, RENAME_DECLARE_SOURCE),
+        open_message(INVOKE_URI, RENAME_INVOKE_SOURCE),
+    ];
+    messages.extend(extra.iter().cloned());
+    session(&messages)
+}
+
+/// The rename request for `position` on `uri`.
+fn rename_request(id: i32, uri: &str, line: u32, character: u32, new_name: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/rename",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+            "newName": new_name,
+        },
+    }))
+}
+
+/// The references request for `position` on `uri`.
+fn references_request(
+    id: i32,
+    uri: &str,
+    line: u32,
+    character: u32,
+    include_declaration: bool,
+) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/references",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": include_declaration},
+        },
+    }))
+}
+
+/// The workspace/symbol request for `query`.
+fn symbol_request(id: i32, query: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "workspace/symbol",
+        "params": {"query": query},
+    }))
+}
+
+/// The last response body carrying `id`.
+fn response_of(session_text: &str, id: i32) -> serde_json::Value {
+    bodies(session_text)
+        .into_iter()
+        .find(|body| body["id"] == id)
+        .unwrap_or_else(|| panic!("no response for id {id}"))
+}
+
+/// Apply the `WorkspaceEdit.changes` edits for `uri` the way a client
+/// would (offsets descending within the file) and return the new text.
+fn apply_edits(session_text: &str, id: i32, uri: &str, original: &str) -> String {
+    let response = response_of(session_text, id);
+    let edits = &response["result"]["changes"][uri];
+    assert!(
+        edits.is_array() && !edits.as_array().expect("edits").is_empty(),
+        "the edit set for {uri} is non-empty: {response}"
+    );
+    let mut ranges: Vec<(usize, usize, &str)> = edits
+        .as_array()
+        .expect("edits")
+        .iter()
+        .map(|edit| {
+            let start = edit["range"]["start"].clone();
+            let end = edit["range"]["end"].clone();
+            (
+                offset_at(
+                    original,
+                    u32::try_from(start["line"].as_u64().unwrap_or(0)).unwrap_or(0),
+                    u32::try_from(start["character"].as_u64().unwrap_or(0)).unwrap_or(0),
+                ),
+                offset_at(
+                    original,
+                    u32::try_from(end["line"].as_u64().unwrap_or(0)).unwrap_or(0),
+                    u32::try_from(end["character"].as_u64().unwrap_or(0)).unwrap_or(0),
+                ),
+                edit["newText"].as_str().expect("newText is a string"),
+            )
+        })
+        .collect();
+    ranges.sort_unstable_by_key(|(offset, _end, _text)| std::cmp::Reverse(*offset));
+    let mut text = original.to_string();
+    for (start, end, new_text) in ranges {
+        text.replace_range(start..end, new_text);
+    }
+    text
+}
+
+/// An LSP 0-based (line, UTF-16) position → byte offset (ASCII fixtures:
+/// characters are bytes, so the UTF-16 column is the byte column).
+fn offset_at(text: &str, line: u32, character: u32) -> usize {
+    let mut offset = 0usize;
+    for (index, line_text) in text.lines().enumerate() {
+        if index == usize::try_from(line).unwrap_or(usize::MAX) {
+            return offset + character as usize;
+        }
+        offset += line_text.len() + 1;
+    }
+    text.len()
+}
+
+#[test]
+fn initialize_advertises_rename_references_and_workspace_symbols() {
+    let session_text = session(&[message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+    }))]);
+    let init = &bodies(&session_text)[0];
+    assert_eq!(init["result"]["capabilities"]["renameProvider"], true);
+    assert_eq!(init["result"]["capabilities"]["referencesProvider"], true);
+    assert_eq!(
+        init["result"]["capabilities"]["workspaceSymbolProvider"],
+        true
+    );
+}
+
+#[test]
+fn rename_from_the_declaration_updates_cross_file_invocations() {
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "function Salute");
+    let character = character + u32::try_from("function ".len()).unwrap_or(0);
+    let session_text = rename_session(&[rename_request(10, DECLARE_URI, line, character, "Greet")]);
+    let response = response_of(&session_text, 10);
+    let changes = &response["result"]["changes"];
+    assert!(
+        changes[DECLARE_URI].is_array() && changes[INVOKE_URI].is_array(),
+        "both files are edited: {response}"
+    );
+    // The declaring file: the declaration identifier, the open tag name
+    // and the close tag name.
+    let declare_edits = changes[DECLARE_URI].as_array().expect("edits");
+    assert_eq!(
+        declare_edits.len(),
+        3,
+        "decl + open tag + close tag: {response}"
+    );
+    let invoked = apply_edits(&session_text, 10, INVOKE_URI, RENAME_INVOKE_SOURCE);
+    assert!(
+        invoked.contains("<Greet name=\"LSP\" age={2} />"),
+        "the cross-file invocation renames: {invoked}"
+    );
+    assert!(
+        !invoked.contains("Salute"),
+        "no stale name remains: {invoked}"
+    );
+    let declared = apply_edits(&session_text, 10, DECLARE_URI, RENAME_DECLARE_SOURCE);
+    assert!(
+        declared.contains("function Greet(")
+            && declared.contains("<Greet name=\"a\" age={1}>inner</Greet>"),
+        "the declaration and both tags rename: {declared}"
+    );
+}
+
+#[test]
+fn rename_from_an_invocation_reaches_the_declaration() {
+    let (line, character) = position_of(RENAME_INVOKE_SOURCE, "<Salute");
+    let character = character + 1; // on the tag name's first byte
+    let session_text = rename_session(&[rename_request(11, INVOKE_URI, line, character, "Cheer")]);
+    let declared = apply_edits(&session_text, 11, DECLARE_URI, RENAME_DECLARE_SOURCE);
+    assert!(
+        declared.contains("function Cheer("),
+        "the declaration renames from an invocation cursor: {declared}"
+    );
+    let invoked = apply_edits(&session_text, 11, INVOKE_URI, RENAME_INVOKE_SOURCE);
+    assert!(invoked.contains("<Cheer name=\"LSP\""), "{invoked}");
+}
+
+#[test]
+fn rename_a_prop_updates_the_parameter_and_the_attribute_usages() {
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "$name");
+    let session_text = rename_session(&[rename_request(12, DECLARE_URI, line, character, "title")]);
+    let declared = apply_edits(&session_text, 12, DECLARE_URI, RENAME_DECLARE_SOURCE);
+    assert!(
+        declared.contains("function Salute(string $title, int $age)"),
+        "the parameter renames: {declared}"
+    );
+    assert!(
+        declared.contains("<Salute title=\"a\" age={1}>"),
+        "the same-file attribute renames: {declared}"
+    );
+    // The BODY child `{$name}` is a child expression, not a prop usage —
+    // it must keep its name.
+    assert!(
+        declared.contains("<div>{$name}</div>"),
+        "the body child is not an attribute usage: {declared}"
+    );
+    let invoked = apply_edits(&session_text, 12, INVOKE_URI, RENAME_INVOKE_SOURCE);
+    assert!(
+        invoked.contains("<Salute title=\"LSP\" age={2} />"),
+        "the cross-file attribute renames: {invoked}"
+    );
+}
+
+#[test]
+fn rename_refuses_invalid_names_and_undeclared_components() {
+    // A lowercase new name is not a component (§4.7) — the empty answer.
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "function Salute");
+    let character = character + u32::try_from("function ".len()).unwrap_or(0);
+    let session_text = rename_session(&[rename_request(
+        13,
+        DECLARE_URI,
+        line,
+        character,
+        "greet_lower",
+    )]);
+    let response = response_of(&session_text, 13);
+    assert!(
+        response["result"].is_null(),
+        "an invalid component name renames nothing: {response}"
+    );
+
+    // Same name: no-op rename answers null.
+    let session_text =
+        rename_session(&[rename_request(14, DECLARE_URI, line, character, "Salute")]);
+    let response = response_of(&session_text, 14);
+    assert!(response["result"].is_null(), "a no-op rename: {response}");
+
+    // An HTML element is not a component — nothing to rename.
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "<div>");
+    let session_text =
+        rename_session(&[rename_request(15, DECLARE_URI, line, character + 1, "Pane")]);
+    let response = response_of(&session_text, 15);
+    assert!(response["result"].is_null(), "an element tag: {response}");
+
+    // An undeclared component invocation cannot rename (the declaration
+    // is invisible — a partial rename would break the workspace).
+    let undeclared = concat!(
+        "<?php\n\n",
+        "function Ghost(): Html\n{\n",
+        "    return <Nowhere />;\n}\n"
+    );
+    let session_text = rename_session(&[rename_request(
+        16,
+        DECLARE_URI,
+        position_of(undeclared, "<Nowhere").0,
+        position_of(undeclared, "<Nowhere").1 + 1,
+        "There",
+    )]);
+    let response = response_of(&session_text, 16);
+    assert!(
+        response["result"].is_null(),
+        "an undeclared component: {response}"
+    );
+}
+
+#[test]
+fn references_list_cross_file_usages_with_and_without_the_declaration() {
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "function Salute");
+    let character = character + u32::try_from("function ".len()).unwrap_or(0);
+    // With the declaration: decl + open tag + close tag (declaring file)
+    // + the invocation tag (invoking file).
+    let session_text =
+        rename_session(&[references_request(20, DECLARE_URI, line, character, true)]);
+    let response_20 = response_of(&session_text, 20);
+    let locations = response_20["result"].as_array().expect("locations");
+    assert_eq!(
+        locations.len(),
+        4,
+        "decl + 2 tags + cross-file: {locations:?}"
+    );
+    let from_declare = locations
+        .iter()
+        .filter(|location| location["uri"] == DECLARE_URI)
+        .count();
+    let from_invoke = locations
+        .iter()
+        .filter(|location| location["uri"] == INVOKE_URI)
+        .count();
+    assert_eq!(from_declare, 3, "{locations:?}");
+    assert_eq!(from_invoke, 1, "{locations:?}");
+
+    // Without the declaration: the three usage tags only.
+    let session_text =
+        rename_session(&[references_request(21, DECLARE_URI, line, character, false)]);
+    let response_21 = response_of(&session_text, 21);
+    let locations = response_21["result"].as_array().expect("locations");
+    assert_eq!(locations.len(), 3, "usage tags only: {locations:?}");
+}
+
+#[test]
+fn references_on_a_prop_list_the_attribute_usages() {
+    let (line, character) = position_of(RENAME_INVOKE_SOURCE, "name=");
+    let session_text = rename_session(&[references_request(22, INVOKE_URI, line, character, true)]);
+    let response_22 = response_of(&session_text, 22);
+    let locations = response_22["result"].as_array().expect("locations");
+    // The `$name` declaration + the two written attributes.
+    assert_eq!(locations.len(), 3, "{locations:?}");
+    let declared = locations
+        .iter()
+        .find(|location| location["uri"] == DECLARE_URI)
+        .expect("the declaration location");
+    let (decl_line, decl_char) = position_of(RENAME_DECLARE_SOURCE, "$name");
+    assert_eq!(
+        declared["range"]["start"]["line"], decl_line,
+        "{locations:?}"
+    );
+    assert_eq!(
+        declared["range"]["start"]["character"], decl_char,
+        "{locations:?}"
+    );
+}
+
+#[test]
+fn workspace_symbols_fuzzy_search_declared_components() {
+    // The subsequence `slt` matches Salute but not Page.
+    let session_text = rename_session(&[symbol_request(30, "slt")]);
+    let response_30 = response_of(&session_text, 30);
+    let symbols = response_30["result"].as_array().expect("symbols");
+    assert_eq!(symbols.len(), 1, "one fuzzy hit: {symbols:?}");
+    assert_eq!(symbols[0]["name"], "Salute", "{symbols:?}");
+    assert_eq!(symbols[0]["kind"], 12, "FUNCTION kind: {symbols:?}");
+    assert_eq!(symbols[0]["location"]["uri"], DECLARE_URI, "{symbols:?}");
+    let (line, character) = position_of(RENAME_DECLARE_SOURCE, "function Salute");
+    let character = character + u32::try_from("function ".len()).unwrap_or(0);
+    assert_eq!(symbols[0]["location"]["range"]["start"]["line"], line);
+    assert_eq!(
+        symbols[0]["location"]["range"]["start"]["character"],
+        character
+    );
+
+    // The empty query lists every declared component (Salute and Page).
+    let session_text = rename_session(&[symbol_request(31, "")]);
+    let response_31 = response_of(&session_text, 31);
+    let names: Vec<String> = response_31["result"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .filter_map(|symbol| symbol["name"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(names.len(), 2, "every component lists: {names:?}");
+
+    // No match: the empty list is the spec's answer.
+    let session_text = rename_session(&[symbol_request(32, "zzz")]);
+    let response_32 = response_of(&session_text, 32);
+    let symbols = response_32["result"].as_array().expect("symbols");
+    assert!(symbols.is_empty(), "no hit: {symbols:?}");
 }
