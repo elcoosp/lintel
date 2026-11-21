@@ -1,0 +1,49 @@
+{
+    "name": "lintel/blade",
+    "description": "The Laravel Blade bridge: the @lintel directive renders a Lintel component invocation, reusing the dev loader for .lintel.php sources (architecture doc §11 Laravel interop, §17.1-Q2 Laravel & Symfony packages)",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Lintel\\Blade\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lintel\\Blade\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.1",
+        "lintel/lintel": "*",
+        "lintel/runtime": "*"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../lintel"
+        },
+        {
+            "type": "path",
+            "url": "../runtime"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require-dev": {
+        "illuminate/filesystem": "^12.0",
+        "illuminate/view": "^12.0",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    },
+    "scripts": {
+        "test": "phpunit --configuration phpunit.xml",
+        "stan": "phpstan analyse --memory-limit=1G --no-progress"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "lintel/lintel": true
+        }
+    },
+    "prefer-stable": true
+}
