@@ -33,6 +33,18 @@ Details the doc does not pin down, decided here:
    runs lazily on first iteration; assigning the expression creates the
    generator object without rendering anything. Component functions that
    stream declare `: \Generator` and return the closure directly.
+   1a. **The declared return type rewrites.** A component declaring the
+   canonical `function Name(...): Html` shape returns the generator
+   closure the lowering emits — the author's `Html` type would
+   `TypeError` against it under `strict_types` (proven by the Phase 9
+   `renderStreaming()` parity acceptance, the first real PHP consumer of
+   a stream artifact). When the stream lowering is active, the scanner
+   rewrites a declared `Html` spelling (canonical, `?Html` nullable,
+   `\Lintel\Html` qualified) to the non-null `\Generator` **on the same
+   line** (line preservation holds). Unions (`Html|string` — the type
+   span stops at `|`) and body-less declarations (abstract/interface
+   `;`) copy verbatim; the string and rfc targets keep every declaration
+   exactly as written.
 2. **Chunks mirror the string target's parts.** Literal runs merge into one
    quoted string chunk (one `yield` per literal run, same merge rule as the
    string concat, doc 6.5); dynamic children/attributes ride through the same
