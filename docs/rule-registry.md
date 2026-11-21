@@ -74,9 +74,12 @@
 - **No severity field.** Rule-level severity is policy expressed inside
   `check` (the static-handler rule emits a warning); a registry entry does
   not promise one until a second severity-expressing rule shape exists.
-- **No per-code docs pages.** The machine-readable registry is the
-  compiler-side prerequisite for the `docs/errors/LNT*.md` index pages
-  (architecture §21.1); the pages themselves are still future work.
+- **Per-code docs pages cover five of the ten diagnostic classes.**
+  `docs/errors/` ships `LNT0102`, `LNT0201`, `LNT0202`, `LNT0301` and
+  `LNT0401`; `LNT0101`, `LNT0203`, `LNT0204`, `LNT0205` and `LNT0302`
+  are still future work (the machine-readable registry remains the
+  compiler-side prerequisite for the remaining `docs/errors/LNT*.md`
+  index pages, architecture §21.1).
 - **No rule configuration surface.** A registry entry carries identity
   only; tuning rules (thresholds, allow-lists) has no seam yet.
 - **No discovery of consumer rules at runtime.** `registry_metas` sees the
