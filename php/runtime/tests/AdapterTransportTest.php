@@ -199,7 +199,11 @@ PHP, 'RoadRunner adapter', true);
      * via its worker env marker. */
     public function testAdapterEnvironmentProbes(): void
     {
-        self::assertFalse(SwooleFlushTransport::isAvailable(), 'ext-swoole is not loaded in the sandbox');
+        self::assertSame(
+            \extension_loaded('swoole') || \class_exists('Swoole\\Http\\Response'),
+            SwooleFlushTransport::isAvailable(),
+            'the probe must mirror the environment (the CI adapters-live job loads the ext; the php job does not)',
+        );
         $had = getenv('RR_MODE');
         putenv('RR_MODE=http');
         try {
@@ -286,27 +290,210 @@ PHP;
 
         try {
             self::assertNotFalse($body, "the {$label} fixture server never served the page");
-            self::assertStringContainsString('<h1>' . $label . '</h1>', $body);
-            self::assertStringContainsString('<div id="lt-1">', $body);
-            self::assertStringContainsString('<template id="lt-1-r">', $body);
-            self::assertTrue(
-                strpos((string) $body, '<div id="lt-1">') < strpos((string) $body, '<template id="lt-1-r">'),
-                'the placeholder must precede the resolved template over HTTP',
-            );
-            self::assertTrue(
-                strpos((string) $body, '<p>footer</p>') < strpos((string) $body, '<template id="lt-1-r">'),
-                "the shell must finish before the late-flushed chunk: {$body}",
-            );
-            self::assertStringContainsString('&lt;script&gt;alert(&quot;pwned&quot;)&lt;/script&gt;', $body);
-            self::assertStringNotContainsString('<p>user: <script>alert("pwned")</script></p>', $body);
-            $flat = implode("\n", $headers);
-            self::assertStringContainsString('X-Accel-Buffering: no', $flat, $flat);
-            self::assertStringContainsString('Content-Type: text/html; charset=utf-8', $flat, $flat);
+            self::assertStreamedPageResponse((string) $body, $headers, $label);
         } finally {
             @unlink($docroot . '/worker.php');
             @unlink($docroot . '/.rr.yaml');
             @unlink($docroot . '/rr.log');
             @unlink($docroot . '/rr.err');
+            @rmdir($docroot);
+        }
+    }
+
+    /** The §10 wire contract, shared by every live lane (php -S, rr,
+     * the real FrankenPHP binary, the ext-swoole server): shell first,
+     * placeholder before its resolved template, the late chunk escaped,
+     * and `X-Accel-Buffering: no` + the content type on the wire.
+     *
+     * @param list<string> $headers the $http_response_header of the fetch
+     */
+    private function assertStreamedPageResponse(string $body, array $headers, string $label): void
+    {
+        self::assertStringContainsString('<h1>' . $label . '</h1>', $body);
+        self::assertStringContainsString('<div id="lt-1">', $body);
+        self::assertStringContainsString('<template id="lt-1-r">', $body);
+        self::assertTrue(
+            strpos($body, '<div id="lt-1">') < strpos($body, '<template id="lt-1-r">'),
+            'the placeholder must precede the resolved template over HTTP',
+        );
+        self::assertTrue(
+            strpos($body, '<p>footer</p>') < strpos($body, '<template id="lt-1-r">'),
+            "the shell must finish before the late-flushed chunk: {$body}",
+        );
+        self::assertStringContainsString('&lt;script&gt;alert(&quot;pwned&quot;)&lt;/script&gt;', $body);
+        self::assertStringNotContainsString('<p>user: <script>alert("pwned")</script></p>', $body);
+        $flat = implode("\n", $headers);
+        self::assertStringContainsString('X-Accel-Buffering: no', $flat, $flat);
+        self::assertStringContainsString('Content-Type: text/html; charset=utf-8', $flat, $flat);
+    }
+
+    /** The M2 live FrankenPHP lane: the REAL frankenphp binary (the
+     * Caddy-based runtime, a static release build) serves the streamed
+     * page natively — the echo + flush shape runs through its worker, and
+     * the §10 wire contract must hold on the bytes it serves. Skipped
+     * unless LINTEL_E2E_FRANKENPHP=1 AND the binary is on PATH
+     * (CI: the adapters-live job downloads the v1.14.0 static build). */
+    public function testFrankenPHPAdapterEndToEndOverTheRealBinary(): void
+    {
+        if (getenv('LINTEL_E2E_FRANKENPHP') !== '1' || trim((string) shell_exec('command -v frankenphp 2>/dev/null')) === '') {
+            self::markTestSkipped('the live FrankenPHP lane needs the frankenphp binary + LINTEL_E2E_FRANKENPHP=1 '
+                . '(CI: the adapters-live job downloads the static v1.14.0 build)');
+        }
+        $label = 'FrankenPHP binary adapter';
+        $docroot = sys_get_temp_dir() . '/lintel-frankenphp-' . bin2hex((string) random_bytes(4));
+        mkdir($docroot, 0777, true);
+        $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
+            var_export(\dirname(__DIR__) . '/vendor/autoload.php', true),
+            $label,
+        ], <<<'PHP'
+<?php declare(strict_types=1);
+require {AUTOLOAD};
+
+use Lintel\Suspense;
+
+use function Lintel\c;
+use function Lintel\stream_via;
+
+$payload = '<script>alert("pwned")</script>';
+$page = (static function () use ($payload): \Generator {
+    yield '<!doctype html><html><body><h1>{LABEL}</h1>';
+    yield new Suspense('loading…', static function () use ($payload): \Generator {
+        \usleep(10_000); // the slow boundary
+        yield '<p>user: ' . c($payload) . '</p>';
+    });
+    yield '<p>footer</p></body></html>';
+})();
+stream_via($page, new \Lintel\FrankenPHPFlushTransport());
+PHP);
+        file_put_contents($docroot . '/index.php', $worker);
+
+        $proc = null;
+        $body = false;
+        $headers = [];
+        try {
+            for ($attempt = 0; $attempt < 10; $attempt++) {
+                $port = 23300 + $attempt;
+                $proc = @proc_open(
+                    ['frankenphp', 'php-server', '--root', $docroot, '--listen', '127.0.0.1:' . (string) $port],
+                    [1 => ['file', $docroot . '/fp.log', 'w'], 2 => ['file', $docroot . '/fp.err', 'w']],
+                    $pipes,
+                );
+                if (!is_resource($proc)) {
+                    continue;
+                }
+                $deadline = microtime(true) + 8;
+                while (microtime(true) < $deadline) {
+                    \usleep(300_000);
+                    $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
+                    $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/index.php', false, $context);
+                    if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
+                        $body = $fetched;
+                        $headers = $http_response_header;
+                        break;
+                    }
+                }
+                if ($body !== false) {
+                    break;
+                }
+                proc_terminate($proc);
+                proc_close($proc);
+                $proc = null;
+            }
+            self::assertNotFalse($body, 'the real frankenphp server never served the streamed page');
+            self::assertStreamedPageResponse((string) $body, $headers, $label);
+        } finally {
+            if (is_resource($proc)) {
+                proc_terminate($proc);
+                proc_close($proc);
+            }
+            foreach (['/index.php', '/fp.log', '/fp.err'] as $file) {
+                @unlink($docroot . $file);
+            }
+            @rmdir($docroot);
+        }
+    }
+
+    /** The M2 live Swoole lane: a real Swoole\Http\Server (the extension,
+     * booted in a subprocess) serves the streamed page through
+     * SwooleFlushTransport::fromSwoole — status, headers
+     * (X-Accel-Buffering: no included), per-chunk writes and end(). Skipped
+     * when the extension is absent (CI: the adapters-live job installs it
+     * via setup-php). */
+    public function testSwooleAdapterEndToEndOverTheExtensionServer(): void
+    {
+        if (!SwooleFlushTransport::isAvailable()) {
+            self::markTestSkipped('the live Swoole lane needs ext-swoole '
+                . '(CI: the adapters-live job installs it via setup-php)');
+        }
+        $label = 'Swoole adapter';
+        $docroot = sys_get_temp_dir() . '/lintel-swoole-' . bin2hex((string) random_bytes(4));
+        mkdir($docroot, 0777, true);
+        $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
+            var_export(\dirname(__DIR__) . '/vendor/autoload.php', true),
+            $label,
+        ], <<<'PHP'
+<?php declare(strict_types=1);
+require {AUTOLOAD};
+
+$http = new \Swoole\Http\Server('127.0.0.1', {PORT});
+$http->on('request', static function ($request, $response) {
+    $payload = '<script>alert("pwned")</script>';
+    $page = (static function () use ($payload): \Generator {
+        yield '<!doctype html><html><body><h1>{LABEL}</h1>';
+        yield new \Lintel\Suspense('loading…', static function () use ($payload): \Generator {
+            \usleep(10_000); // the slow boundary
+            yield '<p>user: ' . \Lintel\c($payload) . '</p>';
+        });
+        yield '<p>footer</p></body></html>';
+    })();
+    \Lintel\stream_via($page, \Lintel\SwooleFlushTransport::fromSwoole($response));
+});
+$http->start();
+PHP);
+
+        $proc = null;
+        $body = false;
+        $headers = [];
+        try {
+            for ($attempt = 0; $attempt < 10; $attempt++) {
+                $port = 23400 + $attempt;
+                $path = $docroot . '/worker.php';
+                file_put_contents($path, str_replace('{PORT}', (string) $port, $worker));
+                $proc = @proc_open([PHP_BINARY, $path], [
+                    1 => ['file', $docroot . '/sw.log', 'w'],
+                    2 => ['file', $docroot . '/sw.err', 'w'],
+                ], $pipes);
+                if (!is_resource($proc)) {
+                    continue;
+                }
+                $deadline = microtime(true) + 8;
+                while (microtime(true) < $deadline) {
+                    \usleep(300_000);
+                    $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
+                    $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/', false, $context);
+                    if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
+                        $body = $fetched;
+                        $headers = $http_response_header;
+                        break;
+                    }
+                }
+                if ($body !== false) {
+                    break;
+                }
+                proc_terminate($proc);
+                proc_close($proc);
+                $proc = null;
+            }
+            self::assertNotFalse($body, 'the ext-swoole server never served the streamed page');
+            self::assertStreamedPageResponse((string) $body, $headers, $label);
+        } finally {
+            if (is_resource($proc)) {
+                proc_terminate($proc);
+                proc_close($proc);
+            }
+            foreach (['/worker.php', '/sw.log', '/sw.err'] as $file) {
+                @unlink($docroot . $file);
+            }
             @rmdir($docroot);
         }
     }
