@@ -74,7 +74,10 @@ COMMANDS:
              Target::Rfc and its JSX becomes `new \\Markup\\Element(...)` calls,
              line-preserved, so the migrated file is the same PHP file the
              future native runtime consumes. `--dry-run` prints a unified
-             diff per file and writes nothing; `--backup` keeps the original
+             diff per file and writes nothing, each hunk header carrying the
+             function-level context (`@@ -10,5 +10,5 @@ function Badge(string
+             $name): Html`) so a review sees which component is being
+             rewritten; `--backup` keeps the original
              bytes beside the rewrite as `<file>.bak`. A file that fails to
              compile, or whose component invocations none of the migrated
              sources declares, is refused untouched (exit 1); `--to=native`
@@ -244,7 +247,8 @@ enum Invocation {
     /// RFC-convergence migration — rewrite each source IN PLACE with the
     /// native RFC-parity lowering (`new \Markup\Element` calls), refusing
     /// files that fail to compile or whose components none of the migrated
-    /// sources declares. `--dry-run` prints the unified diff and writes
+    /// sources declares. `--dry-run` prints the unified diff (each hunk
+    /// header carrying the enclosing function signature) and writes
     /// nothing; `--backup` keeps the original bytes as `<file>.bak`.
     Migrate {
         paths: Vec<PathBuf>,
@@ -1372,9 +1376,11 @@ fn emit_source(
 /// rendered diagnostics go to the error sink), and a file whose component
 /// invocations none of the migrated sources declares is refused too — the
 /// rewrite must not leave a call the migrated set cannot resolve.
-/// `--dry-run` prints a unified diff per file and writes nothing;
-/// `--backup` keeps the original bytes beside the rewrite as
-/// `<file>.bak`. The exit code reports whether any file was refused.
+/// `--dry-run` prints a unified diff per file (each hunk header carrying
+/// the enclosing function signature, the way git's funcname context does)
+/// and writes nothing; `--backup` keeps the original bytes beside the
+/// rewrite as `<file>.bak`. The exit code reports whether any file was
+/// refused.
 fn migrate(
     sources: &[PathBuf],
     format: Format,
@@ -1530,6 +1536,10 @@ enum DiffOp<'a> {
     Add(&'a str),
 }
 
+/// The chars a [`hunk_header_context`] keeps before truncating with an
+/// ellipsis (git truncates funcname context the same way).
+const CONTEXT_HEADER_MAX: usize = 80;
+
 /// The context lines a unified-diff hunk carries around its changes.
 const DIFF_CONTEXT: usize = 2;
 
@@ -1569,8 +1579,73 @@ fn diff_ops<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffOp<'a>> {
     ops
 }
 
-/// Print a unified diff (`--- a/<path>` … `@@ …` hunks, 2 context lines)
-/// of `old` → `new` to `stdout`. Returns whether anything was printed.
+/// Whether this line declares a named PHP function — the funcname context
+/// a hunk header carries. Visibility/static modifiers peel off first
+/// (methods); a closure (`function (`) or the arrow `fn` spelling names
+/// no component and is not a declaration header. Component identifiers
+/// are ASCII-shaped (the scanner's rule), so the name check is ASCII.
+fn is_function_declaration(line: &str) -> bool {
+    let mut rest = line.trim_start();
+    loop {
+        let stripped = [
+            "public",
+            "protected",
+            "private",
+            "static",
+            "final",
+            "abstract",
+        ]
+        .iter()
+        .find_map(|modifier| rest.strip_prefix(modifier))
+        // `publication` is not the `public` modifier: a modifier word
+        // must be followed by whitespace.
+        .filter(|after| after.starts_with(char::is_whitespace));
+        match stripped {
+            Some(after) => rest = after.trim_start(),
+            None => break,
+        }
+    }
+    let Some(after) = rest.strip_prefix("function") else {
+        return false;
+    };
+    let Some(after) = after.strip_prefix(char::is_whitespace) else {
+        return false;
+    };
+    let after = after.trim_start();
+    let after = after.strip_prefix('&').unwrap_or(after);
+    let name_len = after
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .count();
+    if name_len == 0 || after.starts_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+    after[name_len..].trim_start().starts_with('(')
+}
+
+/// The function-context suffix one hunk header carries (`@@ … @@ function
+/// Badge(string $name): Html`): the nearest function declaration at or
+/// above the hunk's first old line — git's funcname convention, PHP-shaped
+/// — trimmed, and truncated at [`CONTEXT_HEADER_MAX`] chars with an
+/// ellipsis so a long signature stays a summary. An empty `String` means
+/// the change sits before any declaration (the `<?php` prologue).
+fn hunk_header_context(old_lines: &[&str], first_index: usize) -> String {
+    let top = first_index.min(old_lines.len().saturating_sub(1));
+    for index in (0..=top).rev() {
+        if is_function_declaration(old_lines[index]) {
+            let mut text = old_lines[index].trim().to_string();
+            if text.chars().count() > CONTEXT_HEADER_MAX {
+                text = text.chars().take(CONTEXT_HEADER_MAX).collect::<String>() + "…";
+            }
+            return format!(" {text}");
+        }
+    }
+    String::new()
+}
+
+/// Print a unified diff (`--- a/<path>` … `@@ …` hunks, 2 context lines,
+/// each hunk header carrying its function-level context) of `old` → `new`
+/// to `stdout`. Returns whether anything was printed.
 fn unified_diff(
     path: &Path,
     old: &str,
@@ -1642,7 +1717,11 @@ fn unified_diff(
             .count();
         writeln!(
             stdout,
-            "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@{}",
+            hunk_header_context(
+                &old_lines,
+                usize::try_from(numbers[first].0.saturating_sub(1)).unwrap_or(0),
+            )
         )?;
         for op in &ops[first..=last] {
             match op {
