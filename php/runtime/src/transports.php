@@ -20,8 +20,10 @@ use Spiral\RoadRunner\Http\HttpWorkerInterface;
  * drains a generator, one midflight frame per yielded chunk), so its
  * transport queues the flush-ordered chunks during `stream_via()` and
  * `respond()` hands them to the worker afterwards — the flush order, the
- * suspense protocol and the swap script are preserved exactly; the
- * progressive per-boundary timing on RoadRunner is CI-lane work.
+ * suspense protocol and the swap script are preserved exactly. The
+ * progressive per-boundary timing is measured and asserted by the Phase 11
+ * lane (`bench/lib/ProgressiveTiming.php`, CI's `bench` job): placeholder
+ * N before resolved N-1, wire order == flush order.
  */
 
 /** The structural surface of `Swoole\Http\Response` the Swoole lane needs.
@@ -207,7 +209,9 @@ final class FrankenPHPFlushTransport implements FlushTransport
  * flush order, and `respond()` then hands the queued chunks to the worker
  * as stream chunks: the flush order, the `<template id="lt-N-r">` + swap
  * script protocol and the escaper contract are byte-identical to the FPM
- * lane; the progressive per-boundary flush timing is CI-lane work.
+ * lane; the progressive per-boundary flush timing is measured and
+ * asserted by the Phase 11 M2 lane (the bench S6 section:
+ * placeholder N before resolved N-1, wire order == flush order).
  *
  * Headers use the RR worker's shape — `array<string, list<string>>`.
  */
