@@ -16,6 +16,32 @@ if (!\class_exists('Html', false)) {
     \class_alias(Html::class, 'Html');
 }
 
+/**
+ * The §10 `<Suspense>` boundary value (architecture doc §10).
+ *
+ * A streaming component yields a Suspense instance where the boundary sits
+ * (`yield new \Lintel\Suspense(fallback: …, work: …)`): the flush runtime
+ * (`Lintel\stream()`) sinks the fallback in place immediately and appends
+ * the boundary's resolved content out-of-order inside a `<template>` plus a
+ * swap script. Consumed outside the flush runtime (through `c()`, i.e. the
+ * sync target) the boundary runs inline: no fallback, the resolved value
+ * renders whole — §10's "a page works everywhere" compat rule.
+ *
+ * `fallback` is a child VALUE (data — it renders through the escapers).
+ * `work` is the async step: a closure returning the resolved child value
+ * (data) or a generator of markup chunks (a streamed subtree). Inside the
+ * flush runtime the closure runs in a fiber, so it may suspend while its
+ * async work is pending.
+ */
+final class Suspense
+{
+    /** @param \Closure(): mixed $work the async step (see class docblock) */
+    public function __construct(
+        public readonly mixed $fallback,
+        public readonly \Closure $work,
+    ) {}
+}
+
 const FLAGS = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5;
 
 function e(string $s): string { return \htmlspecialchars($s, FLAGS, 'UTF-8'); }
@@ -24,6 +50,9 @@ function e(string $s): string { return \htmlspecialchars($s, FLAGS, 'UTF-8'); }
 function c(mixed $v): string
 {
     if ($v instanceof Html) return $v->s;
+    // §10 compat (sync target): a boundary runs inline — no fallback, the
+    // resolved value renders whole through the same escaper.
+    if ($v instanceof Suspense) return c(($v->work)());
     if ($v instanceof \Traversable) {
         // Stream target (§10): a Traversable child is a markup stream — its
         // chunks are compiler-produced markup (literals) or data already
@@ -31,7 +60,8 @@ function c(mixed $v): string
         // arrays stay data and take the is_iterable branch below.
         $o = '';
         foreach ($v as $x) {
-            if ($x instanceof \Traversable) { $o .= c($x); }
+            if ($x instanceof Suspense) { $o .= c(($x->work)()); }
+            elseif ($x instanceof \Traversable) { $o .= c($x); }
             elseif ($x instanceof Html) { $o .= $x->s; }
             elseif (\is_string($x)) { $o .= $x; }
             elseif (\is_int($x) || \is_float($x)) { $o .= (string) $x; }
@@ -157,4 +187,240 @@ function attrs(array $m): string
         };
     }
     return $o;
+}
+
+/**
+ * The §10 flush loop (@internal — `Lintel\stream()` is the public entry).
+ *
+ * It walks a stream-target render tree exactly the way `c()` walks a
+ * Traversable: chunk strings are compiler-produced markup (or data already
+ * escaped when the chunk was built) and sink raw, `Html` is the trusted
+ * sink, null/bool render empty, scalars stringify, anything else is
+ * rejected. A `Suspense` boundary caught during the walk sinks its
+ * fallback placeholder in place (`<div id="lt-N">fallback</div>` — the
+ * fallback renders through `c()`, escaping by default), and its work runs
+ * in a fiber. Once the shell finished, the fibers are pumped round-robin
+ * (a suspension = "not ready this round"); each termination sinks the
+ * resolved content inside `<template id="lt-N-r">…</template>` followed by
+ * the swap script that replaces the placeholder in place — §10's
+ * out-of-order protocol: a fast sibling flushes before a slow earlier
+ * boundary. Resolved generators walk as markup streams (their chunks flush
+ * progressively, nested boundaries join the pump); every other resolved
+ * value is data and renders through `c()`, so no streaming path bypasses
+ * the escapers. The ≈250-byte swap runtime is emitted once per render,
+ * with the first resolved boundary.
+ */
+final class SuspenseFlusher
+{
+    /** The one-time in-place swap runtime (§10 step 3). */
+    public const SWAP_RUNTIME = '<script>function lintelSwap(id){var t=document.getElementById(id+"-r"),p=document.getElementById(id);if(!t||!p)return;p.replaceChildren(t.content.cloneNode(true));t.remove();}</script>';
+
+    private string $buffer = '';
+    private int $nextId = 1;
+    private bool $runtimeEmitted = false;
+
+    /** @var list<array{id: string, fiber: \Fiber<mixed, mixed, mixed, mixed>}> the not-yet-resolved boundaries */
+    private array $pending = [];
+
+    /** @var callable(string): void */
+    private $sink;
+
+    /** @param callable(string): void|null $flush the progressive sink */
+    public function __construct(?callable $flush)
+    {
+        $this->sink = $flush ?? function (string $chunk): void {
+            $this->buffer .= $chunk;
+        };
+    }
+    /** Walk the tree, pump the pending works, return the captured bytes. */
+    public function run(mixed $tree): string
+    {
+        $this->walk($tree);
+        $this->pump();
+        return $this->buffer;
+    }
+
+    private function emit(string $chunk): void
+    {
+        ($this->sink)($chunk);
+    }
+
+    /** The chunk walk — markup context, mirroring c()'s Traversable branch. */
+    private function walk(mixed $node): void
+    {
+        if ($node instanceof \Traversable) {
+            foreach ($node as $chunk) {
+                $this->walk($chunk);
+            }
+            return;
+        }
+        if ($node instanceof Suspense) {
+            $this->boundary($node);
+            return;
+        }
+        if ($node instanceof Html) {
+            $this->emit($node->s);
+            return;
+        }
+        if (\is_string($node)) {
+            $this->emit($node);
+            return;
+        }
+        if ($node === null || \is_bool($node)) {
+            return;
+        }
+        if (\is_int($node) || \is_float($node)) {
+            $this->emit((string) $node);
+            return;
+        }
+        if (\is_iterable($node)) {
+            foreach ($node as $chunk) {
+                $this->walk($chunk);
+            }
+            return;
+        }
+        throw new \InvalidArgumentException('Cannot render ' . \get_debug_type($node) . ' as a stream chunk');
+    }
+
+    /** §10 step 1–2: flush the fallback placeholder now, register the work. */
+    private function boundary(Suspense $b): void
+    {
+        $id = 'lt-' . $this->nextId;
+        ++$this->nextId;
+        $this->emit('<div id="' . $id . '">');
+        $this->emit(c($b->fallback));
+        $this->emit('</div>');
+        $this->pending[] = ['id' => $id, 'fiber' => new \Fiber($b->work)];
+    }
+
+    /** Pump the pending works round-robin; each resolution flushes at once.
+     * A boundary discovered while walking a resolved subtree joins the same
+     * queue (resolve() may append to it), so nested boundaries pump too. */
+    private function pump(): void
+    {
+        while ($this->pending !== []) {
+            $entry = \array_shift($this->pending);
+            $fiber = $entry['fiber'];
+            if ($fiber->isStarted()) {
+                $fiber->resume();
+            } else {
+                $fiber->start();
+            }
+            if ($fiber->isTerminated()) {
+                $this->resolve($entry['id'], $fiber->getReturn());
+            } else {
+                $this->pending[] = $entry;
+            }
+        }
+    }
+
+    /** §10 step 3: the resolved boundary flushes template + swap script. */
+    private function resolve(string $id, mixed $resolved): void
+    {
+        if (!$this->runtimeEmitted) {
+            $this->emit(self::SWAP_RUNTIME);
+            $this->runtimeEmitted = true;
+        }
+        $this->emit('<template id="' . $id . '-r">');
+        if ($resolved instanceof \Generator || $resolved instanceof \Iterator) {
+            $this->walk($resolved);
+        } else {
+            $this->emit(c($resolved));
+        }
+        $this->emit('</template>');
+        $this->emit('<script>lintelSwap("' . $id . '")</script>');
+    }
+}
+
+/**
+ * §10 runtime: render a stream-target render tree (a generator yielding
+ * chunks — `docs/stream-alignment.md`) progressively. Each chunk sinks
+ * through `$flush` as it arrives; without a sink the bytes are captured and
+ * returned (chunk order is still the flush order, which is what the tests
+ * pin). Suspense boundaries flush their placeholder in place and their
+ * resolved content out-of-order (§10's protocol, `SuspenseFlusher`).
+ *
+ * @param callable(string): void|null $flush the progressive sink
+ */
+function stream(mixed $tree, ?callable $flush = null): string
+{
+    return (new SuspenseFlusher($flush))->run($tree);
+}
+
+/**
+ * §10 runtimes: a flush transport owns how a chunk reaches the client.
+ * FPM (flush + `X-Accel-Buffering: no`) and the CLI/CLI-server lane ship
+ * here; FrankenPHP streams through the same `echo + flush` shape.
+ * RoadRunner/Swoole/OpenSwoole and the ReactPHP/AMPHP event loops get
+ * their own adapters on this seam where those runtimes run (CI).
+ */
+interface FlushTransport
+{
+    /** Once before the first chunk: headers and buffering-off belong here. */
+    public function begin(): void;
+
+    /** Sink one chunk; it must reach the client before write() returns. */
+    public function write(string $chunk): void;
+
+    /** Once after the last chunk. */
+    public function end(): void;
+}
+
+/** The CLI / CLI-server lane: plain `echo` + flush per chunk. */
+final class CliFlushTransport implements FlushTransport
+{
+    public function begin(): void {}
+
+    public function write(string $chunk): void
+    {
+        echo $chunk;
+        \flush();
+    }
+
+    public function end(): void
+    {
+        \flush();
+    }
+}
+
+/** The FPM lane (§10): `X-Accel-Buffering: no`, buffered-output teardown, flush per chunk. */
+final class FpmFlushTransport implements FlushTransport
+{
+    public function begin(): void
+    {
+        \header('Content-Type: text/html; charset=utf-8');
+        // §10's FPM runtime: flush + `X-Accel-Buffering: no` (nginx off).
+        \header('X-Accel-Buffering: no');
+        while (\ob_get_level() > 0) {
+            \ob_end_flush();
+        }
+    }
+
+    public function write(string $chunk): void
+    {
+        echo $chunk;
+        \flush();
+    }
+
+    public function end(): void
+    {
+        \flush();
+    }
+}
+
+/**
+ * §10: render a stream-target tree through a [`FlushTransport`] —
+ * `begin()` fires before the first chunk, every chunk reaches `write()`
+ * as it is produced (suspense protocol included), `end()` closes. Returns
+ * `''`: the bytes went to the transport, not to a buffer.
+ */
+function stream_via(mixed $tree, FlushTransport $transport): string
+{
+    $transport->begin();
+    (new SuspenseFlusher(static function (string $chunk) use ($transport): void {
+        $transport->write($chunk);
+    }))->run($tree);
+    $transport->end();
+
+    return '';
 }
