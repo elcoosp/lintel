@@ -33,6 +33,7 @@ const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const NAV: &[(&str, &str)] = &[
     ("/", "Home"),
     ("/quick-start/", "Quick start"),
+    ("/tooling/", "Tooling"),
     ("/spec/", "Language spec"),
     ("/security/", "Security model"),
     ("/benchmarks/", "Benchmarks"),
@@ -92,7 +93,14 @@ fn main() {
     let mut pages: BTreeMap<String, String> = BTreeMap::new();
 
     // The hand-written content pages, from `docs-site/pages/*.md`.
-    for name in ["index", "quick-start", "spec", "security", "benchmarks"] {
+    for name in [
+        "index",
+        "quick-start",
+        "tooling",
+        "spec",
+        "security",
+        "benchmarks",
+    ] {
         let src = Path::new(ROOT).join(format!("docs-site/pages/{name}.md"));
         let markdown = std::fs::read_to_string(&src)
             .unwrap_or_else(|error| panic!("missing docs page {}: {error}", src.display()));
