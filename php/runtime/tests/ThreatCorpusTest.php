@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Lintel\Tests;
 
 use Lintel\Html;
+use Lintel\Suspense;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use InvalidArgumentException;
@@ -15,6 +16,7 @@ use function Lintel\c;
 use function Lintel\cls;
 use function Lintel\e;
 use function Lintel\srcset;
+use function Lintel\stream;
 use function Lintel\sty;
 use function Lintel\u;
 
@@ -254,5 +256,68 @@ final class ThreatCorpusTest extends TestCase
     public function testEscaper(): void
     {
         self::assertSame('a&amp;b&lt;c&gt;d&quot;e&apos;f', e('a&b<c>d"e\'f'));
+    }
+
+    /** §10 streaming threat case: an attacker payload arriving in a
+     * late-flushed suspense chunk is still escaped — the resolved value is
+     * data, so the template flush routes it through the escaper. */
+    public function testLateSuspenseChunkIsEscaped(): void
+    {
+        $attacker = '<img src=x onerror=alert(1)>';
+        $page = (static function () use ($attacker): \Generator {
+            yield '<p>shell flushed first</p>';
+            yield new Suspense('loading', static fn (): string => $attacker);
+        })();
+        $out = stream($page);
+        self::assertStringContainsString('<p>shell flushed first</p>', $out);
+        self::assertStringContainsString('<template id="lt-1-r">', $out);
+        self::assertStringNotContainsString('<img src=x', $out);
+        self::assertStringContainsString('&lt;img src=x onerror=alert(1)&gt;', $out);
+    }
+
+    /** §10 streaming threat case: the placeholder (fallback) is a data value too. */
+    public function testSuspenseFallbackIsEscaped(): void
+    {
+        $page = (static function (): \Generator {
+            yield new Suspense('<script>alert(1)</script>', static fn (): string => 'ok');
+        })();
+        $out = stream($page);
+        self::assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $out);
+        self::assertStringNotContainsString('<script>alert(1)</script>', $out);
+    }
+
+    /** §10 streaming threat case: a hostile value inside a resolved streamed
+     * subtree rides through `c()` exactly like compiled output (`yield \Lintel\c($x)`),
+     * so the streaming path cannot bypass escaping. */
+    public function testSuspenseSubtreeEscapesDynamicChunks(): void
+    {
+        $attacker = '</div><script>alert(1)</script>';
+        $page = (static function () use ($attacker): \Generator {
+            yield new Suspense('loading', static function () use ($attacker): \Generator {
+                yield '<ul><li>';
+                yield c($attacker);
+                yield '</li></ul>';
+            });
+        })();
+        $out = stream($page);
+        self::assertStringContainsString('&lt;/div&gt;&lt;script&gt;alert(1)&lt;/script&gt;', $out);
+        self::assertSame(1, \substr_count($out, '<div'), 'the hostile close-tag must not close the placeholder early');
+        self::assertStringNotContainsString('<script>alert(1)</script>', $out);
+    }
+
+    /** §10 streaming threat case: a markup-stream child consumed through `c()`
+     * keeps chunk-level trust boundaries — chunks pass raw only because they
+     * are compiler/escape-produced, and any data inside them was escaped when
+     * the chunk was built (the c()-wrapped generator shape the stream target
+     * emits for nested components). */
+    public function testGeneratorChildChunksKeepTrustBoundary(): void
+    {
+        $attacker = '<b>evil</b>';
+        $child = (static function () use ($attacker): \Generator {
+            yield '<i>';
+            yield c($attacker);
+            yield '</i>';
+        })();
+        self::assertSame('<i>&lt;b&gt;evil&lt;/b&gt;</i>', c($child));
     }
 }
