@@ -32,6 +32,7 @@
 //! integration tests and the cold/warm bench read.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -41,6 +42,39 @@ use lintel_core::Target;
 
 /// The cache directory name under the workspace root.
 pub(crate) const CACHE_DIR: &str = ".lintel-cache";
+
+/// The shared mutable cache files (the `stats.json` counters) are written
+/// under an exclusive `flock(2)` (fs2: `flock` on Unix, `LockFileEx` on
+/// Windows): a watch daemon and a concurrent `lintel build` both record
+/// counters into the same `<workspace>/.lintel-cache/stats.json`, and an
+/// interleaved `fs::write` would leave one reader a truncated mix. The
+/// content-addressed artifacts (`<hash>.php`/`<hash>.json`) do NOT need
+/// the lock — same key ⇒ same compiled bytes by the compiler's purity
+/// contract (§5.2), so a racing write lands the identical content; the
+/// lock is only for files whose CONTENT differs per writer.
+///
+/// Best-effort like every cache write: any failure degrades to the
+/// unlocked/unwritten behavior, never to a failed build.
+pub(crate) fn lock_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        // No truncate at open: an open-time truncate of a locked writer's
+        // file would punch a hole mid-write. The length resets under the
+        // lock, where the racing writer is serialized out.
+        .open(path)?;
+    // fs2's trait methods are called EXPLICITLY: std's own `File` locking
+    // (stable 1.89) would win inherent-method resolution and break the
+    // workspace MSRV (1.80).
+    fs2::FileExt::lock_exclusive(&file)?;
+    // The length resets under the lock: a previous longer write must not
+    // leave stale tail bytes past this write's length.
+    file.set_len(0)?;
+    file.write_all(bytes)?;
+    fs2::FileExt::unlock(&file)?;
+    Ok(())
+}
 
 /// The compile options hash: SHA-256 over the canonical option string.
 /// The build path's output depends only on the target today; the hash
@@ -162,8 +196,9 @@ impl BuildCache {
         let _ = fs::write(self.dir.join(format!("{key}.json")), sidecar.to_string());
     }
 
-    /// Record the build's counters to `.lintel-cache/stats.json`,
-    /// best-effort (the counters are observability, not contract).
+    /// Record the build's counters to `.lintel-cache/stats.json` under an
+    /// exclusive flock (a watch daemon and a concurrent build share this
+    /// file), best-effort (the counters are observability, not contract).
     pub(crate) fn record(&self, stats: &CacheStats) {
         if fs::create_dir_all(&self.dir).is_err() {
             return;
@@ -173,7 +208,7 @@ impl BuildCache {
             "cache_hits": stats.cache_hits,
             "bypassed": stats.bypassed,
         });
-        let _ = fs::write(self.dir.join("stats.json"), format!("{body}\n"));
+        let _ = lock_write(&self.dir.join("stats.json"), format!("{body}\n").as_bytes());
     }
 }
 
