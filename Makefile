@@ -6,7 +6,7 @@
 # fuzz targets do not exist yet, so the target preflights and points at T-09
 # instead of pretending.
 
-.PHONY: ci golden fuzz bench lint-php test-php stan-php check-php workflows playground size-budget docs-site claims
+.PHONY: ci golden fuzz bench bench-docker bench-validate lint-php test-php stan-php check-php workflows playground size-budget docs-site claims
 
 workflows:  ## actionlint over .github/workflows (parse-validates every workflow edit)
 	@if ! command -v actionlint >/dev/null 2>&1; then \
@@ -56,19 +56,31 @@ fuzz:  ## 60s smoke (requires cargo-fuzz + the T-09 fuzz targets)
 	fi
 	cargo +nightly fuzz run compile_fuzz -- -max_total_time=60
 
-bench:  ## Docker, pinned PHP 8.6 digest; writes bench/results/
+bench:  ## Docker when a daemon exists (bench-docker), native fallback otherwise
 	@if docker info >/dev/null 2>&1; then \
-		docker build -f bench/Dockerfile -t lintel-bench . && \
-		docker run --rm \
-			-v "$$PWD/target/release/lintel:/lintel/lintel:ro" \
-			-v "$$PWD/bench/results:/app/bench/results" \
-			lintel-bench; \
+		$(MAKE) bench-docker; \
 	else \
 		echo "make bench: no Docker daemon — running the harness natively"; \
 		echo "(results are tagged native; the CI bench job runs the pinned image)"; \
 		test -x target/release/lintel || cargo build --release -p lintel-cli; \
 		PHP_BIN=php LINTEL_BIN="$$PWD/target/release/lintel" BENCH_MODE=native php bench/run.php; \
 	fi
+
+bench-docker:  ## the pinned reproduction, always Docker (no native fallback; the CI bench job runs exactly this)
+	@if ! docker info >/dev/null 2>&1; then \
+		echo "make bench-docker: no Docker daemon — this target is the pinned php:8.6-cli reproduction"; \
+		echo "(docker build -f bench/Dockerfile -t lintel-bench . && docker run --rm lintel-bench)"; \
+		echo "run \`make bench\` for the native fallback, or install/start Docker"; \
+		exit 1; \
+	fi
+	docker build -f bench/Dockerfile -t lintel-bench . && \
+	docker run --rm \
+		-v "$$PWD/target/release/lintel:/lintel/lintel:ro" \
+		-v "$$PWD/bench/results:/app/bench/results" \
+		lintel-bench
+
+bench-validate:  ## the M2 preflight: pin format, registry digest, entrypoint contract (builds the image when Docker exists)
+	bash scripts/bench-docker-validate.sh
 
 lint-php:  ## php -l over every tracked PHP file (no vendor)
 	@bash scripts/php-gates.sh lint
