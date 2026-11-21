@@ -61,3 +61,30 @@ intentional and testable (`crates/lintel-core/tests/rfc_target.rs`):
 will emit once the RFC stabilizes. Recompiling a file with
 `Options { target: Target::Rfc }` produces RFC-shaped output today, which
 keeps the migration rehearsal (doc §4.9) runnable against real code.
+
+## The runtime side (php/markup)
+
+The compiler emits `\Markup\Element(...)` constructor calls but ships no
+runtime — the "runtime concern outside the compiler's output shape" above
+was the gap, and the `php/markup` Composer package (`markup/markup`)
+closes it:
+
+- `\Markup\Element` / `\Markup\Fragment` / `\Markup\Html` implement the
+  RFC's value model (the table above; a root fragment stays a plain PHP
+  array, which `\Markup\render()` walks like any iterable child).
+- **Escape-by-default is the runtime's contract** (doc §4): `\Markup\render()`
+  escapes every plain string child and scalar attribute value at print
+  time; `\Markup\Html::unsafeRaw()` is the only trusted sink; unknown
+  child types throw. Attributes route by name under the SAME rules the
+  string target's emitted `\Lintel\a()/u()/cls()/sty()/srcset()` calls
+  enforce (the §4.4 URL_ATTRS list, §7.1 srcset candidates, the `on*`
+  and name-shape rejections) — so the two targets' security contracts
+  are byte-identical.
+- **Parity is executable:** the e2e (`php/markup/tests/MarkupE2eTest.php`)
+  compiles ONE fixture with `--target=rfc` and `--target=string` through
+  the real binary and asserts `\Markup\render(...)` produces the same
+  bytes `\Lintel\c(...)` does — hostile payloads print escaped and
+  hostile URL schemes block in both lanes.
+- The package is deliberately standalone (no Lintel dependency): RFC
+  output must run with zero lock-in, the `lintel migrate --to=native`
+  pitch (doc §0.1/§17 Year 3 "RFC convergence").
