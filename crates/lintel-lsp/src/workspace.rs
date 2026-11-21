@@ -342,50 +342,33 @@ impl Server {
     }
 
     /// Whether `name` is declared as a component anywhere in the
-    /// workspace: the open documents (the live buffers are the truth)
-    /// first, then the persistent index's closed files.
+    /// workspace: every workspace file — open buffers and indexed closed
+    /// files alike — through the merged declaration view (the lintel-core
+    /// scanner's facts unioned with the tree-sitter lane's, so a
+    /// declaration only one lane sees declares the component too).
     pub(crate) fn declared_component(&mut self, name: &str) -> bool {
-        if self.documents.values().any(|document| {
-            let parsed = lintel_core::scan::scan(&document.text);
-            parsed.context.declaration_of(name).is_some()
-        }) {
-            return true;
-        }
-        self.index
-            .uris()
-            .iter()
-            .any(|uri| self.declared_in_index(uri, name))
-    }
-
-    /// Whether some workspace file declares `prop` as a parameter of the
-    /// component `component` — open documents first, then the index.
-    pub(crate) fn declared_prop(&mut self, component: &str, prop: &str) -> bool {
-        if self.documents.values().any(|document| {
-            let parsed = lintel_core::scan::scan(&document.text);
-            parsed
-                .context
-                .declaration_of(component)
-                .is_some_and(|declaration| declaration.params.iter().any(|(name, _)| name == prop))
-        }) {
-            return true;
-        }
-        self.index.uris().iter().any(|uri| {
-            self.index.declarations(uri).is_some_and(|declarations| {
-                declarations.iter().any(|declaration| {
-                    declaration.name.to_lowercase() == component.to_lowercase()
-                        && declaration.params.iter().any(|(name, _)| name == prop)
+        self.workspace_uris().iter().any(|uri| {
+            self.workspace_file(uri)
+                .is_some_and(|(_text, declarations)| {
+                    declarations
+                        .iter()
+                        .any(|declaration| declaration.name.to_lowercase() == name.to_lowercase())
                 })
-            })
         })
     }
 
-    /// The index-side declared check for one URI (the open documents were
-    /// already consulted).
-    fn declared_in_index(&self, uri: &str, name: &str) -> bool {
-        self.index.declarations(uri).is_some_and(|declarations| {
-            declarations
-                .iter()
-                .any(|declaration| declaration.name.to_lowercase() == name.to_lowercase())
+    /// Whether some workspace file declares `prop` as a parameter of the
+    /// component `component` — every workspace file through the merged
+    /// declaration view (both lanes' facts).
+    pub(crate) fn declared_prop(&mut self, component: &str, prop: &str) -> bool {
+        self.workspace_uris().iter().any(|uri| {
+            self.workspace_file(uri)
+                .is_some_and(|(_text, declarations)| {
+                    declarations.iter().any(|declaration| {
+                        declaration.name.to_lowercase() == component.to_lowercase()
+                            && declaration.params.iter().any(|(name, _)| name == prop)
+                    })
+                })
         })
     }
 }
