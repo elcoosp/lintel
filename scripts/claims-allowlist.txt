@@ -1,0 +1,6 @@
+# The explicit allowlist for scripts/claims-sweep.sh — exact lines that stay.
+# Each entry names its reason; an empty allowlist means no maturity claim
+# survives outside the honest "future work" notes the sweep deliberately
+# does not scan. One exact line per entry (grep -F matching, verbatim).
+# (empty today: every pre-1.0 / v0.x / experimental claim the sweep scans
+# for is resolved — the open backlog lives in the tracked notes)
