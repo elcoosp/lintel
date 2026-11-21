@@ -8,7 +8,8 @@ description = "Scanner, parser and line-preserving emitter for the Lintel JSX-fo
 repository = "https://github.com/elcoosp/lintel"
 
 [dependencies]
-lintel-diag = { path = "../lintel-diag" }
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintel-diag = { version = "1.0.0", path = "../lintel-diag" }
 
 [dev-dependencies]
 criterion = "0.5"
