@@ -18,6 +18,12 @@ use function Lintel\c;
  * autoload instead — and the returned value prints through the runtime's
  * `c()`, so a Twig-embedded component is not an escape bypass. Component
  * arguments spread as PHP named arguments.
+ *
+ * The §11 service lane composes with the file lane: a
+ * {@see ComponentLocator} (fed the DI container, its `#[AsLintelComponent]`
+ * services registered by {@see ComponentPass}) resolves a component name
+ * to an invokable service FIRST — `__invoke(props…)`, rendered through
+ * the same `c()` — and only untagged names fall back to the sources.
  */
 final class Extension extends AbstractExtension
 {
@@ -25,6 +31,7 @@ final class Extension extends AbstractExtension
     public function __construct(
         private readonly string $cacheDir,
         private readonly array $sourceDirs,
+        private readonly ?ComponentLocator $components = null,
     ) {}
 
     /** @return list<TwigFunction> */
@@ -40,6 +47,14 @@ final class Extension extends AbstractExtension
      * @param array<string, mixed> $args spread as PHP named arguments */
     public function render(string $component, array $args = []): string
     {
+        $service = $this->components?->get($component);
+        if ($service !== null) {
+            if (!\is_callable($service)) {
+                throw new BridgeException("service component \"$component\" does not define __invoke()");
+            }
+
+            return c($service(...$args));
+        }
         if (!\function_exists($component)) {
             $this->load($component);
         }
