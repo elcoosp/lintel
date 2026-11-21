@@ -1593,3 +1593,97 @@ fn the_on_disk_cache_round_trips_and_evicts_across_sessions() {
     );
     remove_workspace(&root);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 10 M3: the monorepo `lsp.include` config (the Phase 9 §f backlog).
+// A monorepo workspace — real sources in packages/{ui,app}/src, vendored
+// component sources in vendor/, a stray root source — configures
+// `lintel.json` `{"lsp": {"include": [patterns]}}` and the walk indexes
+// ONLY the configured patterns: vendor and the stray file stay out even
+// though the default walk (or the `**` in the patterns themselves) would
+// take them. Runs the real `initialize` over the workspace root and reads
+// the indexed set back through `workspace/symbol`.
+// ---------------------------------------------------------------------------
+
+/// The declaration source the closed-file fixtures use.
+fn monorepo_workspace(name: &str, config: &str) -> PathBuf {
+    let root =
+        std::env::temp_dir().join(format!("lintel-lsp-monorepo-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("packages/ui/src")).expect("creates ui package");
+    std::fs::create_dir_all(root.join("packages/app/src/deep")).expect("creates app package");
+    std::fs::create_dir_all(root.join("vendor/acme")).expect("creates the vendor tree");
+    std::fs::write(
+        root.join("packages/ui/src/Badge.lintel.php"),
+        RENAME_DECLARE_SOURCE,
+    )
+    .expect("writes the ui source");
+    std::fs::write(
+        root.join("packages/app/src/deep/Page.lintel.php"),
+        RENAME_DECLARE_SOURCE,
+    )
+    .expect("writes the app source");
+    std::fs::write(
+        root.join("vendor/acme/Vendored.lintel.php"),
+        RENAME_DECLARE_SOURCE,
+    )
+    .expect("writes the vendored source");
+    std::fs::write(root.join("Stray.lintel.php"), RENAME_DECLARE_SOURCE)
+        .expect("writes the stray source");
+    if !config.is_empty() {
+        std::fs::write(root.join("lintel.json"), config).expect("writes the config");
+    }
+    root
+}
+
+/// The indexed component names the server reports for `query` after an
+/// initialize over `root`.
+fn indexed_symbols(root: &std::path::Path, id: i32, query: &str) -> Vec<String> {
+    let session_text = session(&[
+        initialize_with_root(1, root),
+        symbol_request(id, query),
+        EXIT.to_string(),
+    ]);
+    response_of(&session_text, id)["result"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .filter_map(|symbol| symbol["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn the_monorepo_include_list_indexes_only_the_configured_patterns() {
+    let root = monorepo_workspace(
+        "include",
+        r#"{"lsp": {"include": ["packages/*/src/**/*.lintel.php"]}}"#,
+    );
+    let names = indexed_symbols(&root, 2, "");
+    assert_eq!(
+        names.len(),
+        2,
+        "only the configured patterns walk in: {names:?}"
+    );
+    // Every listed component comes from a packages/ source; the vendored
+    // tree and the stray root file stay out.
+    assert!(
+        names.iter().all(|name| name == "Salute"),
+        "the two package sources declare Salute: {names:?}"
+    );
+    remove_workspace(&root);
+}
+
+#[test]
+fn a_monorepo_without_the_include_config_keeps_the_default_walk() {
+    // The control: no config (and no vendored-skip ambiguity) — the
+    // default walk indexes the packages AND the stray root source, and
+    // still skips vendor/.
+    let root = monorepo_workspace("default", "");
+    let names = indexed_symbols(&root, 2, "");
+    assert_eq!(
+        names.len(),
+        3,
+        "the default walk takes every non-vendored source: {names:?}"
+    );
+    remove_workspace(&root);
+}
