@@ -1277,7 +1277,13 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 > (task-cards T-11, T-14 and T-15: the `php/lintel` composer package —
 > installer plugin + no-watcher dev loader — the §9.2 `bench/` harness with
 > committed JSON/Markdown/SVG results, the §18 Makefile, cargo-deny (T-01),
-> and the five T-15 demos behind `lintel init --demo N`).
+> and the five T-15 demos behind `lintel init --demo N`), and again after
+> the seventeenth pass (the §10 streaming & suspense runtime — `Lintel\stream`,
+> the `<Suspense>` boundary with out-of-order flushing and the in-place
+> swap script, the §7.2 streaming threat cases, the `Lintel\FlushTransport`
+> seam with the CLI and FPM lanes exercised over `php -S`, and the
+> zero-warning repair of the pedantic-clippy gate the prior pass had left
+> regressed in the newest CLI code).
 > This section reconciles the plan above with what the repository actually
 > contains, so readers do not treat §5–§6 as an inventory of shipped code.
 
@@ -1295,7 +1301,8 @@ Write an ADR in docs/adr/ describing options + trade-offs; choose the simplest t
 | `SourceMap` offset→position seam | **done** | `lintel_diag::SourceMap` (re-exported at the `lintel-core` root): byte offsets → 1-based line / char-based column / line text with clamp-and-floor semantics, byte-identical to what `Diagnostic::render` has always computed (which now delegates to it). The converter CLI/LSP consumers previously had to re-implement. Tested by `tests/sourcemap.rs` + inline `lintel-diag` tests, demoed by `examples/sourcemap.rs` |
 | `// lintel-ignore-next` + `// lintel-ignore-file` (doc §17 mitigation) | **done (compiler subset)** | the scanner records one-line suppression windows into `ScanContext` (`scan::Suppression`, `add_suppression`/`suppressed_at`/`suppressions()`), and the file-level `lintel-ignore-file` directive latches `ScanContext::suppress_file`/`file_suppressed` so `validate` drops every validation diagnostic and short-circuits the rule walk; parse diagnostics (`LNT01xx`) are never suppressible. The exact contracts are recorded in `docs/ignore-directives.md` and tested by `tests/suppressions.rs` |
 | `--target=rfc` (doc 5.3, §4.9) | **done** | `Target::Rfc` + the public `Lowering` trait in `crates/lintel-core/src/emit.rs`; the exact lowering contract is recorded in `docs/rfc-alignment.md` and tested by `tests/rfc_target.rs` — the `Lowering` seam itself (consumer-injected strategies through `scan_with`) is demoed by `examples/custom_lowering.rs` |
-| `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol and runtime adapters are future work |
+| `--target=stream` (doc 5.3, §10) | **done (compiler subset)** | `Target::Stream` + `StreamLowering` in `crates/lintel-core/src/emit.rs`; the exact generator-closure contract is recorded in `docs/stream-alignment.md` and tested by `tests/stream_target.rs`. §10's Suspense protocol ships on the runtime side (the row below); the compiler itself still emits plain generators with no boundary scaffolding |
+| §10 streaming & suspense runtime (Q2 v0.3, seventeenth pass) | **done (runtime + CLI/FPM transports; live-server adapters CI-lane)** | `php/runtime/src/functions.php` — `Suspense` (the boundary value), `SuspenseFlusher` (`@internal`, the §10 flush loop: placeholder `<div id="lt-N">` flushed immediately, the work in a fiber pumped round-robin, the resolved content inside `<template id="lt-N-r">…</template><script>lintelSwap("lt-N")</script>` **out of order**, the one-time 184-byte swap runtime, resolved generators walking as markup streams, every other resolved value through `c()`), `stream($tree, ?callable $flush)` as the entry, `FlushTransport` + `CliFlushTransport` + `FpmFlushTransport` + `stream_via`, and the sync-compat branches in `c()` (a boundary consumed outside the flush loop runs inline). The exact contract is recorded in `docs/stream-alignment.md` ("The §10 flush runtime"); tests: `php/runtime/tests/StreamingSuspenseTest.php` (flush-order e2e, out-of-order resolution, once-only swap script, nested boundaries, sync compat), four streaming threat cases in `php/runtime/tests/ThreatCorpusTest.php` (late-flushed chunk, fallback, resolved subtree, generator-child trust boundary — the corpus is now 31 tests / 116+ assertions with the transport suite), `php/runtime/tests/StreamingTransportTest.php` (the seam lifecycle, the CLI lane, the FPM lane over a real `php -S` HTTP server: `X-Accel-Buffering: no` header, placeholder-before-template, escaped late payload), and the runnable demo `scripts/suspense-demo.php`. Live RoadRunner/Swoole/OpenSwoole/FrankenPHP adapters stay §17.1-CI work (no such server in the sandbox) |
 | §17.1 Q1 component signature scanning | **done (v0.2 subset)** | `scan::Signature` + `ScanContext::declare_signature/signature_of` in `crates/lintel-core/src/scan.rs`, consulted by `validate.rs`: `LNT0203` unknown prop, `LNT0204` unexpected children and `LNT0205` missing required parameter (a parameter declared without a default; spreads satisfy it, JSX children satisfy a `children` parameter) for components declared in the same file (PHP named arguments are case-sensitive); the signature table keys keep the author's spelling since the ninth pass (`declared_signatures`), and the typed-parameter half feeds the §7.3 elision below — *drift fix 2026-11-19: this row previously said "typed-parameter escape elision remains open", which the eighth pass and the §7.3 row had already retired* |
 | §4.4/§7.1 `srcset` per-URL attribute routing | **done (compiler subset)** | `emit.rs::push_attr` routes dynamic `srcset={expr}` attributes through the dedicated `\Lintel\srcset()` helper on the string and stream targets (the runtime helper splits candidates and scheme-checks each URL); static values fold verbatim, the `rfc` target stays helper-free, component attributes stay named arguments. The exact contract is recorded in `docs/srcset-alignment.md` and tested by `tests/srcset.rs`; the `srcset()` runtime helper itself ships with the PHP runtime (T-07) |
 | §7.3 escape elision (v0.1 "honest version" + the Y2 analyze pass) | **done (compiler subset + §17.1-Y2)** | `emit.rs::dyn_child` folds dynamic children that are provably safe — `(int)`/`(integer)`/`(float)`/`(double)` casts spanning the whole expression and `count()` calls fold to the raw PHP expression, and children that are exactly a parameter the enclosing function declares as a non-nullable `string` fold to a direct `\htmlspecialchars($name, \ENT_QUOTES \| \ENT_SUBSTITUTE \| \ENT_HTML5)` call — on both markup targets; everything else keeps `\Lintel\c()`, conservative by design. The scanner records parameter types (`scan::Signature::typed_strings`) and tracks a `scan::FunctionScope` per declared-function/braced-closure body, unproving names the body can rebind (assignment-shaped tokens, `global`/`static`/`unset`/`list`/`as`, destructuring) and clearing scopes under dynamic binding (`extract`, `$$name`, `include`/`require`, `eval`) and braceless `fn(...)=>` arrow bodies; the scope rides to the lowering through the `Lowering::emit_root_scoped` seam (default: ignore the scope). The exact contract is recorded in `docs/escape-elision.md` and tested by `tests/elision.rs`, `tests/typed_elision.rs` + the `emit` matcher unit tests. The PHPStan-backed Y2 pass (sixteenth pass): `crates/lintel-core/src/analyze.rs` + `emit.rs::AnalyzeLowering` + `compile_analyzed`/`scan_with_typed` consume the PHPStan bridge's proven child types (`php/lintel-phpstan/src/LintelTypesCollector.php` + `bin/analyze` → `<source>.lintel-types.json`); `lintel analyze` folds `int|float|numeric-string|literal` children strictly past the v0.1 ladder (`bool` deliberately keeps the helper: `c()` renders bools as `''`, raw interpolation renders `'1'` — no fold preserves the output), reports the elision counters (`children`/`considered`/`elided`/rate — the acceptance's elision-rate report, drift-checked by the `analyze` bench group), and `lintel check --types` renders stale report entries as advisories (`stale_hints`). Goldens + threat-corpus execution: `tests/analyze.rs`, `tests/stale_hints.rs`, `php/lintel-phpstan/tests/AnalyzeElisionTest.php`; the contract is `docs/type-elision.md` |
@@ -1583,6 +1590,28 @@ by a failing gate rather than preference:
 - **`make golden` runs the committed golden + line-preservation tests
   instead of `cargo insta review`** — no cargo-insta dependency exists in
   the tree; the goldens are plain integration tests (§21.1).
+- **The seventeenth pass inherited a red pedantic-clippy gate** (four
+  warnings left in the sixteenth pass's newest CLI code) and repaired it
+  by correcting the code, no `#[allow]` anywhere: `lintel-cli`'s
+  `types_flag` helper had been left unused (dead-code) by the `--types`
+  arms' inline duplicates — the arms now call it and the duplicated
+  contract text is gone; the helper's insertion also mangled the doc
+  comments (`parse_args`' intro sat on `types_flag`) — restored; the
+  duplicated `--to` value handling collapsed into the shared `migrate_to`
+  helper, putting `parse_args` back under the `too_many_lines` budget; and
+  `tests/stale_hints.rs` carried a bare `assert!(stale.is_empty())`
+  (`clippy::assert_is_empty`) and a needless borrow. Clippy
+  `--workspace --all-targets --all-features -- -D warnings -W
+  clippy::pedantic` is zero-warning again.
+- **The `analyze_children` bench drift-check could never fire** (same
+  pass): its hint scanner grepped source lines for `page {{$page}} of` —
+  the double-brace spelling as it appears in Rust source — while the
+  source builder's `writeln!` format escaping had long since emitted the
+  literal `page {$page} of` (single braces), so the scan found zero hints
+  and the bench panicked on `assert_eq!(hints.len(), 20)` before measuring
+  anything (`cargo test --benches` red: left 0, right 20). The scanner now
+  matches the emitted bytes; the analyze bench drift-checks 40 dynamic
+  children / 20 elided / rate 0.5 as its doc comment promises.
 
 Two doc-open decisions resolved here: the installer never invents a live
 release URL (no releases exist before T-18; `LINTEL_BIN` and
