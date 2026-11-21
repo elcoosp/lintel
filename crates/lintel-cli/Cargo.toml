@@ -8,7 +8,8 @@ description = "The `lintel` command-line interface: build and check `.lintel.php
 repository = "https://github.com/elcoosp/lintel"
 
 [dependencies]
-lintel-core = { path = "../lintel-core" }
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintel-core = { version = "1.0.0", path = "../lintel-core" }
 # The T-31 manifest reads/updates the project's `lintel.json` as real JSON
 # (preserving the user's keys) — hand-rolled splicing would corrupt it.
 serde_json = "1"
@@ -30,7 +31,8 @@ path = "src/main.rs"
 workspace = true
 
 [dev-dependencies]
-lintel-core = { path = "../lintel-core" }
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintel-core = { version = "1.0.0", path = "../lintel-core" }
 serde_json = "1"
 
 criterion = "0.5"
