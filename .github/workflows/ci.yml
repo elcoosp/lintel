@@ -106,8 +106,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the lintel binary
         run: cargo build --release -p lintel-cli
-      - name: T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin)
-        run: make bench
+      - name: T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin; no native fallback in CI)
+        run: make bench-docker
       - name: Commit-nothing guard — results land as job artifacts, not tree edits
         uses: actions/upload-artifact@v4
         with:
@@ -158,6 +158,35 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm test
+
+  adapters-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          # ext-swoole prebuilt for 8.4 — the live Swoole lane runs here and
+          # ONLY here (the main php job's probe asserts the ext is absent,
+          # so loading it there would break that lane).
+          php-version: '8.4'
+          coverage: none
+          extensions: swoole
+          tools: composer
+      - name: composer install (the runtime package the lanes drive)
+        run: composer install --working-dir=php/runtime --no-interaction --no-progress
+      - name: Assert the live lanes can run (the gates must be satisfiable, never silently skipped)
+        run: |
+          php -r "if (!extension_loaded('swoole')) { fwrite(STDERR, 'ext-swoole missing on the runner'); exit(1); } echo 'ext-swoole loaded: ', phpversion('swoole'), PHP_EOL;"
+      - name: Download the real FrankenPHP binary (the Caddy-based runtime, static build)
+        run: |
+          curl -fsSL --retry 2 -o /tmp/frankenphp             https://github.com/php/frankenphp/releases/download/v1.14.0/frankenphp-linux-x86_64
+          chmod +x /tmp/frankenphp
+          /tmp/frankenphp version
+          echo "/tmp" >> "$GITHUB_PATH"
+      - name: The live adapter lanes (Swoole ext server + real FrankenPHP binary + the php -S FPM lane)
+        run: php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml --filter AdapterTransportTest
+        env:
+          LINTEL_E2E_FRANKENPHP: '1'
 
   launch-assets:
     runs-on: ubuntu-latest
