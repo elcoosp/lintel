@@ -749,7 +749,13 @@ impl<'s> Scanner<'s> {
     /// anonymous `function (` / `fn (` has its parameters parsed into a
     /// body scope too — a closure's parameters still shadow the enclosing
     /// scope, but the closure registers no name, so nothing lands in the
-    /// context's signature table.
+    /// context's signature table. The stream target rewrites a braced
+    /// closure's declared `Html` return type exactly like a named
+    /// declaration's (the M2 backlog): the braced body returns the
+    /// generator closure the lowering emits; a body-less arrow function
+    /// (`fn(): Html => …`) copies verbatim — [`Scanner::copy_return_type`]
+    /// rewrites only when a `{` body follows, the same rule the named
+    /// body-less declarations follow.
     fn open_paren(&mut self, out: &mut String) {
         let pending = std::mem::take(&mut self.pending_function);
         match pending {
@@ -763,6 +769,7 @@ impl<'s> Scanner<'s> {
                     close_depth: 0,
                     rebind_armed: false,
                 });
+                self.copy_return_type(out);
             }
             FunctionPending::None => {}
         }
@@ -963,19 +970,21 @@ impl<'s> Scanner<'s> {
         self.copy_return_type(out);
     }
 
-    /// Copy the declared function's closing `)` and — when the lowering
-    /// rewrites return types ([`Lowering::rewrites_return_types`], the
-    /// stream target) — its `Html`-typed return declaration, rewritten to
-    /// `\Generator`: the stream body returns the generator closure the
-    /// lowering emits, and the author's `Html` return type `TypeError`s
-    /// against it under `strict_types` the moment a real PHP consumer
-    /// invokes the artifact (the Phase 9 parity bug the
-    /// `renderStreaming()` acceptance proved). Nullable and qualified
-    /// spellings (`?Html`, `\Lintel\Html`) rewrite to the non-null
-    /// `\Generator` too (the generator is never null); any other type, a
-    /// union (`Html|string` — the span stops at `|`), or a body-less
-    /// declaration (`abstract`/interface `;` — the contract must stay)
-    /// copies verbatim. The rewrite is same-line: line preservation holds.
+    /// Copy the declared function's or anonymous closure's closing `)`
+    /// and — when the lowering rewrites return types
+    /// ([`Lowering::rewrites_return_types`], the stream target) — its
+    /// `Html`-typed return declaration, rewritten to `\Generator`: the
+    /// stream body returns the generator closure the lowering emits, and
+    /// the author's `Html` return type `TypeError`s against it under
+    /// `strict_types` the moment a real PHP consumer invokes the artifact
+    /// (the Phase 9 parity bug the `renderStreaming()` acceptance proved;
+    /// braced anonymous closures joined with the M2 backlog pass).
+    /// Nullable and qualified spellings (`?Html`, `\Lintel\Html`) rewrite
+    /// to the non-null `\Generator` too (the generator is never null); any
+    /// other type, a union (`Html|string` — the span stops at `|`), or a
+    /// body-less declaration (`abstract`/interface `;`, an arrow
+    /// `fn(): Html => …`) copies verbatim. The rewrite is same-line: line
+    /// preservation holds.
     fn copy_return_type(&mut self, out: &mut String) {
         // The closing parenthesis is already copied (and `self.pos` stepped
         // past it) by [`Scanner::copy_param_list`]'s tail — this capture
