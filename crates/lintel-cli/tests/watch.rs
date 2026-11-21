@@ -103,7 +103,7 @@ fn probe(socket: &Path) -> Result<String, String> {
 
 /// Ask the daemon to stop and wait for its thread.
 fn quit_daemon(socket: &Path, handle: std::thread::JoinHandle<()>) {
-    let _ = lintel_cli::watch::request(socket, Path::new("quit"));
+    let _ = lintel_cli::watch::quit(socket);
     handle.join().expect("the daemon thread ends cleanly");
 }
 
@@ -242,4 +242,197 @@ fn percentile(samples: &[u128], pct: usize) -> u128 {
     sorted.sort_unstable();
     let index = ((pct * sorted.len()) / 100).min(sorted.len() - 1);
     sorted[index]
+}
+
+/// The daemon's cumulative counters from `.lintel-cache/stats.json` (the
+/// same observable the cache tests and the cold/warm bench read).
+fn daemon_stats(workspace: &Path) -> (usize, usize) {
+    let body = fs::read_to_string(workspace.join(".lintel-cache/stats.json"))
+        .expect("the daemon recorded its counters");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("stats.json is valid JSON");
+    let compiled = usize::try_from(value["compiled"].as_u64().unwrap_or(0)).expect("compiled");
+    let hits = usize::try_from(value["cache_hits"].as_u64().unwrap_or(0)).expect("cache_hits");
+    (compiled, hits)
+}
+
+#[test]
+fn watch_rebuilds_go_through_the_lintel_build_cache() {
+    // The M1 acceptance: the daemon's watch loop serves through the same
+    // content-addressed engine `lintel build` uses — a recompile of
+    // unchanged content never happens, and the counters land in
+    // `.lintel-cache/stats.json` (`compiled` counts compiles, `cache_hits`
+    // counts content-hash hits).
+    let dir = scratch("build-cache");
+    let file = dir.join("Panel.lintel.php");
+    let v1 = source("v1");
+    fs::write(&file, &v1).expect("writes the source");
+    let socket = dir.join("d.sock");
+    let handle = start_daemon(&socket, &dir);
+
+    // Cold: the daemon compiles and stores the artifact.
+    let first = lintel_cli::watch::request(&socket, &file).expect("the daemon compiles");
+    assert!(first.contains("v1"), "{first}");
+    let (compiled, hits) = daemon_stats(&dir);
+    assert_eq!((compiled, hits), (1, 0), "the cold compile is one compile");
+    let has_artifact = fs::read_dir(dir.join(".lintel-cache"))
+        .expect("the cache dir exists")
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "php"));
+    assert!(
+        has_artifact,
+        "the compile landed as a content-addressed artifact"
+    );
+
+    // A real edit recompiles (new content, new key).
+    fs::write(&file, source("v2")).expect("writes v2");
+    std::thread::sleep(Duration::from_millis(50));
+    let second = lintel_cli::watch::request(&socket, &file).expect("recompiles");
+    assert!(second.contains("v2"), "{second}");
+    let (compiled, hits) = daemon_stats(&dir);
+    assert_eq!((compiled, hits), (2, 0), "the edit is a second compile");
+
+    // Reverting to the first content: the mtime+size in-memory key
+    // misses (the file was rewritten), but the content hash matches the
+    // cold artifact — the daemon serves the stored PHP WITHOUT
+    // recompiling (stats.json shows the hit, not a third compile), and
+    // the bytes are IDENTICAL to the first compile (same content, same
+    // key, same artifact).
+    fs::write(&file, &v1).expect("reverts to v1");
+    std::thread::sleep(Duration::from_millis(50));
+    let reverted = lintel_cli::watch::request(&socket, &file).expect("serves the revert");
+    assert_eq!(
+        reverted, first,
+        "the revert serves the cached artifact byte for byte, not a fresh compile"
+    );
+    let (compiled, hits) = daemon_stats(&dir);
+    assert_eq!(
+        (compiled, hits),
+        (2, 1),
+        "the revert is a cache hit, not a third compile"
+    );
+
+    quit_daemon(&socket, handle);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn watch_serves_concurrent_clients_and_builds_without_corrupting_the_cache() {
+    // The M1 acceptance's concurrency half: parallel socket clients get
+    // correct answers, and a `lintel build` running against the same
+    // workspace while the daemon serves does not corrupt the shared
+    // mutable cache files (`stats.json` — flocked on both sides; the
+    // content-addressed artifacts are identical bytes per key by the
+    // compiler's purity contract).
+    const CLIENTS: usize = 8;
+    const ROUNDS: usize = 12;
+
+    let dir = scratch("concurrent");
+    let file = dir.join("Panel.lintel.php");
+    fs::write(&file, source("conc")).expect("writes the source");
+    let socket = dir.join("d.sock");
+    let handle = start_daemon(&socket, &dir);
+
+    let start = std::sync::Arc::new(std::sync::Barrier::new(CLIENTS + 2));
+    let mut workers = Vec::new();
+    for client in 0..CLIENTS {
+        let start = std::sync::Arc::clone(&start);
+        let socket = socket.clone();
+        let file = file.clone();
+        workers.push(std::thread::spawn(move || {
+            start.wait();
+            for round in 0..ROUNDS {
+                let php = lintel_cli::watch::request(&socket, &file)
+                    .unwrap_or_else(|e| panic!("client {client} round {round}: {e}"));
+                assert!(
+                    php.contains("new \\Lintel\\Html(") && php.contains("conc"),
+                    "client {client} round {round} got a correct artifact: {php}"
+                );
+            }
+        }));
+    }
+
+    // Two `lintel build` processes over the SAME workspace while the
+    // daemon serves: both record counters into the same stats.json.
+    let bin = env!("CARGO_BIN_EXE_lintel");
+    for build in 0..2 {
+        let start = std::sync::Arc::clone(&start);
+        let file = file.clone();
+        workers.push(std::thread::spawn(move || {
+            start.wait();
+            let output = Command::new(bin)
+                .args(["build", file.to_str().expect("utf8 path")])
+                .output()
+                .expect("spawns the build");
+            assert!(output.status.success(), "build {build} compiles cleanly");
+        }));
+    }
+
+    for worker in workers {
+        worker.join().expect("every worker finishes cleanly");
+    }
+
+    // The shared observable survived the concurrent writers: stats.json
+    // is exactly one valid JSON object (not a truncated mix).
+    let body = fs::read_to_string(dir.join(".lintel-cache/stats.json"))
+        .expect("stats.json exists after the run");
+    let value: serde_json::Value =
+        serde_json::from_str(&body).expect("stats.json is one uncorrupted JSON object");
+    assert!(
+        value["compiled"].as_u64().is_some() && value["cache_hits"].as_u64().is_some(),
+        "the counters are intact: {body}"
+    );
+
+    quit_daemon(&socket, handle);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn watch_frames_are_length_prefixed_json_on_the_wire() {
+    // The protocol contract a non-Rust client (the PHP loader) rides:
+    // ten ASCII decimal digits, a newline, then that many bytes of UTF-8
+    // JSON — read raw off a Unix socket, no client code in between.
+    use std::io::{BufRead, BufReader, Read as _, Write as _};
+    use std::os::unix::net::UnixStream;
+
+    let dir = scratch("framing");
+    let file = dir.join("Panel.lintel.php");
+    fs::write(&file, source("wire")).expect("writes the source");
+    let socket = dir.join("d.sock");
+    let handle = start_daemon(&socket, &dir);
+
+    let mut stream = UnixStream::connect(&socket).expect("connects");
+    let request = format!("{{\"path\":\"{}\"}}", file.display());
+    stream
+        .write_all(format!("{:010}\n{request}", request.len()).as_bytes())
+        .and_then(|()| stream.flush())
+        .expect("sends the framed request");
+
+    let mut reader = BufReader::new(stream);
+    let mut prefix = String::new();
+    reader
+        .read_line(&mut prefix)
+        .expect("reads the frame prefix");
+    let prefix = prefix.trim_end();
+    assert_eq!(
+        prefix.len(),
+        10,
+        "the prefix is exactly ten digits: {prefix:?}"
+    );
+    let len: usize = prefix.parse().expect("the prefix is decimal");
+    let mut payload = vec![0_u8; len];
+    reader.read_exact(&mut payload).expect("reads the payload");
+    let payload = String::from_utf8(payload).expect("the payload is UTF-8");
+    let value: serde_json::Value =
+        serde_json::from_str(&payload).expect("the payload is one JSON object");
+    assert_eq!(value["ok"], true, "the compile succeeded: {payload}");
+    assert!(
+        value["php"]
+            .as_str()
+            .is_some_and(|php| php.contains("wire")),
+        "the compiled PHP rides the `php` field: {payload}"
+    );
+
+    quit_daemon(&socket, handle);
+    let _ = fs::remove_dir_all(&dir);
 }
