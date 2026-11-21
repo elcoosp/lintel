@@ -16,7 +16,8 @@
     },
     "require-dev": {
         "phpstan/phpstan": "^2.1",
-        "phpunit/phpunit": "^11.5"
+        "phpunit/phpunit": "^11.5",
+        "spiral/roadrunner-http": "^4.2"
     },
     "scripts": {
         "test": "phpunit --configuration phpunit.xml",
