@@ -45,6 +45,9 @@ jobs:
           composer install --working-dir=php/runtime --no-interaction --no-progress
           composer install --working-dir=php/lintel --no-interaction --no-progress
           composer install --working-dir=php/lintel-phpstan --no-interaction --no-progress
+          composer install --working-dir=php/markup --no-interaction --no-progress
+          composer install --working-dir=php/blade --no-interaction --no-progress
+          composer install --working-dir=php/twig --no-interaction --no-progress
           composer install --working-dir=bench --no-interaction --no-progress
       - name: Build the lintel binary for the PHP gates
         run: cargo build --release -p lintel-cli
@@ -53,6 +56,9 @@ jobs:
           composer validate --working-dir=php/runtime --no-check-all
           composer validate --working-dir=php/lintel --no-check-all
           composer validate --working-dir=php/lintel-phpstan --no-check-all
+          composer validate --working-dir=php/markup --no-check-all
+          composer validate --working-dir=php/blade --no-check-all
+          composer validate --working-dir=php/twig --no-check-all
           composer validate --working-dir=bench --no-check-all
       - name: php -l (every tracked PHP file)
         run: bash scripts/php-gates.sh lint
@@ -64,6 +70,15 @@ jobs:
         run: bash scripts/php-gates.sh test
         env:
           LINTEL_TEST_BIN: ${{ github.workspace }}/target/release/lintel
+      - name: "§10 server adapters — the RoadRunner live lane + the Swoole/FrankenPHP/ReactPHP structural lanes (the deferred adapters gap closes)"
+        run: |
+          curl -fsSL --retry 2 -o /tmp/rr.tar.gz \
+            https://github.com/roadrunner-server/roadrunner/releases/download/v2025.1.15/roadrunner-2025.1.15-linux-amd64.tar.gz
+          mkdir -p /tmp/rr-bin && tar -xzf /tmp/rr.tar.gz --strip-components=1 -C /tmp/rr-bin
+          echo "/tmp/rr-bin" >> "$GITHUB_PATH"
+          php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
+        env:
+          LINTEL_E2E_RR: '1'
       - name: PHPStan (level max)
         run: bash scripts/php-gates.sh stan
 
