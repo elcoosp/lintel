@@ -27,6 +27,27 @@ final class Loader
     /** Reserved for the gated T-12 daemon; unused until it lands. */
     private static ?string $sock = null;
 
+    /** Process-global §11 metric counters — `LoaderMetrics` snapshots them. */
+    private static int $metricFiles = 0;
+    private static int $metricHits = 0;
+    private static int $metricMisses = 0;
+    private static float $metricCompileMs = 0.0;
+
+    /** The counters so far (the §11 profiler panels' data source). */
+    public static function metrics(): LoaderMetrics
+    {
+        return new LoaderMetrics(self::$metricFiles, self::$metricHits, self::$metricMisses, self::$metricCompileMs);
+    }
+
+    /** Zero the counters, bracketing a render window the panels measure. */
+    public static function resetMetrics(): void
+    {
+        self::$metricFiles = 0;
+        self::$metricHits = 0;
+        self::$metricMisses = 0;
+        self::$metricCompileMs = 0.0;
+    }
+
     /** The socket the loader was booted against, for daemon-aware consumers. */
     public static function socket(): ?string
     {
@@ -94,13 +115,19 @@ final class Loader
             throw new \RuntimeException("cannot stat {$file}");
         }
         $key = $cacheDir . '/' . \hash('xxh3', $file) . '-' . $mtime . '-' . $size . '.php';
+        ++self::$metricFiles;
         if (!\is_file($key)) {
+            ++self::$metricMisses;
             if (!\is_dir($cacheDir)) {
                 @\mkdir($cacheDir, 0777, true);
             }
+            $started = \hrtime(true);
             $php = self::compile($file);
+            self::$metricCompileMs += (\hrtime(true) - $started) / 1e6;
             \file_put_contents($key . '.tmp', $php);
             \rename($key . '.tmp', $key);
+        } else {
+            ++self::$metricHits;
         }
 
         return require $key;
@@ -208,7 +235,13 @@ final class Loader
         return \rtrim($line, "\r\n");
     }
 
-    private static function binary(): string
+    /**
+     * The compile binary, in the same order every consumer of the loader
+     * uses (the §11 artisan/console commands wrap the same binary): the
+     * LINTEL_BIN override, the Composer cache at `<vendor>/bin/lintel`
+     * (§12), or the PATH.
+     */
+    public static function binary(): string
     {
         $override = \getenv('LINTEL_BIN');
         if (\is_string($override) && $override !== '') {
