@@ -1312,3 +1312,284 @@ fn workspace_symbols_fuzzy_search_declared_components() {
     let symbols = response_32["result"].as_array().expect("symbols");
     assert!(symbols.is_empty(), "no hit: {symbols:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9 M1: the persistent workspace index (§17.1 Q3) — the declaration
+// file is CLOSED (on disk, never didOpen'd); only the invocation file is
+// open. Every scenario runs the real `initialize` walk over a temp
+// workspace root, so the index, its on-disk cache and its invalidation are
+// under test end to end.
+// ---------------------------------------------------------------------------
+
+use std::path::PathBuf;
+
+/// A temp workspace holding ONE closed declaration file (the Phase 8
+/// rename fixture's declaring document, written to disk and never
+/// opened). Returns `(root, declaration uri, invocation uri)`.
+fn disk_workspace(name: &str) -> (PathBuf, String, String) {
+    let root = std::env::temp_dir().join(format!("lintel-lsp-ws-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("creates the workspace");
+    let declare = root.join("Salute.lintel.php");
+    std::fs::write(&declare, RENAME_DECLARE_SOURCE).expect("writes the closed declaration file");
+    let uri =
+        |path: &std::path::Path| format!("file://{}", path.to_str().expect("utf8 workspace path"));
+    (
+        root.clone(),
+        uri(&declare),
+        uri(&root.join("Page.lintel.php")),
+    )
+}
+
+/// The `initialize` request naming `root` via `workspaceFolders`.
+fn initialize_with_root(id: i32, root: &std::path::Path) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "initialize",
+        "params": {
+            "capabilities": {},
+            "workspaceFolders": [
+                {"uri": format!("file://{}", root.to_str().expect("utf8 path")), "name": "ws"},
+            ],
+        },
+    }))
+}
+
+/// The full-sync `didChange` message for `text` at `uri`.
+fn change_message(uri: &str, text: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "method": "textDocument/didChange",
+        "params": {"textDocument": {"uri": uri}, "contentChanges": [{"text": text}]},
+    }))
+}
+
+/// The `didSave` message carrying `text` at `uri`.
+fn save_message(uri: &str, text: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "method": "textDocument/didSave",
+        "params": {"textDocument": {"uri": uri}, "text": text},
+    }))
+}
+
+/// Clean a disk workspace up (best-effort — a leaked temp dir must never
+/// fail a test).
+fn remove_workspace(root: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn definition_resolves_into_a_closed_file_through_the_index() {
+    let (root, declare_uri, invoke_uri) = disk_workspace("definition");
+    let (line, character) = position_of(RENAME_INVOKE_SOURCE, "<Salute");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        open_message(&invoke_uri, RENAME_INVOKE_SOURCE),
+        request(
+            2,
+            "textDocument/definition",
+            &invoke_uri,
+            line,
+            character + 1,
+        ),
+        EXIT.to_string(),
+    ]);
+    let response = response_of(&session_text, 2);
+    assert_eq!(
+        response["result"]["uri"], declare_uri,
+        "the declaration lives in the closed file: {response}"
+    );
+    let expected = position_of(RENAME_DECLARE_SOURCE, "Salute");
+    assert_eq!(
+        [
+            response["result"]["range"]["start"]["line"].clone(),
+            response["result"]["range"]["start"]["character"].clone(),
+        ],
+        [serde_json::json!(expected.0), serde_json::json!(expected.1)],
+        "the declaration's line+col resolve in the closed file: {response}"
+    );
+    remove_workspace(&root);
+}
+
+#[test]
+fn initialize_advertises_the_definition_provider() {
+    // The card's capability bullet: `definitionProvider` is advertised
+    // (the index makes it true cross-file, not only same-file).
+    let session_text = session(&[message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+    }))]);
+    let init = &bodies(&session_text)[0];
+    assert_eq!(init["result"]["capabilities"]["definitionProvider"], true);
+}
+
+#[test]
+fn rename_of_a_closed_declaration_edits_the_disk_file() {
+    let (root, declare_uri, invoke_uri) = disk_workspace("rename");
+    let (line, character) = position_of(RENAME_INVOKE_SOURCE, "<Salute");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        open_message(&invoke_uri, RENAME_INVOKE_SOURCE),
+        rename_request(2, &invoke_uri, line, character + 1, "Cheer"),
+        EXIT.to_string(),
+    ]);
+    // The closed file's edits (declaration + open + close tags) ride the
+    // WorkspaceEdit, computed against the disk bytes the index validated.
+    let declared = apply_edits(&session_text, 2, &declare_uri, RENAME_DECLARE_SOURCE);
+    assert!(
+        declared.contains("function Cheer(")
+            && declared.contains("<Cheer name=\"a\" age={1}>inner</Cheer>"),
+        "the closed declaration file renames: {declared}"
+    );
+    let invoked = apply_edits(&session_text, 2, &invoke_uri, RENAME_INVOKE_SOURCE);
+    assert!(
+        invoked.contains("<Cheer name=\"LSP\" age={2} />"),
+        "the open invocation renames: {invoked}"
+    );
+    remove_workspace(&root);
+}
+
+#[test]
+fn references_reach_usages_in_closed_files() {
+    let (root, declare_uri, invoke_uri) = disk_workspace("references");
+    let (line, character) = position_of(RENAME_INVOKE_SOURCE, "<Salute");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        open_message(&invoke_uri, RENAME_INVOKE_SOURCE),
+        references_request(2, &invoke_uri, line, character + 1, true),
+        EXIT.to_string(),
+    ]);
+    let response = response_of(&session_text, 2);
+    let locations = response["result"].as_array().expect("locations");
+    let uris: Vec<&str> = locations
+        .iter()
+        .filter_map(|location| location["uri"].as_str())
+        .collect();
+    assert_eq!(
+        uris.iter().filter(|uri| **uri == declare_uri).count(),
+        3,
+        "declaration + open tag + close tag in the closed file: {uris:?}"
+    );
+    assert_eq!(
+        uris.iter().filter(|uri| **uri == invoke_uri).count(),
+        1,
+        "the open file's invocation: {uris:?}"
+    );
+    remove_workspace(&root);
+}
+
+#[test]
+fn workspace_symbols_list_closed_file_declarations() {
+    let (root, declare_uri, _invoke_uri) = disk_workspace("symbols");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        symbol_request(2, "sal"),
+        EXIT.to_string(),
+    ]);
+    let response = response_of(&session_text, 2);
+    let symbols = response["result"].as_array().expect("symbols");
+    assert_eq!(symbols.len(), 1, "only Salute matches: {symbols:?}");
+    assert_eq!(symbols[0]["name"], "Salute");
+    assert_eq!(symbols[0]["location"]["uri"], declare_uri);
+    remove_workspace(&root);
+}
+
+#[test]
+fn index_invalidation_rides_the_client_sync() {
+    let (root, declare_uri, invoke_uri) = disk_workspace("invalidation");
+    // The declaration file is OPEN here: its buffer is the truth, and a
+    // didChange full sync (then a didSave) must re-parse its declarations
+    // into the index — the cross-file queries see the renamed component
+    // immediately.
+    let edited = RENAME_DECLARE_SOURCE.replace("Salute", "Salutation");
+    let invoke_edited = RENAME_INVOKE_SOURCE.replace("Salute", "Salutation");
+    let (line, character) = position_of(&invoke_edited, "<Salutation");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        open_message(&declare_uri, RENAME_DECLARE_SOURCE),
+        open_message(&invoke_uri, &invoke_edited),
+        change_message(&declare_uri, &edited),
+        save_message(&declare_uri, &edited),
+        request(
+            2,
+            "textDocument/definition",
+            &invoke_uri,
+            line,
+            character + 1,
+        ),
+        symbol_request(3, "salutation"),
+        EXIT.to_string(),
+    ]);
+    let response = response_of(&session_text, 2);
+    assert_eq!(
+        response["result"]["uri"], declare_uri,
+        "definition resolves into the synced buffer: {response}"
+    );
+    let expected = position_of(&edited, "Salutation");
+    assert_eq!(
+        [
+            response["result"]["range"]["start"]["line"].clone(),
+            response["result"]["range"]["start"]["character"].clone(),
+        ],
+        [serde_json::json!(expected.0), serde_json::json!(expected.1)],
+        "the re-parsed declaration position: {response}"
+    );
+    let symbols = response_of(&session_text, 3)["result"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .filter_map(|symbol| symbol["name"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    assert!(
+        symbols.iter().any(|name| name == "Salutation")
+            && !symbols.iter().any(|name| name == "Salute"),
+        "the index re-parsed the synced text: {symbols:?}"
+    );
+    remove_workspace(&root);
+}
+
+#[test]
+fn the_on_disk_cache_round_trips_and_evicts_across_sessions() {
+    let (root, declare_uri, _invoke_uri) = disk_workspace("cache-sessions");
+    // Session 1: the walk persists the cache beside the workspace.
+    let session_text = session(&[initialize_with_root(1, &root), EXIT.to_string()]);
+    assert!(
+        root.join(".lintel-cache/lsp-index.json").is_file(),
+        "the cache persists into .lintel-cache: {session_text}"
+    );
+
+    // Session 2 over the unchanged workspace: the cache round-trips — the
+    // closed declaration still answers.
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        symbol_request(2, "sal"),
+        EXIT.to_string(),
+    ]);
+    let response = response_of(&session_text, 2);
+    let symbols = response["result"].as_array().expect("symbols");
+    assert_eq!(symbols.len(), 1, "the cache-hit entry answers: {response}");
+    assert_eq!(symbols[0]["location"]["uri"], declare_uri);
+
+    // Session 3 after the disk file changed: mtime+size eviction — the
+    // stale cache entry is gone and the fresh declarations answer.
+    std::fs::write(
+        root.join("Salute.lintel.php"),
+        "<?php\nfunction Later(string $name): Html\n{\n    return <u>{$name}</u>;\n}\n",
+    )
+    .expect("rewrites the closed file");
+    let session_text = session(&[
+        initialize_with_root(1, &root),
+        symbol_request(2, "later"),
+        symbol_request(3, "sal"),
+        EXIT.to_string(),
+    ]);
+    let later = response_of(&session_text, 2);
+    assert_eq!(
+        later["result"].as_array().expect("symbols").len(),
+        1,
+        "the fresh declaration is indexed: {later}"
+    );
+    let salute = response_of(&session_text, 3);
+    assert!(
+        salute["result"].as_array().expect("symbols").is_empty(),
+        "the stale entry was evicted across sessions: {salute}"
+    );
+    remove_workspace(&root);
+}
