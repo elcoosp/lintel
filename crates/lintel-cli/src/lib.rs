@@ -1245,10 +1245,10 @@ fn build(
         // after a git checkout).
         let cached = cache.filter(|_| !plan.no_cache).and_then(|cache| {
             let key = cache::BuildCache::key(&src, plan.target);
-            cache.lookup(&key, plan.target).map(|hit| (key, hit))
+            cache.lookup(&key, plan.target)
         });
         match cached {
-            Some((key, hit)) => {
+            Some(hit) => {
                 state.cache_hits += 1;
                 replay_warnings(&hit.warnings_text, &hit.warnings_json, plan.format, stderr);
                 emit_source(source, &src, &hit.php, plan, &mut state, stdout, stderr);
