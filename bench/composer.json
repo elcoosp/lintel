@@ -1,6 +1,6 @@
 {
     "name": "lintel/bench",
-    "description": "The \u00a79.2 PHP rendering benchmark harness: S1\u2013S5 scenarios, competitors (echo/Blade/Twig/Plates/rfc/lintel), OPcache/JIT matrix \u2014 measurement tooling, not a shipped package",
+    "description": "The \u00a79.2 PHP rendering benchmark harness: S1\u2013S5 scenarios, competitors (echo/Blade/Twig/Plates/rfc/lintel), OPcache/JIT matrix \u2014 measurement tooling, not a shipped package. The RoadRunner progressive-timing lane (Phase 11 M2) drives the real RoadRunnerFlushTransport through a recording worker, so spiral/roadrunner-http (the HttpWorkerInterface the transport type-hints) rides require-dev",
     "type": "project",
     "license": "MIT",
     "repositories": [
@@ -15,6 +15,7 @@
         "lintel/runtime": "*"
     },
     "require-dev": {
+        "spiral/roadrunner-http": "^4.2",
         "illuminate/events": "^12.0",
         "illuminate/filesystem": "^12.0",
         "illuminate/view": "^12.0",
