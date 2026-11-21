@@ -9,3 +9,8 @@ fuzz/corpus
 fuzz/target
 fuzz/artifacts
 fuzz/coverage
+
+# Phase 7 session artifacts (never committed): the maintainer's ship run
+# consumes them from the dirty tree.
+/.github/pr-body.md
+/ship.toml
