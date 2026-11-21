@@ -642,9 +642,20 @@ fn dyn_child(
             parts.elided += 1;
             Part::Dyn(trimmed.to_string())
         }
-        // `bool` is deliberately absent (c() renders bools as '' while a
-        // raw bool interpolates as '1' — no byte-parity fold exists), and
-        // so is everything the analysis did not prove.
+        Some(ChildKind::Bool) if !trimmed.contains('\n') => {
+            // The M3 bool fold (doc §7.3-Y2): `c()` renders every bool as
+            // `''` — both truth values — while a raw interpolation renders
+            // '1'. The ternary evaluates the expression (side effects ride
+            // along) and emits the constant `''`, byte-identical to `c()`'s
+            // output; no runtime value reaches the markup, so even a
+            // mis-proven type renders empty, never its content. A
+            // multi-line expression stays wrapped (doc 13.4 line
+            // preservation — the one-line ternary would shift lines).
+            parts.elided += 1;
+            Part::Dyn(format!("(({trimmed}) ? '' : '')"))
+        }
+        // Everything the analysis did not prove (or a multi-line bool the
+        // fold cannot re-indent safely) keeps the wrapper.
         _ => Part::Dyn(format!("\\Lintel\\c({trimmed})")),
     }
 }
