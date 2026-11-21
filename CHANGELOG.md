@@ -9,6 +9,25 @@ versions with SemVer, and the language spec versions separately
 
 ### Fixed
 
+- **The stream target's declared return type TypeErrored against its own
+  artifact** (the Phase 9 `renderStreaming()` acceptance proved it — the
+  first real PHP consumer of a stream-target artifact): the §10 lowering
+  wrapped the body in a generator closure but kept the author's
+  `: Html` return type, so invoking the component under `strict_types`
+  failed with `Return value must be of type Html, Generator returned`.
+  The scanner now rewrites a declared `Html` return (canonical, nullable
+  and qualified spellings) to the non-null `\Generator` on the same line
+  when the stream lowering is active; unions and body-less declarations
+  copy verbatim. Regression-tested in `tests/stream_target.rs`.
+- **The bare `--manifest` write depended on the process cwd** (the Phase 8
+  backlog's stray empty `lintel.json` at the repo root): the default
+  `lintel.json` now anchors to the workspace being compiled — the common
+  ancestor of the build inputs and `--out` — never the process cwd, so a
+  lane invoking the engine from anywhere else cannot scatter the manifest
+  outside the workspace. The blade/twig console suites no longer chdir
+  for the write, and both assert no stray manifest lands at the runner's
+  cwd.
+
 - The Phase 7 bool-elision PHPStan fixture's report-resolution assertion
   (`php/lintel-phpstan/tests/AnalyzeElisionTest.php`): the fixture typed the
   hostile prop `string`, which wins the §7.3 elision ladder before the
@@ -18,6 +37,36 @@ versions with SemVer, and the language spec versions separately
   the PHPStan suite is green (13 tests) with no skips.
 
 ### Added
+
+- **The persistent LSP workspace index** (§17.1 Q3): `initialize` walks
+  the workspace root (`workspaceFolders`/`rootUri`), indexes every
+  `.lintel.php` file's component declarations in memory backed by a
+  best-effort on-disk cache (`.lintel-cache/lsp-index.json`, keyed by
+  file mtime+size), and `textDocument/rename`, `textDocument/references`,
+  `workspace/symbol` and `textDocument/definition` consult the index in
+  addition to the open documents — a component declared in a closed file
+  is renamable (its edits ride the `WorkspaceEdit` against the disk
+  bytes), referenceable, symbol-listed and definition-resolvable.
+  Client syncs (`didOpen`/`didChange` full sync/`didSave`) re-parse the
+  synced text immediately; stale entries evict by mtime+size on access.
+- **The content-addressed build cache** (§9.3's warm-build target,
+  §17.1-Q2's incremental cache): `lintel build` hashes each source's
+  CONTENT with the compile target (SHA-256 — mtime lies after a git
+  checkout) into `.lintel-cache/<hash>.php` + a metadata sidecar under
+  the workspace root; an unchanged source on the same target reuses the
+  cached artifact (warnings replay verbatim in both formats), an edited
+  file or a different `--target` misses, and `--no-cache` bypasses
+  lookup and store while `check`/`analyze` never read the cache. A
+  `.lintel-cache/stats.json` sidecar records the last build's counters,
+  and a cold/warm/bypass criterion bench (`cargo bench -p lintel-cli
+  --bench build_cache`) pins the 24-file fixture's throughput.
+- **`ComponentTester::renderStreaming()`** (`Lintel\Test\ComponentTester`):
+  the §10 stream lane of `render()` — the same compile path under
+  `--target=stream`, the invocation's generator consumed through
+  `\Lintel\stream()`. A PHPUnit parity suite proves the fully consumed
+  stream output equals the string target's byte for byte (hostile
+  payload included), and the one-target-per-process constraint (the
+  stream artifact declares the same function name) refuses loudly.
 
 - **§17.1-Q3 testing helpers** (`php/lintel/src/Test/ComponentTester.php`,
   `Lintel\Test\ComponentTester`): compile-and-render a component source
