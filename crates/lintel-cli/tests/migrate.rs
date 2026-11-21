@@ -128,6 +128,65 @@ fn migrate_dry_run_prints_the_diff_and_writes_nothing() {
 }
 
 #[test]
+fn migrate_dry_run_diff_headers_carry_the_function_context() {
+    // The Phase 12 M1 acceptance: each hunk header carries the nearest
+    // enclosing function signature (`@@ -10,5 +10,5 @@ function Badge(…)`),
+    // so a migration review shows which component is being rewritten.
+    let dir = scratch("diff-headers");
+    // Two components, each with JSX the RFC lowering rewrites, plus the
+    // two invocation lines — with enough unchanged comment lines between
+    // the three changed regions that the diff emits SEPARATE hunks (the
+    // hunk merge window is five ops), each carrying its own function
+    // header.
+    let fixture = concat!(
+        "<?php\n\n",
+        "function Badge(string $label, bool $verified = false): Html\n{\n",
+        "    return <span class=\"badge\">{$label}</span>;\n}\n\n",
+        "// --- the badge gallery keeps component bodies apart so the dry-run\n",
+        "// --- diff emits separate hunks, each carrying its own header ---\n\n",
+        "function Card(string $title): Html\n{\n",
+        "    return <b class=\"card\">{$title}</b>;\n}\n\n",
+        "// --- the card gallery keeps the invocation block apart from the\n",
+        "// --- Card body, so the echo hunk names the nearest declaration ---\n\n",
+        "echo <Badge label=\"Hi\" />;\n",
+        "echo <Card title=\"Yo\" />;\n"
+    );
+    let source = write_source(&dir, "Gallery.lintel.php", fixture);
+    let (code, stdout, stderr) =
+        run_cli(&["migrate", source.to_str().expect("utf8 path"), "--dry-run"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    // The two function-level context headers, verbatim signatures.
+    assert!(
+        stdout.contains("@@ function Badge(string $label, bool $verified = false): Html"),
+        "the Badge hunk header carries the signature: {stdout}"
+    );
+    assert!(
+        stdout.contains("@@ function Card(string $title): Html"),
+        "the Card hunk header carries the signature: {stdout}"
+    );
+    // The trailing echo lines sit after the last declaration; git's
+    // funcname convention names the nearest function above them.
+    assert!(
+        stdout
+            .matches("@@ function Card(string $title): Html")
+            .count()
+            >= 2,
+        "the invocation hunk names the nearest declaration above it: {stdout}"
+    );
+    // A change before any declaration carries no context (the `<?php`
+    // prologue hunk, when the compiler rewrites nothing there, does not
+    // exist here — the file's first change is inside Badge).
+    assert!(
+        !stdout.contains("@@ @@\n"),
+        "no empty context suffix: {stdout}"
+    );
+    // --dry-run writes nothing.
+    let after = fs::read_to_string(&source).expect("the source is readable");
+    assert_eq!(after, fixture, "--dry-run writes nothing");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn migrate_backup_keeps_the_original_bytes_beside_the_rewrite() {
     let dir = scratch("backup");
     let source = write_source(&dir, "Card.lintel.php", FIXTURE);
