@@ -25,6 +25,7 @@ require __DIR__ . '/vendor/autoload.php';
 
 use Lintel\Bench\Engines;
 use Lintel\Bench\Metrics;
+use Lintel\Bench\ProgressiveTiming;
 use Lintel\Bench\Scenarios;
 
 const RUNS = 30;
@@ -396,6 +397,14 @@ foreach (['S1', 'S2', 'S3', 'S4', 'S5'] as $id) {
 }
 $opcodes = opcode_counts($compiledForProbe);
 
+// The RoadRunner progressive per-boundary timing (Phase 11 M2): the real
+// RR transport queues the flush-ordered chunks; the lane records the
+// flush-time marks and asserts the progressive invariant (placeholder N
+// before resolved N-1) INSIDE the harness — a broken flusher fails the
+// bench run instead of producing numbers.
+$progressive = ProgressiveTiming::run();
+\file_put_contents("$resultsDir/progressive-timing.json", \json_encode($progressive, \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR) . "\n");
+
 $version = \PHP_VERSION;
 $date = \date('Y-m-d');
 $provenance = [
@@ -468,6 +477,16 @@ foreach ($opcodes as $id => $count) {
 if (!$anyOpcode) {
     $md .= "\nThe runtime in use does not expose the opcode dump; the metric stays null here and is attempted again by the CI bench job on the pinned image.\n";
 }
+$md .= "### S6 RoadRunner progressive per-boundary timing (the Phase 11 lane)\n\n";
+$md .= "| metric | value |\n| --- | --- |\n";
+$md .= '| boundaries | ' . $progressive['boundaries'] . " |\n";
+$md .= '| TTFB — first placeholder | ' . \sprintf('%.1f', $progressive['ttfb_placeholder_ns'] / 1000) . " µs |\n";
+$md .= '| TTFB — first resolved chunk | ' . \sprintf('%.1f', $progressive['ttfb_resolved_ns'] / 1e6) . " ms |\n";
+$md .= '| total — fully resolved page | ' . \sprintf('%.1f', $progressive['total_ns'] / 1e6) . " ms |\n";
+$md .= '| chunks (wire = flush order) | ' . $progressive['chunks'] . " |\n";
+$md .= '\nProgressive invariant: placeholder N flushed before resolved N-1 — asserted by the lane itself ('
+    . \json_encode($progressive['invariants']) . '); raw facts: `progressive-timing.json`.\n\n';
+
 foreach ($all as $setting => $payload) {
     foreach ($payload['notes'] as $note) {
         $md .= "- [$setting] $note\n";
