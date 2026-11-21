@@ -259,7 +259,7 @@ PHP;
             '    return <i>{$on}{probe()}</i>;',
             '}',
             '',
-            'function Hostile(string $x): Html',
+            'function Hostile($x): Html',
             '{',
             '    return <q>{$x}</q>;',
             '}',
@@ -275,7 +275,10 @@ PHP;
             self::fail("fixture line not found: {$needle}");
         };
         // The analysis claims `bool` for all three children — including
-        // the LIE for Hostile's string prop (the mis-proven threat case).
+        // the LIE for Hostile's untyped prop (the mis-proven threat case:
+        // the compiler cannot locally prove the type — a `string` hint on
+        // the declaration would win the §7.3 ladder before the report is
+        // consulted — so the report's word is all the analysis has).
         $report = [
             'version' => 1,
             'children' => [
