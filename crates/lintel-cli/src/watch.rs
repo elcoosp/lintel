@@ -1,31 +1,40 @@
-//! The T-12 watch daemon (architecture doc §11, §15 T-12): `lintel watch`
-//! keeps one resident compiler process behind a socket, so the dev loader's
+//! The T-12 daemon (architecture doc §6.7 sketch, §15 T-12; hardened in
+//! the Phase 10 card, `docs/daemon-protocol.md`): `lintel watch` keeps one
+//! resident compiler process behind a socket, so the dev loader's
 //! per-request compile skips the process spawn.
 //!
-//! The daemon watches the given paths with the `notify` crate, maintains an
-//! in-memory **mtime+size** cache of compiled `.lintel.php` files (the same
-//! key the dev loader persists to disk, §21.2), and serves one request per
-//! connection:
+//! # The wire
 //!
-//! ```text
-//! client -> /abs/path/to/Page.lintel.php\n
-//! daemon <- OK <len>\n<compiled php bytes>      on success
-//! daemon <- ERR <len>\n<rendered diagnostics>   on a failed compile
-//! client -> quit\n                              stops the daemon
-//! ```
+//! One request per connection, both directions framed the same way:
+//! ten ASCII decimal digits, a newline, then exactly that many bytes of
+//! UTF-8 JSON (the §6.7 sketch `{"path":…} → {"php":…}|{"diag":[…]}`, made
+//! real). A compile failure is an *answer* (`{"ok":false,"diag":[…]}`,
+//! one rendered diagnostic per entry), not a transport failure; a
+//! malformed frame closes the connection and the daemon serves on. The
+//! client retries a connect failure with a short backoff — the
+//! reconnection window a restarting daemon needs — and the PHP loader
+//! falls back to its `proc_open` lane on the final failure.
 //!
-//! The design is deliberately **two-threaded, not three**: the daemon's own
-//! loop is a plain *blocking* `accept` — a compile request is answered the
-//! moment it connects, with no poll latency (the p50 the T-12 acceptance
-//! measures) — and cache invalidation runs on `notify`'s own event thread
-//! through a shared cache, so the daemon spawns no threads of its own.
+//! # The cache
 //!
-//! On a watcher event the cache entry for the changed path is dropped; the
-//! next request recompiles lazily (§15: "invalidate cache, recompile, and
-//! serve the new PHP on the next socket request"). A cache hit requires the
-//! file's current mtime and size to match the compiled entry's, so an edit
-//! the watcher missed still recompiles — the cache is an optimization,
-//! never a staleness source.
+//! The daemon serves from an in-memory mtime+size map (a hit re-verifies
+//! the stat key; a missed event self-heals), and every miss consults the
+//! workspace's content-addressed build cache — the same
+//! `<workspace>/.lintel-cache/` engine `lintel build` uses, keyed by a
+//! SHA-256 of the source CONTENT with the target — so a watch-triggered
+//! rebuild of unchanged content never recompiles and a reverted edit
+//! serves instantly. The daemon's counters accumulate in
+//! `.lintel-cache/stats.json` (flocked, like every shared mutable cache
+//! file) after each disk-cache consult. Watcher events under
+//! `.lintel-cache/` never invalidate entries: the cache's own writes must
+//! not churn the in-memory map.
+//!
+//! The design is deliberately **two-threaded, not three**: the daemon's
+//! own loop is a plain *blocking* `accept` — a compile request is answered
+//! the moment it connects, with no poll latency (the p50 the T-12
+//! acceptance measures) — and cache invalidation runs on `notify`'s own
+//! event thread through a shared cache, so the daemon spawns no threads of
+//! its own.
 //!
 //! Unix runs a `UnixListener`; Windows falls back to a loopback TCP socket
 //! (the same protocol, with the chosen ephemeral port written to
@@ -35,7 +44,6 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -43,11 +51,30 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lintel_core::{compile, Diagnostic, Options, Target};
+use lintel_core::{compile, Options, Target};
+use serde_json::{json, Value};
+
+use crate::cache::{self, BuildCache};
 
 /// How long one client waits for the daemon's answer before giving up (a
 /// stuck compile must not wedge the loader).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The frame prefix: ten ASCII decimal digits, then a newline, then the
+/// payload. Fixed width so the reader can `read_exact` the prefix and
+/// then the body without any delimiter inside the payload.
+const FRAME_PREFIX_WIDTH: usize = 10;
+
+/// The payload cap both sides accept: a larger or non-decimal prefix is a
+/// malformed frame (the connection closes; the client treats it as a
+/// transport failure).
+const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
+
+/// The client's connect retries and backoff — the window a restarting
+/// daemon needs to rebind its socket; once connected, a protocol failure
+/// is final for that request.
+const CONNECT_ATTEMPTS: usize = 3;
+const CONNECT_BACKOFF_MS: [u64; 3] = [0, 50, 250];
 
 /// The default socket path for a background `lintel watch` in the current
 /// directory: one socket per working directory, hash-namespaced so parallel
@@ -60,12 +87,76 @@ pub fn default_socket() -> PathBuf {
     std::env::temp_dir().join(format!("lintel-watch-{:016x}.sock", hasher.finish()))
 }
 
+/// Encode one framed message: a ten-digit zero-padded byte length, a
+/// newline, then the payload bytes. A payload over [`MAX_PAYLOAD`] is a
+/// protocol error (both sides refuse to send it).
+fn encode_frame(payload: &str) -> Result<Vec<u8>, String> {
+    let bytes = payload.as_bytes();
+    if bytes.len() > MAX_PAYLOAD {
+        return Err(format!(
+            "payload of {} bytes exceeds the {MAX_PAYLOAD}-byte frame cap",
+            bytes.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(bytes.len() + FRAME_PREFIX_WIDTH + 1);
+    let _ = write!(out, "{:0width$}", bytes.len(), width = FRAME_PREFIX_WIDTH);
+    out.push(b'\n');
+    out.extend_from_slice(bytes);
+    Ok(out)
+}
+
+/// Read one framed message off `reader`: the ten-digit prefix, the
+/// separator newline, then the payload. Any deviation — a short or
+/// non-decimal prefix, a missing separator, a length over the cap, a
+/// truncated body — is a protocol error string.
+fn read_frame(reader: &mut impl BufRead) -> Result<String, String> {
+    let mut prefix = [0_u8; FRAME_PREFIX_WIDTH];
+    reader
+        .read_exact(&mut prefix)
+        .map_err(|e| format!("cannot read the frame prefix: {e}"))?;
+    let prefix = std::str::from_utf8(&prefix)
+        .map_err(|_| "the frame prefix is not ASCII digits".to_string())?;
+    let len: usize = prefix
+        .parse()
+        .map_err(|_| format!("malformed frame prefix: {prefix:?}"))?;
+    if len > MAX_PAYLOAD {
+        return Err(format!(
+            "frame length {len} exceeds the {MAX_PAYLOAD}-byte cap"
+        ));
+    }
+    let mut separator = [0_u8; 1];
+    reader
+        .read_exact(&mut separator)
+        .map_err(|e| format!("cannot read the frame separator: {e}"))?;
+    if separator[0] != b'\n' {
+        return Err("malformed frame: the prefix is not newline-terminated".to_string());
+    }
+    let mut payload = vec![0_u8; len];
+    reader
+        .read_exact(&mut payload)
+        .map_err(|e| format!("cannot read the frame payload: {e}"))?;
+    String::from_utf8(payload).map_err(|e| format!("the frame payload is not UTF-8: {e}"))
+}
+
+/// The request JSON for one compile: `{"path": "<abs path>"}`.
+fn encode_request(path: &Path) -> String {
+    json!({ "path": path.display().to_string() }).to_string()
+}
+
 /// One compiled file: the stat key it was compiled under and the result
-/// (compiled PHP, or the rendered diagnostics that failed it).
+/// (compiled PHP, or one rendered diagnostic string per problem).
 struct CacheEntry {
     mtime: u64,
     size: u64,
-    result: Result<String, String>,
+    result: Result<String, Vec<String>>,
+}
+
+/// The daemon's cumulative disk-cache counters (the same shapes
+/// `.lintel-cache/stats.json` records for `lintel build`).
+#[derive(Default)]
+struct CacheCounters {
+    compiled: usize,
+    cache_hits: usize,
 }
 
 /// The compile cache shared between the daemon's serving loop and the
@@ -95,7 +186,7 @@ pub fn run_foreground(
     let _ = writeln!(
         stdout,
         "lintel watch: daemon listening on {socket_display} ({roots} watch root(s)); \
-         a client's `quit` stops it"
+         a client's quit frame stops it"
     );
     let mut daemon = daemon;
     daemon.serve()
@@ -130,14 +221,13 @@ pub fn spawn_background(
         let _ = writeln!(stderr, "lintel watch: could not spawn the daemon process");
         return 1;
     };
-    // Readiness: poll-connect until the daemon answers (or the child dies).
+    // Readiness: poll-connect until the socket accepts. The probe opens
+    // the connection and closes it WITHOUT sending anything — the daemon
+    // treats EOF as a probe and serves on (a quit frame here would stop
+    // the daemon the moment it came up).
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(mut stream) = connect(socket) {
-            // The daemon answers connections with nothing until a
-            // request line arrives; an immediate close is fine.
-            let _ = stream.write_all(b"quit\n");
-            let _ = stream.flush();
+        if let Ok(stream) = connect(socket) {
             drop(stream);
             let _ = writeln!(stdout, "lintel watch: daemon ready on {}", socket.display());
             return 0;
@@ -180,15 +270,19 @@ fn detach(command: &mut std::process::Command) {
     }
 }
 
-/// The daemon: its socket listener, its watcher and its shared cache. The
-/// serving loop and the watcher's invalidation thread (notify's own) are
-/// the only execution contexts; the daemon spawns no threads itself.
+/// The daemon: its socket listener, its watcher, its in-memory cache, the
+/// workspace's content-addressed build cache and the cumulative counters
+/// the `.lintel-cache/stats.json` observability file records. The serving
+/// loop and the watcher's invalidation thread (notify's own) are the only
+/// execution contexts; the daemon spawns no threads itself.
 struct Daemon {
     listener: Listener,
     watcher: Box<dyn WatcherDrop>,
     socket: PathBuf,
     roots: Vec<PathBuf>,
     cache: SharedCache,
+    build_cache: BuildCache,
+    counters: Arc<Mutex<CacheCounters>>,
     quit: bool,
 }
 
@@ -331,47 +425,103 @@ fn connect(socket: &Path) -> Result<Stream, String> {
     }
 }
 
+/// Connect with the reconnection window: a failed *connect* retries with
+/// a short backoff (a restarting daemon rebinds within it); every attempt's
+/// failure is a `cannot connect to …` message, so the caller surfaces one
+/// consistent shape and the loader falls back to its spawn lane.
+fn connect_with_retries(socket: &Path) -> Result<Stream, String> {
+    let mut last = String::new();
+    for backoff in CONNECT_BACKOFF_MS {
+        if backoff > 0 {
+            std::thread::sleep(Duration::from_millis(backoff));
+        }
+        match connect(socket) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(format!(
+        "{last} (after {CONNECT_ATTEMPTS} connect attempts)"
+    ))
+}
+
 /// One request over the client protocol: compile `file` through the daemon
-/// — `Ok` carries the compiled PHP, `Err` the rendered diagnostics.
+/// — `Ok` carries the compiled PHP, `Err` the rendered diagnostics (one
+/// string per diagnostic, newline-joined). The connect carries the
+/// reconnection window (`connect_with_retries`); a failure AFTER the
+/// daemon accepted is final for this request.
 ///
 /// # Errors
 ///
 /// A connect, write, read or protocol failure returns its message.
 pub fn request(socket: &Path, file: &Path) -> Result<String, String> {
-    let mut stream = connect(socket)?;
+    let mut stream = connect_with_retries(socket)?;
     let _ = stream.set_read_timeout(REQUEST_TIMEOUT);
+    let frame = encode_frame(&encode_request(file))?;
     stream
-        .write_all(format!("{}\n", file.display()).as_bytes())
+        .write_all(&frame)
         .and_then(|()| stream.flush())
         .map_err(|e| format!("cannot send the request: {e}"))?;
     let mut reader = BufReader::new(stream);
-    let mut header = String::new();
-    reader
-        .read_line(&mut header)
-        .map_err(|e| format!("cannot read the response header: {e}"))?;
-    let header = header.trim_end();
-    let Some((tag, len)) = header.split_once(' ') else {
-        return Err(format!("malformed response header: {header:?}"));
-    };
-    let Ok(len) = len.parse::<usize>() else {
-        return Err(format!("malformed response length: {header:?}"));
-    };
-    let mut body = vec![0_u8; len];
-    reader
-        .read_exact(&mut body)
-        .map_err(|e| format!("cannot read the response body: {e}"))?;
-    let body =
-        String::from_utf8(body).map_err(|e| format!("the response body is not UTF-8: {e}"))?;
-    match tag {
-        "OK" => Ok(body),
-        "ERR" => Err(body),
-        other => Err(format!("unknown response tag: {other:?}")),
+    let payload = read_frame(&mut reader)?;
+    decode_response(&payload)
+}
+
+/// Ask the daemon to stop: the framed `{"quit":true}` request. The daemon
+/// answers before it exits; a transport failure is surfaced (the daemon
+/// may already be gone).
+///
+/// # Errors
+///
+/// A connect or write failure returns its message.
+pub fn quit(socket: &Path) -> Result<(), String> {
+    let mut stream = connect_with_retries(socket)?;
+    let _ = stream.set_read_timeout(REQUEST_TIMEOUT);
+    let frame = encode_frame(&json!({ "quit": true }).to_string())?;
+    stream
+        .write_all(&frame)
+        .and_then(|()| stream.flush())
+        .map_err(|e| format!("cannot send the quit request: {e}"))?;
+    let mut reader = BufReader::new(stream);
+    // The quit answer is best-effort: a daemon that already stopped may
+    // close before the read completes.
+    let _ = read_frame(&mut reader);
+    Ok(())
+}
+
+/// Decode one framed response payload: `{"ok":true,"php":…}` carries the
+/// compiled PHP; `{"ok":false,"diag":[…]}` carries the rendered
+/// diagnostics (joined with newlines — the shape the PHP loader's
+/// `RuntimeException` surfaces).
+fn decode_response(payload: &str) -> Result<String, String> {
+    let value: Value =
+        serde_json::from_str(payload).map_err(|e| format!("malformed response payload: {e}"))?;
+    match value.get("ok").and_then(Value::as_bool) {
+        Some(true) => value
+            .get("php")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| "a success response is missing `php`".to_string()),
+        Some(false) => match value.get("diag").and_then(Value::as_array) {
+            // A failure response is Err — the diagnostics join the shape
+            // the PHP loader's `RuntimeException` surfaces.
+            Some(entries) => Err(entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")),
+            None => Err("a failure response is missing `diag`".to_string()),
+        },
+        None => Err("the response is missing `ok`".to_string()),
     }
 }
 
 impl Daemon {
-    /// Bind the socket (a stale socket file is removed first) and start
-    /// the watcher over every path.
+    /// Bind the socket (a stale socket file is removed first), start the
+    /// watcher over every path, and anchor the content-addressed build
+    /// cache at the watch roots' common ancestor — the workspace whose
+    /// `.lintel-cache/` describes these sources from any invocation
+    /// directory.
     ///
     /// # Errors
     ///
@@ -381,9 +531,12 @@ impl Daemon {
             return Err("no paths to watch: pass the project directories or files".into());
         }
         let cache: SharedCache = Arc::new(Mutex::new(HashMap::new()));
+        let counters: Arc<Mutex<CacheCounters>> = Arc::new(Mutex::new(CacheCounters::default()));
         // Invalidation runs on notify's own event thread: a watcher event
         // drops the cache entries of the paths it mentions (created,
         // modified or removed alike) and the next request recompiles.
+        // Paths under `.lintel-cache/` never invalidate: the daemon's own
+        // cache writes must not churn the map.
         let mut watcher: Box<dyn WatcherDrop> = Box::new(
             notify::recommended_watcher({
                 let cache = Arc::clone(&cache);
@@ -391,6 +544,9 @@ impl Daemon {
                     let Ok(event) = event else { return };
                     if let Ok(mut guard) = cache.lock() {
                         for path in event.paths {
+                            if is_cache_path(&path) {
+                                continue;
+                            }
                             guard.remove(&path);
                         }
                     }
@@ -415,14 +571,16 @@ impl Daemon {
             socket: socket.to_path_buf(),
             roots: paths.to_vec(),
             cache,
+            build_cache: BuildCache::at(&watch_workspace_root(paths)),
+            counters,
             quit: false,
         })
     }
 
     /// The daemon's main loop: a plain blocking accept — a compile request
-    /// is served the moment it connects — until a client sends `quit` or
-    /// the listener fails for good. Cleanup removes the socket file
-    /// whichever way the loop ends.
+    /// is served the moment it connects — until a client sends the quit
+    /// frame or the listener fails for good. Cleanup removes the socket
+    /// file whichever way the loop ends.
     fn serve(&mut self) -> i32 {
         while !self.quit {
             match self.listener.accept() {
@@ -438,55 +596,76 @@ impl Daemon {
         0
     }
 
-    /// Serve one connection: read the request line, compile, answer,
-    /// close. Marks the daemon for shutdown when the client sent `quit`.
+    /// Serve one connection: read one framed request, compile, answer,
+    /// close. Marks the daemon for shutdown when the client sent the quit
+    /// frame.
     fn serve_stream(&mut self, mut stream: Stream) {
         let quit = self.handle_request(&mut stream);
         let _ = stream.flush();
         self.quit = quit;
     }
 
-    /// Read one request line from `stream` and write the framed answer.
-    /// A transport failure means the client vanished — serve on. Returns
-    /// whether the client sent `quit`.
+    /// Read one framed request from `stream` and write the framed answer.
+    /// A transport failure or an empty (EOF) probe means the client
+    /// vanished or was only checking readiness — serve on. Returns
+    /// whether the client sent the quit frame.
     fn handle_request(&mut self, stream: &mut Stream) -> bool {
-        let mut line = String::new();
-        let read = {
+        let payload = {
             let mut reader = BufReader::new(&mut *stream);
-            reader.read_line(&mut line)
+            read_frame(&mut reader)
         };
-        let Ok(read) = read else {
+        let Ok(payload) = payload else {
             return false;
         };
-        if read == 0 {
-            // A readiness probe opened and closed the connection.
-            return false;
-        }
-        let request = line.trim();
-        if request == "quit" {
+        let request: Value = match serde_json::from_str(&payload) {
+            Ok(value) => value,
+            Err(e) => {
+                let body = json!({
+                    "ok": false,
+                    "diag": [format!("lintel watch: malformed request payload: {e}")],
+                })
+                .to_string();
+                Self::answer(stream, &body);
+                return false;
+            }
+        };
+        if request.get("quit").and_then(Value::as_bool) == Some(true) {
+            Self::answer(stream, &json!({ "ok": true, "quit": true }).to_string());
             return true;
         }
-        let file = PathBuf::from(request);
-        let body = self.compiled(&file);
-        let (tag, bytes) = match &body {
-            Ok(php) => ("OK", php.as_bytes()),
-            Err(diagnostics) => ("ERR", diagnostics.as_bytes()),
-        };
-        let Ok(header) = write_header(tag, bytes.len()) else {
+        let Some(path) = request.get("path").and_then(Value::as_str) else {
+            let body = json!({
+                "ok": false,
+                "diag": ["lintel watch: the request names neither `path` nor `quit`"],
+            })
+            .to_string();
+            Self::answer(stream, &body);
             return false;
         };
-        // A failed write means the client vanished — serve on. Only the
-        // client's `quit` line ends the daemon.
-        let _ = stream
-            .write_all(header.as_bytes())
-            .and_then(|()| stream.write_all(bytes));
+        let body = match self.compiled(Path::new(path)) {
+            Ok(php) => json!({ "ok": true, "php": php }).to_string(),
+            Err(diag) => json!({ "ok": false, "diag": diag }).to_string(),
+        };
+        Self::answer(stream, &body);
         false
     }
 
-    /// The compiled PHP for `file`: a cache hit when the stat key matches,
-    /// a (re)compile otherwise. Compile failures are cached too — an
-    /// unchanged broken file must not recompile on every request.
-    fn compiled(&self, file: &Path) -> Result<String, String> {
+    /// Write one framed answer; a write failure means the client vanished
+    /// — serve on.
+    fn answer(stream: &mut Stream, payload: &str) {
+        if let Ok(frame) = encode_frame(payload) {
+            let _ = stream.write_all(&frame).and_then(|()| stream.flush());
+        }
+    }
+
+    /// The compiled PHP for `file`: an in-memory hit when the stat key
+    /// matches, then a content-addressed build-cache hit (no recompile),
+    /// then a compile whose artifact lands in both caches. Compile
+    /// failures are cached in memory too — an unchanged broken file must
+    /// not recompile on every request — but never enter the build cache
+    /// (the same rule the CLI's `build` lane follows: only successes are
+    /// content-addressed).
+    fn compiled(&self, file: &Path) -> Result<String, Vec<String>> {
         let (mtime, size) = match fs::metadata(file) {
             Ok(meta) => {
                 let mtime = meta
@@ -496,7 +675,7 @@ impl Daemon {
                     .map_or(0, |d| d.as_secs());
                 (mtime, meta.len())
             }
-            Err(e) => return Err(format!("cannot stat {}: {e}", file.display())),
+            Err(e) => return Err(vec![format!("cannot stat {}: {e}", file.display())]),
         };
         if let Ok(guard) = self.cache.lock() {
             if let Some(entry) = guard.get(file) {
@@ -505,17 +684,58 @@ impl Daemon {
                 }
             }
         }
-        let src =
-            fs::read_to_string(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+        let src = fs::read_to_string(file)
+            .map_err(|e| vec![format!("cannot read {}: {e}", file.display())])?;
+        // The build cache: the same content-addressed engine `lintel build`
+        // uses — a watch-triggered rebuild of unchanged content never
+        // recompiles, a reverted edit serves instantly.
+        let key = BuildCache::key(&src, Target::String);
+        if let Some(hit) = self.build_cache.lookup(&key, Target::String) {
+            self.bump_and_record(|counters| counters.cache_hits += 1);
+            let result = Ok(hit.php);
+            self.remember(file, mtime, size, &result);
+            return result;
+        }
         let result = match compile(
             &src,
             &Options {
                 target: Target::String,
             },
         ) {
-            Ok(out) => Ok(out.php),
-            Err(problems) => Err(render_all(&problems, &src)),
+            Ok(out) => {
+                let warnings_text: Vec<String> = out
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.render(&src))
+                    .collect();
+                let warnings_json: Vec<String> = out
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.to_json(&src))
+                    .collect();
+                self.build_cache.store(
+                    &key,
+                    file,
+                    Target::String,
+                    &out.php,
+                    &warnings_text,
+                    &warnings_json,
+                );
+                Ok(out.php)
+            }
+            Err(problems) => Err(problems
+                .iter()
+                .map(|p| p.render(&src))
+                .collect::<Vec<String>>()),
         };
+        self.bump_and_record(|counters| counters.compiled += 1);
+        self.remember(file, mtime, size, &result);
+        result
+    }
+
+    /// Cache one result in the in-memory stat-key map (the disk cache
+    /// already holds compile successes by the time this runs).
+    fn remember(&self, file: &Path, mtime: u64, size: u64, result: &Result<String, Vec<String>>) {
         if let Ok(mut guard) = self.cache.lock() {
             guard.insert(
                 file.to_path_buf(),
@@ -526,7 +746,21 @@ impl Daemon {
                 },
             );
         }
-        result
+    }
+
+    /// Bump one counter and record the cumulative totals to
+    /// `.lintel-cache/stats.json` (flocked — a watch daemon and a
+    /// concurrent build share the file). Best-effort: a failure degrades
+    /// to unrecorded counters, never to a failed request.
+    fn bump_and_record(&self, bump: impl FnOnce(&mut CacheCounters)) {
+        if let Ok(mut guard) = self.counters.lock() {
+            bump(&mut guard);
+            self.build_cache.record(&cache::CacheStats {
+                compiled: guard.compiled,
+                cache_hits: guard.cache_hits,
+                bypassed: false,
+            });
+        }
     }
 
     /// Remove the socket file (and the Windows port file) so a later
@@ -541,19 +775,31 @@ impl Daemon {
     }
 }
 
-/// The framed response header: `<TAG> <len>` terminated by a newline.
-fn write_header(tag: &str, len: usize) -> Result<String, std::fmt::Error> {
-    let mut header = String::new();
-    writeln!(header, "{tag} {len}")?;
-    Ok(header)
+/// Whether `path` lives under a `.lintel-cache` directory: the daemon's
+/// own cache writes (artifacts, sidecars, `stats.json`) must not churn
+/// the in-memory map — a store or a stats record fires watcher events
+/// over the watched roots, and dropping entries for them would defeat
+/// the in-memory tier entirely.
+fn is_cache_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == cache::CACHE_DIR)
 }
 
-/// Render every diagnostic the way the CLI's text format does, so the ERR
-/// body is directly readable by a developer.
-fn render_all(problems: &[Diagnostic], src: &str) -> String {
-    let mut out = String::new();
-    for problem in problems {
-        let _ = write!(out, "{}", problem.render(src));
-    }
-    out
+/// The workspace root the daemon's build cache anchors at: the watch
+/// roots' common ancestor (the same shape `lintel build` computes from
+/// its sources and destination — the cache lands with the sources it
+/// describes from any invocation directory).
+fn watch_workspace_root(paths: &[PathBuf]) -> PathBuf {
+    paths
+        .iter()
+        .map(|path| std::path::absolute(path).unwrap_or_else(|_| path.clone()))
+        .map(|root| {
+            if root.is_file() {
+                root.parent().map(Path::to_path_buf).unwrap_or(root)
+            } else {
+                root
+            }
+        })
+        .reduce(|a, b| crate::common_ancestor(&a, &b))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
