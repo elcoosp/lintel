@@ -17,6 +17,10 @@ notify = "8"
 # The M2 build cache keys entries on a SHA-256 CONTENT hash (mtime lies
 # after a git checkout) keyed with the compile target.
 sha2 = "0.10"
+# The `.lintel-cache/stats.json` counters are shared mutable state: a watch
+# daemon and a concurrent `lintel build` write the same file, so the write
+# is flocked (fs2 wraps flock(2) / LockFileEx cross-platform).
+fs2 = "0.4"
 
 [[bin]]
 name = "lintel"
