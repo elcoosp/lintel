@@ -45,7 +45,8 @@
 
 - **No mutation or rewrite support.** The compiler's lowering is a
   `Lowering` strategy over an immutable tree (doc 5.3); a mutable-visitor
-  API would be a different seam and is not planned for v0.x.
+  API would be a different seam and stays out of the 1.0 scope (a
+  roadmap candidate for a later minor, never a silent addition).
 - **No post-order callbacks.** The contract is the validation walk's
   top-down shape; an `after_children` hook would extend the trait and the
   built-in walk together, if a consumer ever needs bottom-up folding.
