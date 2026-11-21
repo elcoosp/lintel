@@ -215,6 +215,14 @@ final class SuspenseFlusher
     /** The one-time in-place swap runtime (§10 step 3). */
     public const SWAP_RUNTIME = '<script>function lintelSwap(id){var t=document.getElementById(id+"-r"),p=document.getElementById(id);if(!t||!p)return;p.replaceChildren(t.content.cloneNode(true));t.remove();}</script>';
 
+    /**
+     * Process-global count of boundaries whose fallback placeholder was
+     * flushed (the §11 profiler panels' "suspense boundaries flushed"
+     * metric — snapshot it around a render window, or zero it directly
+     * to bracket one; the flusher itself never resets it).
+     */
+    public static int $boundariesFlushed = 0;
+
     private string $buffer = '';
     private int $nextId = 1;
     private bool $runtimeEmitted = false;
@@ -291,6 +299,7 @@ final class SuspenseFlusher
         $this->emit(c($b->fallback));
         $this->emit('</div>');
         $this->pending[] = ['id' => $id, 'fiber' => new \Fiber($b->work)];
+        ++self::$boundariesFlushed;
     }
 
     /** Pump the pending works round-robin; each resolution flushes at once.
