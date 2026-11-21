@@ -11,7 +11,8 @@ repository = "https://github.com/elcoosp/lintel"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-lintel-core = { path = "../lintel-core" }
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintel-core = { version = "1.0.0", path = "../lintel-core" }
 wasm-bindgen = "0.2"
 
 [lints]
