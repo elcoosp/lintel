@@ -215,6 +215,22 @@ jobs:
           LINTEL_RUNTIME_PATH: ${{ github.workspace }}/php/runtime/src/functions.php
         run: bash scripts/walkthrough.sh
 
+  windows-daemon:
+    name: windows-daemon (the M3 TCP fallback lane)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: "M3 acceptance — the daemon's Windows TCP lane serves the T-12 contracts"
+        # The watch suite's daemon tests are platform-neutral: on Windows
+        # `Stream` binds a loopback TCP listener (the ephemeral port rides
+        # `<socket-path>.port`), so the suite exercises serve+recompile-on-
+        # change, the build-cache-backed rebuilds, the concurrent-clients
+        # lane and the p50/p99-vs-spawn measurement over TCP. Serial: each
+        # test tears down a scratch directory whose socket the next test's
+        # daemon must not hold open (Windows directory locking is strict).
+        run: cargo test -p lintel-cli --all-features --test watch -- --test-threads=1
+
   fuzz:
     runs-on: ubuntu-latest
     steps:
