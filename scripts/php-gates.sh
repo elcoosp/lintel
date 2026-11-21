@@ -36,7 +36,7 @@ lint() {
 check() {
     echo "== composer validate =="
     local rc=0
-    for dir in php/runtime php/lintel php/lintel-phpstan bench; do
+    for dir in php/runtime php/lintel php/lintel-phpstan php/markup php/blade php/twig bench; do
         if composer validate --working-dir="$REPO_ROOT/$dir" --no-check-all --no-interaction > /dev/null 2>&1; then
             echo "composer validate $dir: OK"
         else
@@ -57,6 +57,15 @@ test() {
     echo "== phpunit (php/lintel-phpstan, the §17.1-Q1 bridge) =="
     LINTEL_TEST_BIN="${LINTEL_TEST_BIN:-$REPO_ROOT/target/release/lintel}" \
         php "$REPO_ROOT/php/lintel-phpstan/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/lintel-phpstan/phpunit.xml" || fail=1
+    echo "== phpunit (php/markup, the rfc-convergence runtime) =="
+    LINTEL_TEST_BIN="${LINTEL_TEST_BIN:-$REPO_ROOT/target/release/lintel}" \
+        php "$REPO_ROOT/php/markup/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/markup/phpunit.xml" || fail=1
+    echo "== phpunit (php/blade, the §11 Laravel bridge) =="
+    LINTEL_TEST_BIN="${LINTEL_TEST_BIN:-$REPO_ROOT/target/release/lintel}" \
+        php "$REPO_ROOT/php/blade/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/blade/phpunit.xml" || fail=1
+    echo "== phpunit (php/twig, the §11 Symfony bridge) =="
+    LINTEL_TEST_BIN="${LINTEL_TEST_BIN:-$REPO_ROOT/target/release/lintel}" \
+        php "$REPO_ROOT/php/twig/vendor/bin/phpunit" --configuration "$REPO_ROOT/php/twig/phpunit.xml" || fail=1
 }
 
 stan() {
