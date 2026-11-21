@@ -7,46 +7,16 @@ versions with SemVer, and the language spec versions separately
 
 ## [Unreleased]
 
-### Fixed
-
-- **The background `lintel watch` spawn stopped its own daemon**: the
-  readiness probe sent the `quit` request on its poll-connect, so the
-  freshly spawned daemon shut down the moment `spawn_background` declared
-  it ready (the Phase 2 background lane had no test coverage). The probe
-  now opens the connection and closes it without sending — the daemon
-  treats the empty read as a probe and serves on; the contract (and the
-  quit frame's real shape) is pinned by `docs/daemon-protocol.md`.
-- The build path bound a key it never used in the cache-hit arm
-  (`crates/lintel-cli/src/lib.rs`), which the current stable toolchain
-  flags under the `-D warnings` gate the Phase 9 pass landed on an older
-  one — the lookup no longer carries the key through the hit.
-
-- **The stream target's declared return type TypeErrored against its own
-  artifact** (the Phase 9 `renderStreaming()` acceptance proved it — the
-  first real PHP consumer of a stream-target artifact): the §10 lowering
-  wrapped the body in a generator closure but kept the author's
-  `: Html` return type, so invoking the component under `strict_types`
-  failed with `Return value must be of type Html, Generator returned`.
-  The scanner now rewrites a declared `Html` return (canonical, nullable
-  and qualified spellings) to the non-null `\Generator` on the same line
-  when the stream lowering is active; unions and body-less declarations
-  copy verbatim. Regression-tested in `tests/stream_target.rs`.
-- **The bare `--manifest` write depended on the process cwd** (the Phase 8
-  backlog's stray empty `lintel.json` at the repo root): the default
-  `lintel.json` now anchors to the workspace being compiled — the common
-  ancestor of the build inputs and `--out` — never the process cwd, so a
-  lane invoking the engine from anywhere else cannot scatter the manifest
-  outside the workspace. The blade/twig console suites no longer chdir
-  for the write, and both assert no stray manifest lands at the runner's
-  cwd.
-
-- The Phase 7 bool-elision PHPStan fixture's report-resolution assertion
-  (`php/lintel-phpstan/tests/AnalyzeElisionTest.php`): the fixture typed the
-  hostile prop `string`, which wins the §7.3 elision ladder before the
-  analyze report is consulted, so the mis-proof case could never fire and
-  the suite stayed red. The fixture's prop is untyped now — the report's
-  `bool` claim is the only proof, the fold renders the constant `''`, and
-  the PHPStan suite is green (13 tests) with no skips.
+The unreleased set closes the v1.0.0 scope (architecture §17.1 Q4). The
+language spec the compiler implements is the §4 set with its executable
+goldens; the stability promise is the SemVer contract these notes keep;
+and the comprehensive feature set — compiler, runtime, streaming and the
+server adapters, the Laravel/Symfony bridges, the LSP with its
+tree-sitter lane, the watch daemon, the incremental build cache, the
+playground, the benchmark harness and the deployment guides — is
+reconciled in §21 with every claim backed by a test, a benchmark or a CI
+lane. Tagging and publishing stay with the maintainer (T-18's carried
+note).
 
 ### Added
 
@@ -254,7 +224,94 @@ versions with SemVer, and the language spec versions separately
   next daemon must not hold open on Windows's strict directory locking).
   `docs/daemon-protocol.md` and the watch module docs record the closure.
 
+
+- **Function-level context headers on the `migrate --dry-run` diff** (the
+  Phase 9 §f cosmetic note): each hunk header carries the nearest
+  enclosing function signature — `@@ -10,5 +10,5 @@ function Badge(string
+  $name): Html` — so reviewing a migration shows which component is being
+  rewritten. The convention is git's funcname header, PHP-shaped:
+  visibility/static modifiers peel off first, a closure's `function (` and
+  the arrow `fn` spellings name no context, and a long signature truncates
+  at 80 chars with an ellipsis. Regression-tested by
+  `crates/lintel-cli/tests/migrate.rs` on a two-component fixture whose
+  separate hunks each carry their own function header.
+- **The seeded fuzz corpus** (`fuzz/corpus/compile_fuzz/`, generated and
+  verified by `crates/lintel-core/tests/fuzz_corpus.rs`): `cargo fuzz` no
+  longer starts from an empty directory — the corpus seeds from the 220
+  differential acceptance templates (deterministically replayed through
+  the same proptest strategies the acceptance runs, so corpus and
+  acceptance cannot drift), the 23 isolated reconciliation cases, the
+  tree-sitter lane's fallback edge shapes (the `(***` broken header, the
+  declaration error recovery swallows after a markup region) and the §7.2
+  threat-corpus payload vectors as compiler inputs — 279 seeds over the
+  known-good and known-bad boundaries. The fuzz target also drives a full
+  LSP session per input (initialize → didOpen → shutdown → exit), so the
+  scanner-fallback lane is fuzzed over arbitrary bytes, not just its
+  unit-test probes; CI's ten-minute lane seeds the corpus before it runs.
+- **The v1.0 readiness claims sweep** (`scripts/claims-sweep.sh`, `make
+  claims`, wired into `make ci` and the CI docs job): greps the
+  user-facing docs (README, the `docs/` contract pages, the docs-site
+  pages) for stale pre-1.0 / v0.x / experimental claims and fails on any
+  outside the explicit allowlist (the genuinely-open backlog notes, each
+  named with its reason). README's tagline and Status section, §21.1's
+  stale rows (T-09+ "not started", T-10's "daemon stays future work",
+  T-21's "Q3 backlog" list), the rule-registry page coverage and the
+  node-visitor scope note now state what actually shipped.
+
+### Changed
+
+- **The T-12 latency bound is statistically sound for slow runners** (the
+  Phase 11 report's single Windows p99 flake): the nearest-rank p99 of 30
+  samples is literally the max of the sample, so one scheduling hiccup on
+  a 2-vCPU runner decided the verdict although the true lane gap is ~30×.
+  The assertion is now daemon **p95** < spawn p50 over **60** samples
+  (three tolerated outliers), with one bounded re-measurement of the
+  whole round on failure — a real regression fails both rounds and the
+  test fails loudly with both rounds' numbers. The p50/p95/p99 printouts
+  stay for the record.
+
 ### Fixed
+
+- **The background `lintel watch` spawn stopped its own daemon**: the
+  readiness probe sent the `quit` request on its poll-connect, so the
+  freshly spawned daemon shut down the moment `spawn_background` declared
+  it ready (the Phase 2 background lane had no test coverage). The probe
+  now opens the connection and closes it without sending — the daemon
+  treats the empty read as a probe and serves on; the contract (and the
+  quit frame's real shape) is pinned by `docs/daemon-protocol.md`.
+- The build path bound a key it never used in the cache-hit arm
+  (`crates/lintel-cli/src/lib.rs`), which the current stable toolchain
+  flags under the `-D warnings` gate the Phase 9 pass landed on an older
+  one — the lookup no longer carries the key through the hit.
+
+- **The stream target's declared return type TypeErrored against its own
+  artifact** (the Phase 9 `renderStreaming()` acceptance proved it — the
+  first real PHP consumer of a stream-target artifact): the §10 lowering
+  wrapped the body in a generator closure but kept the author's
+  `: Html` return type, so invoking the component under `strict_types`
+  failed with `Return value must be of type Html, Generator returned`.
+  The scanner now rewrites a declared `Html` return (canonical, nullable
+  and qualified spellings) to the non-null `\Generator` on the same line
+  when the stream lowering is active; unions and body-less declarations
+  copy verbatim. Regression-tested in `tests/stream_target.rs`.
+- **The bare `--manifest` write depended on the process cwd** (the Phase 8
+  backlog's stray empty `lintel.json` at the repo root): the default
+  `lintel.json` now anchors to the workspace being compiled — the common
+  ancestor of the build inputs and `--out` — never the process cwd, so a
+  lane invoking the engine from anywhere else cannot scatter the manifest
+  outside the workspace. The blade/twig console suites no longer chdir
+  for the write, and both assert no stray manifest lands at the runner's
+  cwd.
+
+- The Phase 7 bool-elision PHPStan fixture's report-resolution assertion
+  (`php/lintel-phpstan/tests/AnalyzeElisionTest.php`): the fixture typed the
+  hostile prop `string`, which wins the §7.3 elision ladder before the
+  analyze report is consulted, so the mis-proof case could never fire and
+  the suite stayed red. The fixture's prop is untyped now — the report's
+  `bool` claim is the only proof, the fold renders the constant `''`, and
+  the PHPStan suite is green (13 tests) with no skips.
+
+
 
 - The pedantic-clippy gate regression in the newest CLI code (four
   warnings): `lintel-cli`'s unused `types_flag` helper is used again by the
@@ -283,7 +340,6 @@ versions with SemVer, and the language spec versions separately
   fixtures (compiler input, not PHP — the exclusion phpstan.neon already
   documents), and its subcommand mode propagates failures instead of
   exiting 0 on red (a CI blind spot).
-
 ## [0.1.0] — 2026-11-20
 
 First public release: the MVP scope of the 14-day plan (architecture doc
@@ -313,8 +369,8 @@ harness and docs site v0.
 
 ### CLI — `lintel-cli`
 
-- `lintel init` scaffolds a runnable demo; `lintel build` (with blake3
-  cache, rayon parallelism, `--in-place`/`--out`), `lintel check`,
+- `lintel init` scaffolds a runnable demo; `lintel build` (with the
+  SHA-256 content-addressed cache, `--in-place`/`--out`), `lintel check`,
   `lintel watch`, `lintel stats` and the `init --demo N` gallery (T-10,
   T-15).
 
@@ -343,10 +399,11 @@ harness and docs site v0.
   vscode-textmate in CI (T-16).
 - Differential acceptance (T-09 §13.2): 220 property-based random templates
   executed on the string **and** stream targets and compared byte-for-byte
-  with a hand-written reference PHP renderer, plus 24 isolated regression
+  with a hand-written reference PHP renderer, plus 23 isolated regression
   cases for the class-list, spread and self-closing divergence classes.
 - Release engineering (T-18): dual MIT/Apache-2.0 license files,
   `SECURITY.md`, `CODE_OF_CONDUCT.md`, signed-release workflow with
   per-platform checksums and GitHub build-provenance attestation.
 
 [0.1.0]: https://github.com/elcoosp/lintel/releases/tag/v0.1.0
+[Unreleased]: https://github.com/elcoosp/lintel/compare/v0.1.0...HEAD
