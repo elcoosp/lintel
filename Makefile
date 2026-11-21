@@ -6,7 +6,7 @@
 # fuzz targets do not exist yet, so the target preflights and points at T-09
 # instead of pretending.
 
-.PHONY: ci golden fuzz bench lint-php test-php stan-php check-php workflows playground size-budget docs-site
+.PHONY: ci golden fuzz bench lint-php test-php stan-php check-php workflows playground size-budget docs-site claims
 
 workflows:  ## actionlint over .github/workflows (parse-validates every workflow edit)
 	@if ! command -v actionlint >/dev/null 2>&1; then \
@@ -32,12 +32,16 @@ size-budget:  ## the T-13 acceptance test: bundle + page gzip under 1 MB
 docs-site:  ## build + link-check the T-17 docs site into docs-site/build/
 	cargo run -p lintel-docs --quiet
 
-ci:  ## workflows, fmt, clippy, test, docs-site link check, php lint, phpunit, phpstan
+claims:  ## the M4 v1.0 readiness sweep: no stale maturity claims outside the allowlist
+	bash scripts/claims-sweep.sh
+
+ci:  ## workflows, fmt, clippy, test, docs-site link check + claims sweep, php lint, phpunit, phpstan
 	$(MAKE) workflows
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
 	cargo test --workspace --all-features
 	$(MAKE) docs-site
+	$(MAKE) claims
 	bash scripts/php-gates.sh
 
 golden:  ## the executable golden fixtures + the line-preservation invariant
