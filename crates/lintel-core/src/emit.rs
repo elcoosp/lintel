@@ -138,6 +138,18 @@ pub trait Lowering {
     ) -> String {
         self.emit_root_scoped(node, total_lines, scope)
     }
+
+    /// Whether the strategy's emitted bodies RETURN `\Generator` values a
+    /// declared `Html` return type would contradict: with the stream
+    /// target a component's body returns the generator closure the
+    /// lowering emits, so the scanner rewrites the declaration's `Html`
+    /// return type to `\Generator` (the Phase 9 parity bug — an `: Html`
+    /// stream artifact `TypeError`s under `strict_types` the moment a real
+    /// PHP consumer invokes it). The default is `false`: the string and
+    /// rfc targets return `Html` values exactly as declared.
+    fn rewrites_return_types(&self) -> bool {
+        false
+    }
 }
 
 /// String-concat AOT lowering (default, doc 5.3): the root becomes one
@@ -226,6 +238,10 @@ impl Lowering for StreamLowering {
     fn emit_root_scoped(&self, node: &Node, total_lines: u32, scope: &FunctionScope) -> String {
         stream_root(node, scope, None, total_lines).0
     }
+
+    fn rewrites_return_types(&self) -> bool {
+        true
+    }
 }
 
 /// The §7.3-Y2 analyze lowering (architecture doc §7.3-Y2,
@@ -310,6 +326,13 @@ impl Lowering for AnalyzeLowering {
             elided: stats.elided + parts.elided,
         });
         php
+    }
+
+    fn rewrites_return_types(&self) -> bool {
+        // The analyze pass compiles with the caller's target: a stream
+        // analyze run emits the same generator bodies the plain stream
+        // target does, so the declaration rewrite rides along.
+        self.target == Target::Stream
     }
 }
 
