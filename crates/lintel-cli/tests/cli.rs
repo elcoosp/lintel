@@ -315,7 +315,12 @@ fn help_and_version_exit_zero() {
     assert!(stdout.contains("USAGE:"), "{stdout}");
     let (code, stdout, _) = run_cli(&["--version"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("lintel 0.1.0"), "{stdout}");
+    // The version rides CARGO_PKG_VERSION (the one workspace version, T-18):
+    // a hardcoded string here would break every release bump.
+    assert!(
+        stdout.contains(concat!("lintel ", env!("CARGO_PKG_VERSION"))),
+        "{stdout}"
+    );
 }
 
 /// A writer that always fails: the sink-injection contract lets tests (and
