@@ -3,7 +3,10 @@ resolver = "2"
 members = ["crates/lintel-diag", "crates/lintel-core", "crates/lintel-cli", "crates/lintel-lsp", "crates/lintel-wasm", "crates/lintel-docs"]
 
 [workspace.package]
-version = "0.1.0"
+# The v1.0.0 release version (T-18): declared ONCE here — every workspace
+# crate inherits it (`version.workspace = true`), and the release
+# workflow's tag guard refuses a `v*` tag that disagrees with it.
+version = "1.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.80"
