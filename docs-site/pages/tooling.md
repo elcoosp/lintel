@@ -83,3 +83,34 @@ falls back to the scanner alone, so broken input never blanks a file out
 of the workspace. Markup regions stay the scanner's job: the PHP grammar
 does not model JSX, so the lane contributes declaration structure while
 lintel-core remains the authority on component invocations.
+
+## Reviewing migrations (`migrate --dry-run`)
+
+`lintel migrate --dry-run` prints a unified diff per file without writing
+anything, and each hunk header carries the nearest enclosing function
+signature — git's funcname convention, PHP-shaped:
+
+```
+@@ -3,4 +3,4 @@ function Badge(string $label, bool $verified = false): Html
+-    return <span class="badge">{$label}</span>;
++    return new \Markup\Element('span', ['class' => 'badge'], [$label]);
+```
+
+A migration review shows which component each rewrite touches, not just
+which lines changed. Long signatures truncate at 80 characters with an
+ellipsis; a change before any declaration (the `<?php` prologue) carries
+no context.
+
+## The fuzz corpus (Phase 12)
+
+`make fuzz` (the 60-second smoke) and CI's ten-minute lane no longer
+start from an empty corpus: `crates/lintel-core/tests/fuzz_corpus.rs`
+seeds `fuzz/corpus/compile_fuzz/` with the differential acceptance's 220
+generated templates (deterministically replayed through the same
+strategies the acceptance runs), the 23 isolated reconciliation cases,
+the tree-sitter fallback edge shapes and the §7.2 threat payloads — 279
+seeds over the known-good and known-bad boundaries. The fuzz target also
+drives a full LSP session per input, so the tree-sitter scanner-fallback
+lane is exercised over arbitrary bytes. The oracle is the contract:
+valid PHP in → valid PHP out (the compiler is not a PHP parser —
+non-JSX bytes pass through verbatim), never panic, never loop.
