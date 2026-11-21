@@ -1,0 +1,48 @@
+{# The §11 Symfony Web Profiler panel template (§17.1-Q2's remaining
+   Symfony surface) — renders the LintelDataCollector snapshot inside the
+   WebProfilerBundle layout. An app registers it on the collector:
+
+       data_collector:
+           lintel:
+               id: Lintel\Twig\Profiler\LintelDataCollector
+               template: '@LintelTwig/panel.html.twig'
+
+   with the namespace pointed at this package's Resources/views. #}
+{% extends '@WebProfiler/Profiler/layout.html.twig' %}
+
+{% block toolbar %}
+    {% set icon %}
+        <span class="sf-toolbar-label">Lintel</span>
+        <span class="sf-toolbar-value">{{ collector.metrics.files }}</span>
+        <span class="sf-toolbar-label">files</span>
+    {% endset %}
+    {% set text %}
+        <div class="sf-toolbar-info-piece"><b>Files compiled</b><span>{{ collector.metrics.files }}</span></div>
+        <div class="sf-toolbar-info-piece"><b>Cache hits</b><span>{{ collector.metrics.cache_hits }}</span></div>
+        <div class="sf-toolbar-info-piece"><b>Cache misses</b><span>{{ collector.metrics.cache_misses }}</span></div>
+        <div class="sf-toolbar-info-piece"><b>Compile time</b><span>{{ collector.metrics.compile_time_ms }} ms</span></div>
+        <div class="sf-toolbar-info-piece"><b>Suspense flushed</b><span>{{ collector.metrics.suspense_flushed }}</span></div>
+    {% endset %}
+    {{ include('@WebProfiler/Profiler/toolbar.html.twig', { link: true }) }}
+{% endblock %}
+
+{% block menu %}
+    <span class="label">
+        <span class="icon">{# ⚡ #}L</span>
+        <strong>Lintel</strong>
+    </span>
+{% endblock %}
+
+{% block panel %}
+    <h2>Lintel <span class="dump-inline">— compiled components, cache and streaming for this window</span></h2>
+    <table class="metric">
+        <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+        <tbody>
+            <tr><th>Files compiled</th><td class="font-normal">{{ collector.metrics.files }}</td></tr>
+            <tr><th>Cache hits</th><td class="font-normal">{{ collector.metrics.cache_hits }}</td></tr>
+            <tr><th>Cache misses</th><td class="font-normal">{{ collector.metrics.cache_misses }}</td></tr>
+            <tr><th>Compilation time</th><td class="font-normal">{{ collector.metrics.compile_time_ms }} ms</td></tr>
+            <tr><th>Suspense boundaries flushed</th><td class="font-normal">{{ collector.metrics.suspense_flushed }}</td></tr>
+        </tbody>
+    </table>
+{% endblock %}
