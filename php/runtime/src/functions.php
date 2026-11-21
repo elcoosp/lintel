@@ -424,3 +424,8 @@ function stream_via(mixed $tree, FlushTransport $transport): string
 
     return '';
 }
+
+// The §10 server adapters (RoadRunner/Swoole/FrankenPHP/ReactPHP) — loaded
+// with the runtime for every lane (composer files autoload AND direct
+// requires like scripts/suspense-demo.php).
+require_once __DIR__ . '/transports.php';
