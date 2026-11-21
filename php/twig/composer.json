@@ -1,0 +1,48 @@
+{
+    "name": "lintel/twig",
+    "description": "The Symfony Twig bridge: the lintel_render() Twig function renders a Lintel component invocation, reusing the dev loader for .lintel.php sources (architecture doc §11 Symfony interop, §17.1-Q2 Laravel & Symfony packages)",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Lintel\\Twig\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lintel\\Twig\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.1",
+        "lintel/lintel": "*",
+        "lintel/runtime": "*",
+        "twig/twig": "^3.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../lintel"
+        },
+        {
+            "type": "path",
+            "url": "../runtime"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require-dev": {
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    },
+    "scripts": {
+        "test": "phpunit --configuration phpunit.xml",
+        "stan": "phpstan analyse --memory-limit=1G --no-progress"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "lintel/lintel": true
+        }
+    },
+    "prefer-stable": true
+}
