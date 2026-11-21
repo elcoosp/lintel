@@ -58,10 +58,47 @@ Details the doc does not pin down, decided here:
    generator and `\Lintel\c()` renders it (generators are iterable, and a
    falsy guard short-circuits before the closure runs).
 
+## The §10 flush runtime (php/runtime)
+
+The runtime that consumes these chunks ships in `php/runtime/src/functions.php`:
+
+- **`Lintel\stream(mixed $tree, ?callable $flush = null): string`** walks a
+  render tree the way `c()` walks a `Traversable` — chunk strings are
+  compiler-produced markup (or data already escaped at build time) and sink
+  raw, `Html` is the trusted sink, null/bool render empty, scalars
+  stringify, anything else is rejected. Each chunk reaches the `$flush`
+  sink as it is produced; without a sink the bytes are captured (chunk
+  order is still the flush order).
+- **The `<Suspense>` boundary** (`new \Lintel\Suspense(fallback: …, work: …)`
+  yielded where the boundary sits): the fallback renders through `c()` and
+  flushes immediately inside `<div id="lt-N">…</div>`; the work runs in a
+  fiber pumped round-robin once the shell finished, and each resolution
+  flushes `<template id="lt-N-r">…</template><script>lintelSwap("lt-N")</script>`
+  **out of order** — a fast sibling flushes before a slow earlier boundary.
+  The ≈250-byte swap runtime (184 bytes measured) is emitted once per
+  render with the first resolved boundary and replaces the placeholder in
+  place (`replaceChildren(t.content.cloneNode(true))`). Resolved generators
+  walk as markup streams (their chunks flush progressively; nested
+  boundaries join the pump); every other resolved value is data and renders
+  through `c()`, so **no streaming path bypasses the escapers** (threat
+  cases in `php/runtime/tests/ThreatCorpusTest.php`).
+- **Sync compat (§10 "a page works everywhere"):** a `Suspense` consumed
+  outside the flush runtime — through `c()`, i.e. the sync target — runs
+  inline: no fallback, the resolved value renders whole.
+- **Flush transports** (`Lintel\FlushTransport`): `stream_via($tree, $transport)`
+  wires `begin()` / per-chunk `write()` / `end()`. `CliFlushTransport`
+  (echo + flush) and `FpmFlushTransport` (`X-Accel-Buffering: no` +
+  buffered-output teardown + flush) ship; FrankenPHP streams through the
+  same echo+flush shape, and the live RoadRunner/Swoole/OpenSwoole and
+  ReactPHP/AMPHP adapters are CI-lane work.
+
 ## What this target does not do yet
 
-- **Suspense boundaries and out-of-order flushing** (doc §10's `<Suspense>`
-  protocol) are runtime/framework concerns; the compiler emits plain
-  generators and no swap-script scaffolding.
-- **Adapters** (FPM flush, FrankenPHP, RoadRunner, Swoole) are future work;
-  the PHP runtime that consumes these chunks ships separately.
+- **Compiler-side boundary lowering.** The compiler emits plain generators
+  and no swap-script scaffolding: boundaries enter the tree as
+  `\Lintel\Suspense` values from hand-authored streaming components, and a
+  boundary consumed through a `c()` call (a nested component rendered by
+  the string-result `c(…)` chunk shape) runs inline by the sync rule
+  above. Compiler emission of boundary scaffolding is future work.
+- **Adapters beyond the transport seam** (live FrankenPHP, RoadRunner,
+  Swoole/OpenSwoole, ReactPHP/AMPHP) need those runtimes — CI-lane work.
