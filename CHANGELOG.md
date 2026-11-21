@@ -205,6 +205,55 @@ versions with SemVer, and the language spec versions separately
   `'1'` — no fold preserves the output. The `analyze_children` bench
   drift-checks the counters.
 
+- **The tree-sitter LSP lane** (§17.1 Q3's "tree-sitter grammar", the
+  Phase 11 M1 card): `crates/lintel-lsp/src/tree_sitter.rs` runs the
+  upstream `tree-sitter-php` grammar as an independent second parse of
+  every indexed source, and `textDocument/definition`,
+  `textDocument/rename` and `textDocument/references` consult the
+  tree-sitter view IN ADDITION to the lintel-core scanner's (the Phase 9
+  persistent index): the queries read a merged declaration table (the
+  union, deduplicated by name + offset — the lanes' byte offsets agree),
+  so a component only one lane sees still resolves, renames and lists
+  references. A file whose tree-sitter parse cannot see its declarations
+  (a broken declaration header such as `function Badge(***): Html`)
+  falls back to the scanner alone, and the per-file lane
+  (`tree-sitter` / `scanner-fallback`) rides `.lintel-cache/lsp-index.json`
+  (shape version 2) across sessions. Markup regions stay the scanner's
+  authority — the PHP grammar does not model JSX, and no upstream JSX
+  extension exists to reuse (the card's documented grammar limit). The
+  acceptance is a monorepo-fixture integration test
+  (`crates/lintel-lsp/tests/tree_sitter.rs`): cross-file definition into
+  a closed file, rename spanning declaration + invocation, references
+  across the session cache, and the malformed file staying declared
+  through the fallback.
+- **The RoadRunner progressive per-boundary timing lane** (§10, the
+  Phase 11 M2 card; closes the "progressive per-boundary timing on
+  RoadRunner is CI-lane work" note): `bench/lib/ProgressiveTiming.php`
+  renders a three-boundary `<Suspense>` page through the REAL
+  `RoadRunnerFlushTransport` (a recording worker drains
+  `respond()`, one frame per chunk), models deterministic per-boundary
+  latency (`usleep` slices interleaved with `Fiber::suspend()`), and
+  measures the time to the first placeholder flush (µs), the first
+  resolved chunk and the fully resolved page — asserting INSIDE the
+  harness that the placeholder for boundary N flushes before the
+  resolved content for boundary N-1, resolution stays in order for the
+  deterministic latencies, and the RR wire order equals the flush order.
+  A broken flusher fails the lane instead of producing numbers. The lane
+  is wired into `bench/run.php` (the S6 section + `progressive-timing.json`),
+  CI's `bench` job through `make bench` (both the Docker-pinned and
+  native lanes; `spiral/roadrunner-http` rides bench's dev deps for the
+  `HttpWorkerInterface`), and a Rust integration test
+  (`crates/lintel-cli/tests/progressive_timing.rs`) drives the CLI entry
+  (`bench/lib/progressive_invariant.php`) under `PHP_BIN`.
+- **The Windows daemon socket lane** (T-12's carried deferral, the
+  Phase 11 M3 card): a `windows-daemon` CI job runs the whole watch suite
+  on a `windows-latest` runner over the daemon's loopback-TCP fallback —
+  serve + recompile-on-change, the build-cache-backed rebuilds, the
+  concurrent-clients lane and the p50/p99-vs-spawn measurement (serial
+  threads: each test tears down a scratch directory whose socket the
+  next daemon must not hold open on Windows's strict directory locking).
+  `docs/daemon-protocol.md` and the watch module docs record the closure.
+
 ### Fixed
 
 - The pedantic-clippy gate regression in the newest CLI code (four
