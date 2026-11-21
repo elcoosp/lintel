@@ -9,6 +9,32 @@ versions with SemVer, and the language spec versions separately
 
 ### Added
 
+- **§10 server adapters** (`php/runtime/src/transports.php`): the
+  `SwooleFlushTransport`, `ReactPHPFlushTransport`, `FrankenPHPFlushTransport`
+  and `RoadRunnerFlushTransport` lanes on the existing `FlushTransport`
+  seam — each only owns HOW a chunk reaches the wire, so streaming never
+  bypasses the escapers. The RoadRunner lane is exercised end-to-end
+  against a real `rr serve` application server (the php job's new
+  `adapters` CI step installs rr and runs the suite with `LINTEL_E2E_RR=1`;
+  the FrankenPHP lane runs over a real `php -S` server; the Swoole and
+  ReactPHP lanes run against structural fakes — the extensions ship no
+  autoloadable surface).
+- **The RFC convergence runtime** (`php/markup`, `markup/markup`):
+  `\Markup\Element` / `\Markup\Fragment` / `\Markup\Html` + `render()` —
+  the runtime side the `--target=rfc` lowering needed
+  (`docs/rfc-alignment.md`). Escape-by-default at print time with the same
+  attribute routing the string target's helpers enforce; the e2e compiles
+  one fixture with BOTH targets and asserts `\Markup\render(...)` renders
+  the string target's bytes (`\Lintel\c(...)`). The package is standalone:
+  RFC output runs with zero Lintel dependency.
+- **The Laravel Blade bridge** (`php/blade`, `lintel/blade`): the
+  `@lintel('Badge', ['name' => $user])` directive — compiles to a bridge
+  render call, loads `.lintel.php` components through the §6.10 dev
+  loader (compile-if-stale; prod builds autoload), renders through `c()`.
+- **The Symfony Twig bridge** (`php/twig`, `lintel/twig`): the
+  `lintel_render('Badge', {name: user})` Twig function — same loader +
+  escaper contract, marked safe for markup so Twig does not double-escape
+  the runtime's output.
 - **§10 streaming & suspense runtime** (`docs/stream-alignment.md`):
   `Lintel\stream($tree, ?callable $flush = null)` walks a stream-target
   render tree progressively (chunk order is the flush order); the
@@ -25,8 +51,8 @@ versions with SemVer, and the language spec versions separately
   CLI lane (`CliFlushTransport`) and the FPM lane (`FpmFlushTransport`,
   `X-Accel-Buffering: no` + buffered-output teardown), the FPM adapter
   exercised over a real `php -S` HTTP server in
-  `php/runtime/tests/StreamingTransportTest.php`; live
-  RoadRunner/Swoole/FrankenPHP adapters stay CI-lane work.
+  `php/runtime/tests/StreamingTransportTest.php`; the four server adapters
+  (RoadRunner/Swoole/FrankenPHP/ReactPHP) landed on top of the same seam.
 - The §10 suspense demo: `php scripts/suspense-demo.php` (capture) or
   served with `php -S` for the progressive HTTP view.
 - **Type-driven escape elision** (§7.3-Y2, `docs/type-elision.md`): the
