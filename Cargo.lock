@@ -536,7 +536,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "lintel-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "fs2",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "lintel-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "lintel-diag",
@@ -558,11 +558,11 @@ dependencies = [
 
 [[package]]
 name = "lintel-diag"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "lintel-docs"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "lintel-diag",
  "pulldown-cmark",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "lintel-lsp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fs2",
  "lintel-core",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "lintel-wasm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "lintel-core",
  "wasm-bindgen",
