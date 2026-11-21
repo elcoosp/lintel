@@ -2,6 +2,14 @@ parameters:
     level: max
     paths:
         - php
+    # The repo root carries no composer.json, so PHPStan cannot discover the
+    # packages' autoloaders on its own — boot them so the analysis sees the
+    # dev deps the packages type against (Spiral\RoadRunner\*, illuminate\*,
+    # Twig\*).
+    bootstrapFiles:
+        - php/runtime/vendor/autoload.php
+        - php/blade/vendor/autoload.php
+        - php/twig/vendor/autoload.php
     excludePaths:
         - php/runtime/vendor
         - php/runtime/.phpunit.cache (?)
@@ -9,6 +17,17 @@ parameters:
         - php/lintel/.phpunit.cache (?)
         - php/lintel-phpstan/vendor
         - php/lintel-phpstan/.phpunit.cache (?)
+        - php/markup/vendor
+        - php/markup/.phpunit.cache (?)
+        - php/blade/vendor
+        - php/blade/.phpunit.cache (?)
+        - php/twig/vendor
+        - php/twig/.phpunit.cache (?)
+        # The markup package's e2e fixture is a `.lintel.php` source —
+        # compiler input, not PHP (the same rule the bridge's fixtures use).
+        - php/markup/tests/fixture
+        - php/blade/tests/fixture
+        - php/twig/tests/fixture
         # The bridge's fixtures are `.lintel.php` sources — compiler input,
         # not PHP (the bridge's own integration test drives PHPStan over
         # their compiled artifacts with its own ruleset).
