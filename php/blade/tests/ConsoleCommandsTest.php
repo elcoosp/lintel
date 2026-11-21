@@ -27,27 +27,33 @@ use Symfony\Component\Console\Output\BufferedOutput;
 final class ConsoleCommandsTest extends TestCase
 {
     /** `lintel:build` compiles the fixture: artifacts into the cache dir
-     * and the `lintel.json` manifest into the working directory. */
+     * and the `lintel.json` manifest into the working directory.
+     *
+     * The M0 cwd-hygiene regression: the bare `--manifest` write resolves
+     * against the workspace being compiled (the src/… + cache/ ancestor —
+     * the app root), never the process cwd, so this runs from wherever
+     * PHPUnit sits (no chdir — the workaround that once scattered a stray
+     * `lintel.json` at the outer cwd under some invocation orderings) and
+     * the manifest must still land at `$root`. */
     public function testBuildCommandCompilesIntoCacheDir(): void
     {
         $root = $this->workspace();
         \mkdir($root . '/src', 0777, true);
         \copy(__DIR__ . '/fixture/Badge.lintel.php', $root . '/src/Badge.lintel.php');
 
-        $back = \getcwd() ?: '.';
-        \chdir($root); // `--manifest` (bare) writes lintel.json to the cwd — artisan runs from the project root
-        try {
-            [$rc, $text] = $this->runCommand(new BuildCommand($root . '/cache', [$root . '/src']), $root);
-        } finally {
-            \chdir($back);
-        }
+        $runnerCwd = \getcwd() ?: '.';
+        [$rc, $text] = $this->runCommand(new BuildCommand($root . '/cache', [$root . '/src']), $root);
 
         self::assertSame(0, $rc, $text);
         self::assertFileExists($root . '/cache/Badge.php');
-        self::assertFileExists($root . '/lintel.json');
+        self::assertFileExists($root . '/lintel.json', 'the manifest lands at the app root');
         $manifest = \json_decode((string) \file_get_contents($root . '/lintel.json'), true);
         self::assertIsArray($manifest);
         self::assertArrayHasKey('prod', $manifest, 'the T-31 manifest shape');
+        self::assertFileDoesNotExist(
+            $runnerCwd . '/lintel.json',
+            'no stray manifest at the process cwd (M0 cwd hygiene)',
+        );
     }
 
     /** `lintel:check` succeeds on clean sources. */
