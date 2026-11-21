@@ -229,7 +229,10 @@ fn analyze_children_source() -> String {
 fn analyze_children_hints(src: &str) -> TypeHints {
     let mut hints = Vec::new();
     for (index, line) in src.lines().enumerate() {
-        if line.contains("page {{$page}} of") {
+        // `writeln!`'s format escaping turned `{{$page}}` into the literal
+        // `{$page}` the source actually carries — scan for what is on the
+        // page, not for what the pattern looks like in Rust source.
+        if line.contains("page {$page} of") {
             hints.push(ChildHint {
                 line: u32::try_from(index + 1).expect("line fits u32"),
                 expr: "$page".to_string(),
