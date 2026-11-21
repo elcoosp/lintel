@@ -39,9 +39,13 @@ use std::time::UNIX_EPOCH;
 
 use serde_json::{json, Value};
 
+use crate::tree_sitter::{self, TsScan};
+
 /// The on-disk cache's shape version — a mismatch resets the cache (the
-/// index re-parses; the file is rewritten on the next persist).
-const CACHE_VERSION: u64 = 1;
+/// index re-parses; the file is rewritten on the next persist). Version 2
+/// added the per-entry tree-sitter scan (the Phase 11 lane): v1 caches
+/// reset once, transparently.
+const CACHE_VERSION: u64 = 2;
 
 /// The persist's write goes through an exclusive `flock(2)` (fs2:
 /// `flock` on Unix, `LockFileEx` on Windows): two concurrent LSP sessions
@@ -98,7 +102,13 @@ pub(crate) struct Entry {
     mtime: Option<(u64, u32)>,
     /// The file size in bytes at parse time (`None` alongside `mtime`).
     size: Option<u64>,
+    /// The lintel-core scanner's declarations (the JSX-structure
+    /// authority).
     declarations: Vec<IndexedComponent>,
+    /// The independent tree-sitter parse (the Phase 11 lane): its own
+    /// declaration view plus which lane served the file. Persisted
+    /// alongside the scanner facts.
+    ts: TsScan,
 }
 
 /// The workspace index: the walked file set with their declarations.
@@ -151,16 +161,17 @@ impl WorkspaceIndex {
                     }
                 }
             }
-            let Some((declarations, mtime, size)) = parse_from_disk(&path) else {
+            let Some((declarations, ts, facts)) = parse_from_disk(&path) else {
                 continue; // unreadable or non-UTF8: not indexable
             };
             files.insert(
                 uri,
                 Entry {
                     path,
-                    mtime: Some(mtime),
-                    size: Some(size),
+                    mtime: Some((facts.0, facts.1)),
+                    size: Some(facts.2),
                     declarations,
+                    ts,
                 },
             );
         }
@@ -178,15 +189,6 @@ impl WorkspaceIndex {
         let mut uris: Vec<String> = self.files.keys().cloned().collect();
         uris.sort();
         uris
-    }
-
-    /// The stored declarations of one indexed file, WITHOUT disk
-    /// validation (the fast path for pure lookups over the client-synced
-    /// entries).
-    pub(crate) fn declarations(&self, uri: &str) -> Option<&[IndexedComponent]> {
-        self.files
-            .get(uri)
-            .map(|entry| entry.declarations.as_slice())
     }
 
     /// The fresh text + declarations of one indexed file: the disk bytes
@@ -211,7 +213,7 @@ impl WorkspaceIndex {
                 .unwrap_or_default();
             return Some((text, declarations));
         }
-        let Some((declarations, mtime, size)) = parse_from_disk(&path) else {
+        let Some((declarations, ts, facts)) = parse_from_disk(&path) else {
             // The file became unreadable or vanished: nothing this URI can
             // contribute — evict the entry like any other stale fact.
             self.files.remove(uri);
@@ -221,9 +223,10 @@ impl WorkspaceIndex {
             uri.to_string(),
             Entry {
                 path,
-                mtime: Some(mtime),
-                size: Some(size),
+                mtime: Some((facts.0, facts.1)),
+                size: Some(facts.2),
                 declarations: declarations.clone(),
+                ts,
             },
         );
         self.persist();
@@ -244,6 +247,7 @@ impl WorkspaceIndex {
             },
         };
         let declarations = scan_declarations(text);
+        let ts = tree_sitter::scan(text);
         self.files.insert(
             uri.to_string(),
             Entry {
@@ -251,8 +255,23 @@ impl WorkspaceIndex {
                 mtime: None,
                 size: None,
                 declarations,
+                ts,
             },
         );
+    }
+
+    /// The merged declaration view of one workspace file (the tree-sitter
+    /// lane unioned with the scanner's facts — [`tree_sitter::merge`]) on
+    /// its freshness-validated text. This is the accessor the cross-file
+    /// queries (definition, rename, references, symbols) read: a
+    /// declaration only one lane sees still serves the workspace.
+    pub(crate) fn merged_file(&mut self, uri: &str) -> Option<(String, Vec<IndexedComponent>)> {
+        let (text, declarations) = self.fresh_text(uri)?;
+        let merged = match self.files.get(uri) {
+            Some(entry) => tree_sitter::merge(declarations, &entry.ts),
+            None => declarations,
+        };
+        Some((text, merged))
     }
 
     /// Persist the whole index to `.lintel-cache/lsp-index.json`,
@@ -273,7 +292,8 @@ impl WorkspaceIndex {
                     "mtime": mtime.0,
                     "nanos": mtime.1,
                     "size": size,
-                    "declarations": declarations_to_json(&entry.declarations),
+                    "declarations": declarations_json(&entry.declarations),
+                    "ts": entry.ts.to_json(),
                 }),
             );
         }
@@ -304,12 +324,22 @@ impl Entry {
     }
 }
 
-/// Parse one file's declarations from the disk bytes, returning the
-/// declarations plus the freshness facts they were parsed under.
-fn parse_from_disk(path: &Path) -> Option<(Vec<IndexedComponent>, (u64, u32), u64)> {
+/// One disk parse's both lanes' views plus the freshness facts they were
+/// parsed under.
+type DiskParse = (Vec<IndexedComponent>, TsScan, Facts);
+
+/// Parse one file's declarations from the disk bytes, returning both
+/// lanes' views (scanner + tree-sitter) plus the freshness facts they
+/// were parsed under.
+fn parse_from_disk(path: &Path) -> Option<DiskParse> {
     let text = fs::read_to_string(path).ok()?;
-    let (mtime, size) = file_facts(path)?;
-    Some((scan_declarations(&text), mtime, size))
+    let facts = file_facts(path)?;
+    let (mtime, size) = facts;
+    Some((
+        scan_declarations(&text),
+        tree_sitter::scan(&text),
+        (mtime.0, mtime.1, size),
+    ))
 }
 
 /// Scan one source's component declarations into the index's shape — the
@@ -366,33 +396,16 @@ fn load_cache(root: &Path) -> Option<HashMap<String, CachedEntry>> {
         let nanos = u32::try_from(entry.get("nanos")?.as_u64()?).ok()?;
         let size = entry.get("size")?.as_u64()?;
         let declarations = entry.get("declarations")?.as_array()?;
-        let declarations: Vec<IndexedComponent> = declarations
-            .iter()
-            .filter_map(|declaration| {
-                Some(IndexedComponent {
-                    name: declaration.get("name")?.as_str()?.to_string(),
-                    offset: usize::try_from(declaration.get("offset")?.as_u64()?).ok()?,
-                    params: declaration
-                        .get("params")?
-                        .as_array()?
-                        .iter()
-                        .filter_map(|param| {
-                            let pair = param.as_array()?;
-                            Some((
-                                pair.first()?.as_str()?.to_string(),
-                                usize::try_from(pair.get(1)?.as_u64()?).ok()?,
-                            ))
-                        })
-                        .collect(),
-                })
-            })
-            .collect();
+        let declarations: Vec<IndexedComponent> =
+            declarations_from_json(&Value::Array(declarations.clone()));
+        let ts = TsScan::from_json(entry.get("ts")?)?;
         out.insert(
             uri.clone(),
             CachedEntry {
                 mtime: (mtime, nanos),
                 size,
                 declarations,
+                ts,
             },
         );
     }
@@ -406,6 +419,7 @@ struct CachedEntry {
     mtime: (u64, u32),
     size: u64,
     declarations: Vec<IndexedComponent>,
+    ts: TsScan,
 }
 
 impl CachedEntry {
@@ -423,12 +437,14 @@ impl CachedEntry {
             mtime: Some(self.mtime),
             size: Some(self.size),
             declarations: self.declarations.clone(),
+            ts: self.ts.clone(),
         }
     }
 }
 
-/// The indexed declarations as the cache file's JSON rows.
-fn declarations_to_json(declarations: &[IndexedComponent]) -> Value {
+/// The declarations as the cache file's JSON rows (shared with the
+/// tree-sitter lane's persisted scan).
+pub(crate) fn declarations_json(declarations: &[IndexedComponent]) -> Value {
     Value::Array(
         declarations
             .iter()
@@ -445,6 +461,34 @@ fn declarations_to_json(declarations: &[IndexedComponent]) -> Value {
             })
             .collect(),
     )
+}
+
+/// The declarations a cache row carries; an empty list for an
+/// absent/malformed row (the lane re-parses the file on the next access).
+pub(crate) fn declarations_from_json(value: &Value) -> Vec<IndexedComponent> {
+    let Some(rows) = value.as_array() else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|declaration| {
+            Some(IndexedComponent {
+                name: declaration.get("name")?.as_str()?.to_string(),
+                offset: usize::try_from(declaration.get("offset")?.as_u64()?).ok()?,
+                params: declaration
+                    .get("params")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|param| {
+                        let pair = param.as_array()?;
+                        Some((
+                            pair.first()?.as_str()?.to_string(),
+                            usize::try_from(pair.get(1)?.as_u64()?).ok()?,
+                        ))
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 /// Recursively collect the `.lintel.php` files under `root`, sorted per
@@ -666,6 +710,10 @@ mod tests {
         "function Badge(string $label): Html\n{\n    return <b>{$label}</b>;\n}\n"
     );
 
+    /// The buffer-synced edit the buffer-sync test drives (`Badge` →
+    /// `Edited`).
+    const EDITED: &str = "<?php\nfunction Edited(): Html\n{\n    return <em />;\n}\n";
+
     #[test]
     fn file_uri_round_trips_through_minimal_encoding() {
         let plain = PathBuf::from("/tmp/ws/Salute.lintel.php");
@@ -700,12 +748,13 @@ mod tests {
         fs::write(root.join("README.md"), "not a source").expect("writes");
         fs::write(root.join("src/skip.txt"), DECLARING).expect("writes");
 
-        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
         let uris = index.uris();
         assert_eq!(uris.len(), 2, "only .lintel.php sources walk in: {uris:?}");
-        let badge = index
-            .declarations(&super::path_to_uri(&root.join("src/Badge.lintel.php")).expect("uri"))
+        let (text, badge) = index
+            .merged_file(&super::path_to_uri(&root.join("src/Badge.lintel.php")).expect("uri"))
             .expect("indexed");
+        assert_eq!(text, DECLARING);
         assert_eq!(badge.len(), 1);
         assert_eq!(badge[0].name, "Badge");
         assert_eq!(
@@ -785,8 +834,8 @@ mod tests {
 
         // Session 2 over the unchanged workspace: the cache round-trips —
         // declarations come back without a re-parse.
-        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
-        let badge = index.declarations(&uri).expect("cache-hit entry");
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let (_text, badge) = index.merged_file(&uri).expect("cache-hit entry");
         assert_eq!(badge[0].name, "Badge");
 
         // Session 3 after an edit: the stale cache entry is evicted.
@@ -795,8 +844,8 @@ mod tests {
             "<?php\nfunction Later(): Html\n{\n    return <u />;\n}\n",
         )
         .expect("rewrites");
-        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
-        let badge = index.declarations(&uri).expect("refreshed entry");
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let (_text, badge) = index.merged_file(&uri).expect("refreshed entry");
         assert_eq!(
             badge[0].name, "Later",
             "mtime+size eviction crosses sessions"
@@ -811,25 +860,92 @@ mod tests {
         let uri = super::path_to_uri(&source).expect("uri");
         let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
 
-        // A client sync (didChange/didSave full sync): the buffer text is
-        // the truth while the file is open.
-        index.upsert_from_text(
-            &uri,
-            "<?php\nfunction Edited(): Html\n{\n    return <em />;\n}\n",
-        );
-        let edited = index.declarations(&uri).expect("entry");
+        // A client sync (didChange/didSave full sync): the synced text
+        // parses into the entry immediately — both lanes ride the synced
+        // text. The observable at the index level: the synced text's
+        // declarations serve the merged view once the disk matches it
+        // (the buffer-is-truth-while-open contract is the SERVER's — the
+        // documents arm answers from the live buffer, covered by the
+        // lsp.rs scenarios).
+        index.upsert_from_text(&uri, EDITED);
+        fs::write(&source, EDITED).expect("writes the synced text");
+        let edited = index.merged_file(&uri).expect("entry").1;
         assert_eq!(
             edited[0].name, "Edited",
             "the synced text re-parses immediately"
         );
 
-        // The disk still holds the original: a fresh (closed-file) access
-        // re-validates from the disk and restores the disk truth.
+        // The disk changes back behind the synced entry: a fresh
+        // (closed-file) access re-validates from the disk and restores
+        // the disk truth.
+        fs::write(&source, DECLARING).expect("rewrites the disk");
         let (_text, declarations) = index.fresh_text(&uri).expect("fresh");
         assert_eq!(
             declarations[0].name, "Badge",
             "the disk re-validates the entry"
         );
+    }
+
+    #[test]
+    fn the_tree_sitter_lane_persists_with_the_entry_and_survives_a_session() {
+        // The Phase 11 lane: every entry carries its tree-sitter scan, and
+        // the merged view (scanner ∪ tree-sitter) rides the on-disk cache
+        // into the next session — a cache-hit entry still serves the
+        // tree-sitter facts without a re-parse.
+        let root = scratch("ts-lane");
+        let source = root.join("Badge.lintel.php");
+        fs::write(&source, DECLARING).expect("writes");
+        let uri = super::path_to_uri(&source).expect("uri");
+
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let (text, declarations) = index.merged_file(&uri).expect("merged");
+        assert_eq!(text, DECLARING);
+        assert_eq!(declarations.len(), 1, "the healthy pair dedupes");
+        let cache_body =
+            fs::read_to_string(root.join(".lintel-cache/lsp-index.json")).expect("cache exists");
+        assert!(
+            cache_body.contains("\"lane\":\"tree-sitter\""),
+            "the lane rides the cache row"
+        );
+        drop(index);
+
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let (_text, declarations) = index.merged_file(&uri).expect("cache-hit merged");
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].name, "Badge");
+    }
+
+    #[test]
+    fn a_fallback_laned_file_still_serves_the_scanner_facts_through_the_merge() {
+        // A broken declaration header: tree-sitter sees no usable
+        // declarations (the fallback lane), the scanner tolerates the
+        // malformed parameter list — the merged view keeps the file's
+        // component alive, across a session boundary too.
+        let root = scratch("ts-fallback");
+        let broken = "<?php\nfunction Badge(***): Html\n{\n    return <b>{$label}</b>;\n}\n";
+        let source = root.join("Badge.lintel.php");
+        fs::write(&source, broken).expect("writes");
+        let uri = super::path_to_uri(&source).expect("uri");
+
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let cache_body =
+            fs::read_to_string(root.join(".lintel-cache/lsp-index.json")).expect("cache exists");
+        assert!(
+            cache_body.contains("\"lane\":\"scanner-fallback\""),
+            "the fallback lane rides the cache row"
+        );
+        let (_text, declarations) = index.merged_file(&uri).expect("merged");
+        assert_eq!(
+            declarations.len(),
+            1,
+            "the scanner's declaration survives the fallback"
+        );
+        assert_eq!(declarations[0].name, "Badge");
+        drop(index);
+
+        let mut index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let (_text, declarations) = index.merged_file(&uri).expect("cache-hit merged");
+        assert_eq!(declarations[0].name, "Badge");
     }
 
     #[test]
