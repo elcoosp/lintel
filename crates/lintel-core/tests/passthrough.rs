@@ -106,3 +106,35 @@ fn js_like_code_in_script_php_string() {
 fn heredoc_start_without_label_passes_through() {
     assert_passthrough("<?php\n$h = <<<\"\u{369}\";\n$n = <<<\u{369} <x></x>\n");
 }
+
+/// The Phase 12 fuzz-corpus crash (crash-44cd1628): a `-----$p` parameter
+/// list is INVALID PHP (`php -l` rejects it — `--` cannot chain), but the
+/// compiler is not a PHP parser: the non-JSX bytes pass through verbatim
+/// (§3's sacred principle) while the JSX region still lowers. The fuzz
+/// oracle learned the same boundary — valid PHP in → valid PHP out, not
+/// "any compiling input emits valid PHP" — and this test pins the
+/// passthrough half so the boundary stays intentional, not accidental.
+#[test]
+fn invalid_passthrough_php_compiles_with_verbatim_bytes_and_lowered_jsx() {
+    let src = concat!(
+        "<?php\n",
+        "function T(-----------------------------------------$p) { return <div {...['onclick' => 'alert(1)']}>t</div>; }\n",
+    );
+    let out = compile(src, &Options::default())
+        .expect("the compiler compiles; it does not validate plain PHP");
+    // The invalid PHP rides verbatim.
+    assert!(
+        out.php
+            .contains("function T(-----------------------------------------$p)"),
+        "the non-JSX bytes pass through untouched: {}",
+        out.php
+    );
+    // The JSX region lowered.
+    assert!(
+        out.php.contains("\\Lintel\\attrs(") && out.php.contains("\\Lintel\\Html("),
+        "the spread lane lowered: {}",
+        out.php
+    );
+    // Line preservation holds.
+    assert_eq!(src.lines().count(), out.php.lines().count());
+}
