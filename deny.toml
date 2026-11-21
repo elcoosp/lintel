@@ -24,6 +24,10 @@ allow = [
     # notify's Linux backend (inotify, inotify-sys) is classic ISC —
     # OSI-approved and FSF free/libre, BSD-family permissive.
     "ISC",
+    # The tree-sitter lane's build chain (foldhash, a serde_json/hashbrown
+    # transitive) is classic Zlib — OSI-approved and FSF free/libre, the
+    # same permissive family as the entries above.
+    "Zlib",
 ]
 confidence-threshold = 0.93
 
