@@ -119,9 +119,8 @@ final class AnalyzeElisionTest extends TestCase
         self::assertSame('float', $types['$price'] ?? 'missing', json_encode($this->report, JSON_PRETTY_PRINT) ?: '');
         self::assertSame('numeric-string', $types['$code'] ?? 'missing', json_encode($this->report, JSON_PRETTY_PRINT) ?: '');
         self::assertSame('literal', $types['MODE'] ?? 'missing', json_encode($this->report, JSON_PRETTY_PRINT) ?: '');
-        // The conservative verdicts the report still carries: an unproven
-        // child and a bool (reported, never elidable — c() renders bools
-        // as '' while raw interpolation renders '1').
+        // The conservative verdicts the report still carries: unproven
+        // children report `mixed` and keep the helper.
         self::assertSame('mixed', $types['$label'] ?? 'missing', 'unproven children report');
         self::assertSame('mixed', $types['$unit'] ?? 'missing', 'unproven children report');
         self::assertSame('bool', $types['$on'] ?? 'missing', 'bool reports as non-elidable');
@@ -131,7 +130,8 @@ final class AnalyzeElisionTest extends TestCase
     public function testTheCompiledOutputElidesExactlyTheProvenChildren(): void
     {
         // int/float/numeric-string fold to the raw expression, the literal
-        // to its escaped value; mixed/bool keep `\Lintel\c()`.
+        // to its escaped value, bool to the parity-safe ternary (M3); mixed
+        // keeps `\Lintel\c()`.
         self::assertStringContainsString(
             "new \\Lintel\\Html('<p>' . \$count . ' ' . \\Lintel\\c(\$label) . '</p>')",
             $this->compiled,
@@ -152,7 +152,10 @@ final class AnalyzeElisionTest extends TestCase
             $this->compiled,
             $this->compiled,
         );
-        self::assertStringContainsString('\\Lintel\\c($on)', $this->compiled, $this->compiled);
+        // bool folds to the parity-safe ternary (M3): c() renders '' for
+        // both truth values and the fold emits the same constant while
+        // still evaluating the expression.
+        self::assertStringContainsString("((\$on) ? '' : '')", $this->compiled, $this->compiled);
         // Line preservation holds over the whole artifact.
         self::assertSame(
             count(file(self::FIXTURE) ?: []),
@@ -221,14 +224,114 @@ PHP;
         // literal: the constant is escaped at compile time and cannot be
         // attacker-controlled at runtime.
         self::assertSame('<b>AT&amp;T</b>', $rendered($renders['literal']));
-        // bool stays wrapped: c(true) is '' — a raw '1' interpolation
-        // would change the output, so the helper keeps it (render parity).
+        // bool: the M3 ternary fold renders '' for both truth values —
+        // byte-identical to c()'s output (render parity).
         self::assertSame('<i></i>', $rendered($renders['flags']));
         self::assertSame('<i></i>', $rendered($renders['flags_false']));
         // Parity evidence: what c() renders for the same values the
         // elision's runtime forms produce.
         self::assertStringContainsString('c(true)=' . \PHP_EOL, $stdout, 'c(true) is empty');
         self::assertStringContainsString("c('42')=42", $stdout, 'c(numeric-string) is the identity');
+    }
+
+    /** (c) The M3 bool fold: parity for both truth values, the side
+     * effects preserved, and a mis-proven hostile string renders empty —
+     * the fold's markup is the constant `''`, never runtime content. */
+    public function testBoolFoldIsParitySafeSideEffectPreservingAndMisProofSafe(): void
+    {
+        $dir = sys_get_temp_dir() . '/lintel-bool-' . uniqid();
+        @mkdir($dir);
+        $lines = [
+            '<?php',
+            '',
+            'namespace Lintel\\Fixtures;',
+            '',
+            'use Lintel\\Html;',
+            '',
+            'function Probe(): bool',
+            '{',
+            '    $GLOBALS[\'probes\'] = ($GLOBALS[\'probes\'] ?? 0) + 1;',
+            '    return true;',
+            '}',
+            '',
+            'function Flags(bool $on): Html',
+            '{',
+            '    return <i>{$on}{probe()}</i>;',
+            '}',
+            '',
+            'function Hostile(string $x): Html',
+            '{',
+            '    return <q>{$x}</q>;',
+            '}',
+        ];
+        $src = $dir . '/Bool.lintel.php';
+        file_put_contents($src, implode("\n", $lines) . "\n");
+        $lineOf = static function (string $needle) use ($lines): int {
+            foreach ($lines as $index => $line) {
+                if (str_contains($line, $needle)) {
+                    return $index + 1;
+                }
+            }
+            self::fail("fixture line not found: {$needle}");
+        };
+        // The analysis claims `bool` for all three children — including
+        // the LIE for Hostile's string prop (the mis-proven threat case).
+        $report = [
+            'version' => 1,
+            'children' => [
+                // The report keys by the child's ABSOLUTE source line —
+                // where the `{expr}` sits, not where the function starts.
+                ['line' => $lineOf('return <i>'), 'expr' => '$on', 'type' => 'bool'],
+                ['line' => $lineOf('return <i>'), 'expr' => 'probe()', 'type' => 'bool'],
+                ['line' => $lineOf('return <q>'), 'expr' => '$x', 'type' => 'bool'],
+            ],
+        ];
+        $types = $dir . '/types.json';
+        file_put_contents($types, json_encode($report) ?: '[]');
+        [$stdout, $stderr, $exit] = self::runCommand([
+            getenv(Bridge::BINARY_ENV) ?: 'lintel',
+            'analyze',
+            $src,
+            '--types',
+            $types,
+        ]);
+        self::assertSame(0, $exit, "the analyze lane ran: {$stdout}{$stderr}");
+        $compiled = (string) strstr($stdout, '<?php');
+        self::assertStringContainsString("((\$on) ? '' : '')", $compiled, $compiled);
+        self::assertStringContainsString("((probe()) ? '' : '')", $compiled, $compiled);
+        self::assertStringContainsString("((\$x) ? '' : '')", $compiled, $compiled);
+
+        $artifact = $dir . '/Bool.php';
+        file_put_contents($artifact, $compiled);
+        $runtime = dirname(__DIR__, 2) . '/runtime/src/functions.php';
+        $harness = <<<'PHP'
+<?php
+declare(strict_types=1);
+require '__RUNTIME__';
+require '__ARTIFACT__';
+$GLOBALS['probes'] = 0;
+$renders = [
+    'flags_true' => \Lintel\Fixtures\Flags(true),
+    'flags_false' => \Lintel\Fixtures\Flags(false),
+    'hostile' => \Lintel\Fixtures\Hostile('<script>alert(1)</script>'),
+];
+echo json_encode($renders), "\n";
+echo 'probes=', $GLOBALS['probes'], "\n";
+PHP;
+        $harness = str_replace(['__RUNTIME__', '__ARTIFACT__'], [$runtime, $artifact], $harness);
+        $harnessPath = $dir . '/harness.php';
+        file_put_contents($harnessPath, $harness);
+        [$stdout] = self::runCommand([PHP_BINARY, $harnessPath]);
+        $renders = json_decode(trim(strstr($stdout, "\n", true) ?: ''), true);
+        self::assertIsArray($renders, "the harness rendered: {$stdout}");
+        // Parity: both truth values render '' — byte-identical to c().
+        self::assertSame('<i></i>', self::rendered($renders['flags_true']));
+        self::assertSame('<i></i>', self::rendered($renders['flags_false']));
+        // The mis-proven hostile string renders EMPTY — the fold's markup
+        // is the constant `''`, never runtime content: no injection.
+        self::assertSame('<q></q>', self::rendered($renders['hostile']));
+        // Side effects preserved: probe() evaluated once per Flags render.
+        self::assertStringContainsString('probes=2', $stdout, $stdout);
     }
 
     /** The rendered markup of one decoded `\Lintel\Html` JSON object. */
