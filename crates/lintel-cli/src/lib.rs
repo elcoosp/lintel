@@ -393,14 +393,6 @@ struct ParsedArgs {
     in_place_seen: bool,
 }
 
-/// Consume the flags and paths following the command word. Flags and paths
-/// interleave freely, but `--in-place`/`--out` are `build`-only. Breaks
-/// with a short-circuiting `--help`/`--version` [`Invocation`].
-///
-/// # Errors
-///
-/// Returns [`CliError`] for unknown flags, missing flag values, unknown
-/// targets/formats, or a `build`-only flag under `check`.
 /// The `check`-only analyze report flag (§7.3-Y2): `build` rejects it.
 ///
 /// # Errors
@@ -415,6 +407,31 @@ fn types_flag(value: String, is_build: bool) -> Result<Option<PathBuf>, CliError
     Ok(Some(PathBuf::from(value)))
 }
 
+/// The `migrate` `--to` value: only `native` exists today (T-19), so any
+/// other value is a contract mismatch naming the only supported one.
+///
+/// # Errors
+///
+/// Any value but `native` returns [`CliError`].
+fn migrate_to(value: &str) -> Result<(), CliError> {
+    if value != "native" {
+        return Err(CliError(format!(
+            "`migrate` only supports `--to=native` today (got `--to={value}`): \
+             the native RFC lowering is the migration target \
+             (docs/rfc-alignment.md)"
+        )));
+    }
+    Ok(())
+}
+
+/// Consume the flags and paths following the command word. Flags and paths
+/// interleave freely, but `--in-place`/`--out` are `build`-only. Breaks
+/// with a short-circuiting `--help`/`--version` [`Invocation`].
+///
+/// # Errors
+///
+/// Returns [`CliError`] for unknown flags, missing flag values, unknown
+/// targets/formats, or a `build`-only flag under `check`.
 fn parse_args(
     args: &[String],
     is_build: bool,
@@ -460,24 +477,11 @@ fn parse_args(
             }
             "--to" if is_migrate => {
                 let value = value_flag(args, &mut index, "--to needs a value: native")?;
-                if value != "native" {
-                    return Err(CliError(format!(
-                        "`migrate` only supports `--to=native` today (got `--to {value}`): \
-                         the native RFC lowering is the migration target \
-                         (docs/rfc-alignment.md)"
-                    )));
-                }
+                migrate_to(&value)?;
                 parsed.target = Target::Rfc;
             }
             s if s.starts_with("--to=") && is_migrate => {
-                let value = &s["--to=".len()..];
-                if value != "native" {
-                    return Err(CliError(format!(
-                        "`migrate` only supports `--to=native` today (got `--to={value}`): \
-                         the native RFC lowering is the migration target \
-                         (docs/rfc-alignment.md)"
-                    )));
-                }
+                migrate_to(&s["--to=".len()..])?;
                 parsed.target = Target::Rfc;
             }
             s if s.starts_with("--to=") => {
@@ -486,20 +490,10 @@ fn parse_args(
             "--to" => return Err(CliError("--to is a `migrate` flag (values: native)".into())),
             "--types" => {
                 let value = value_flag(args, &mut index, "--types needs a value: the report file")?;
-                if is_build {
-                    return Err(CliError(
-                        "--types is a `check` flag: build takes no analyze report".into(),
-                    ));
-                }
-                parsed.types = Some(PathBuf::from(value));
+                parsed.types = types_flag(value, is_build)?;
             }
             s if s.starts_with("--types=") => {
-                if is_build {
-                    return Err(CliError(
-                        "--types is a `check` flag: build takes no analyze report".into(),
-                    ));
-                }
-                parsed.types = Some(PathBuf::from(&s["--types=".len()..]));
+                parsed.types = types_flag(s["--types=".len()..].to_string(), is_build)?;
             }
             s if s.starts_with("--format=") => {
                 parsed.format = parse_format(&s["--format=".len()..])?;
