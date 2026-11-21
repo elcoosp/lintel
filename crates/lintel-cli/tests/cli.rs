@@ -155,22 +155,35 @@ fn build_accepts_the_rfc_target_as_a_separate_word() {
 }
 
 /// T-19 launch honesty (§16 post #3): `lintel migrate --to=native` must
-/// exist today — a thin alias over `build --target=rfc`, in all three
-/// spellings (`--to=native`, `--to native`, and the flag-free default).
+/// exist today — in all three spellings (`--to=native`, `--to native`,
+/// and the flag-free default). Since the Year-3 migration card, migrate
+/// REWRITES the source in place with the RFC lowering instead of
+/// printing it; the in-place contracts themselves live in tests/migrate.rs.
 #[test]
-fn migrate_is_a_thin_alias_for_build_target_rfc() {
-    let dir = scratch("migrate-alias");
-    let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
-    let path = source.to_str().expect("utf8 path");
+fn migrate_accepts_native_in_all_spellings_and_rewrites_in_place() {
+    let dir = scratch("migrate-native");
     for argv in [
-        vec!["migrate", path],
-        vec!["migrate", path, "--to=native"],
-        vec!["migrate", path, "--to", "native"],
+        vec!["migrate", "PLACEHOLDER"],
+        vec!["migrate", "PLACEHOLDER", "--to=native"],
+        vec!["migrate", "PLACEHOLDER", "--to", "native"],
     ] {
+        let source = write_source(&dir, "Page.lintel.php", CLEAN_SOURCE);
+        let path = source.to_str().expect("utf8 path");
+        let argv: Vec<String> = argv
+            .iter()
+            .map(|a| a.replace("PLACEHOLDER", path))
+            .collect();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let (code, stdout, stderr) = run_cli(&argv);
         assert_eq!(code, 0, "argv {argv:?}: stderr: {stderr}");
-        assert!(stdout.contains("\\Markup\\Element"), "{stdout}");
-        assert!(!stdout.contains("new \\Lintel\\Html("), "{stdout}");
+        let rewritten = std::fs::read_to_string(&source).expect("the source is readable");
+        assert!(rewritten.contains("\\Markup\\Element"), "{rewritten}");
+        assert!(!rewritten.contains("new \\Lintel\\Html("), "{rewritten}");
+        assert!(
+            stdout.contains("migrated"),
+            "the rewrite reports itself: {stdout}"
+        );
+        let _ = std::fs::remove_file(&source);
     }
 }
 
