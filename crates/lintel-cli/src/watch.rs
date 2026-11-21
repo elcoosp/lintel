@@ -38,9 +38,10 @@
 //!
 //! Unix runs a `UnixListener`; Windows falls back to a loopback TCP socket
 //! (the same protocol, with the chosen ephemeral port written to
-//! `<socket-path>.port`). The Windows lane compiles everywhere, but its
-//! socket tests are DEFERRED-TO-CI/MAINTAINER: no Windows runner exists in
-//! this sandbox — the acceptance card names this exact limit for T-12.
+//! `<socket-path>.port`). The Windows lane is verified by CI: the
+//! `windows-daemon` job runs the whole watch suite over the TCP fallback
+//! on a `windows-latest` runner (the Phase 11 M3 card closed the carried
+//! DEFERRED-TO-CI/MAINTAINER note — this sandbox has no Windows runner).
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
