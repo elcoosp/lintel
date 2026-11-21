@@ -9,6 +9,18 @@ versions with SemVer, and the language spec versions separately
 
 ### Fixed
 
+- **The background `lintel watch` spawn stopped its own daemon**: the
+  readiness probe sent the `quit` request on its poll-connect, so the
+  freshly spawned daemon shut down the moment `spawn_background` declared
+  it ready (the Phase 2 background lane had no test coverage). The probe
+  now opens the connection and closes it without sending — the daemon
+  treats the empty read as a probe and serves on; the contract (and the
+  quit frame's real shape) is pinned by `docs/daemon-protocol.md`.
+- The build path bound a key it never used in the cache-hit arm
+  (`crates/lintel-cli/src/lib.rs`), which the current stable toolchain
+  flags under the `-D warnings` gate the Phase 9 pass landed on an older
+  one — the lookup no longer carries the key through the hit.
+
 - **The stream target's declared return type TypeErrored against its own
   artifact** (the Phase 9 `renderStreaming()` acceptance proved it — the
   first real PHP consumer of a stream-target artifact): the §10 lowering
@@ -38,6 +50,47 @@ versions with SemVer, and the language spec versions separately
 
 ### Added
 
+- **The hardened T-12 watch daemon** (`docs/daemon-protocol.md`): the
+  socket speaks a length-prefixed JSON protocol both directions (ten
+  ASCII digits, newline, payload — `{"path":…}` → `{"ok":true,"php":…}` |
+  `{"ok":false,"diag":[…]}`, plus `{"quit":true}`), with bounded client
+  reconnect (three attempts, short backoff) and the PHP loader's socket
+  lane updated to the same framing with its `proc_open` fallback intact.
+  The daemon's recompiles now run through the same content-addressed
+  `.lintel-cache/` engine `lintel build` uses — a watch-triggered rebuild
+  of unchanged content never recompiles and a reverted edit serves
+  instantly, with the counters landing in `.lintel-cache/stats.json` —
+  and the shared mutable cache files (`stats.json`, the LSP index's
+  `lsp-index.json`) are written under an exclusive `flock(2)` (fs2) so a
+  watch daemon, a concurrent build and parallel LSP sessions cannot
+  interleave a partial write. Watcher events under `.lintel-cache/` never
+  invalidate entries.
+- **The monorepo `lsp.include` config** (the Phase 9 §f backlog):
+  `lintel.json` gains `{"lsp": {"include": ["packages/*/src/**/*.lintel.php"]}}`
+  — when present, the LSP index walks only the configured glob patterns
+  (`**` spans directories, `*`/`?` match within one segment, paths are
+  root-relative); the dot-directory and `vendor`/`node_modules` skips
+  stay (they are properties of the walk — an explicit pattern cannot
+  re-include vendored dependencies), and without the key the default
+  walk is unchanged.
+- **The production deployment guides** (`docs/deployment/`): FPM + nginx
+  (OPcache settings and preload), RoadRunner (`.rr.yaml`, worker loop,
+  streaming mode), Swoole/OpenSwoole (coroutine server + transport) and
+  FrankenPHP (Caddyfile worker mode) — each with prerequisites, install
+  steps, the config file, a minimal `.lintel.php` page, a curl
+  verification with the expected output and tuning notes. The CI
+  `deployment` job runs the RoadRunner guide END-TO-END
+  (`scripts/deployment-smoke.sh`): compile with the stream target, serve
+  through a real `rr serve` worker pool, curl the endpoint, assert the
+  rendered HTML.
+- **The anonymous closure return-type rewrite** (the Phase 9 §f backlog):
+  the stream target's `: Html` → `\Generator` rewrite (§1a of
+  `docs/stream-alignment.md`) now covers braced anonymous closures
+  (`static function (): Html { return <b/>; }`) in addition to named
+  declarations; body-less arrow functions (`fn(): Html => …`) copy
+  verbatim, like the named body-less declarations. A `PHP_BIN`-gated
+  execution test invokes the compiled closure and renders without a
+  `TypeError`.
 - **The persistent LSP workspace index** (§17.1 Q3): `initialize` walks
   the workspace root (`workspaceFolders`/`rootUri`), indexes every
   `.lintel.php` file's component declarations in memory backed by a
