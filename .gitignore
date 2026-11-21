@@ -18,3 +18,4 @@ fuzz/coverage
 # The M2 build cache and the M1 LSP index cache (workspace-local at ANY
 # level — the repo root, test fixtures, user workspaces — never committed).
 .lintel-cache/
+docs/launch
