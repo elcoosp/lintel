@@ -9,6 +9,26 @@ versions with SemVer, and the language spec versions separately
 
 ### Added
 
+- **§10 streaming & suspense runtime** (`docs/stream-alignment.md`):
+  `Lintel\stream($tree, ?callable $flush = null)` walks a stream-target
+  render tree progressively (chunk order is the flush order); the
+  `<Suspense>` boundary (`new \Lintel\Suspense(fallback: …, work: …)`)
+  flushes its placeholder immediately, resolves the work in a fiber pumped
+  round-robin, and flushes the resolved content **out of order** inside
+  `<template id="lt-N-r">…</template><script>lintelSwap("lt-N")</script>`
+  with a one-time 184-byte swap runtime replacing the placeholder in place.
+  Resolved values render through `c()` — no streaming path bypasses the
+  escapers (streaming threat cases in the §7.2 corpus) — the sync target
+  runs boundaries inline, and the flush-order e2e lives in
+  `php/runtime/tests/StreamingSuspenseTest.php`.
+- **§10 flush transports** (`Lintel\FlushTransport` + `stream_via`): the
+  CLI lane (`CliFlushTransport`) and the FPM lane (`FpmFlushTransport`,
+  `X-Accel-Buffering: no` + buffered-output teardown), the FPM adapter
+  exercised over a real `php -S` HTTP server in
+  `php/runtime/tests/StreamingTransportTest.php`; live
+  RoadRunner/Swoole/FrankenPHP adapters stay CI-lane work.
+- The §10 suspense demo: `php scripts/suspense-demo.php` (capture) or
+  served with `php -S` for the progressive HTTP view.
 - **Type-driven escape elision** (§7.3-Y2, `docs/type-elision.md`): the
   `lintel analyze` path — `php/lintel-phpstan/bin/analyze` runs the PHPStan
   bridge's `LintelTypesCollector` over the prepared cache and writes
@@ -24,6 +44,24 @@ versions with SemVer, and the language spec versions separately
 
 ### Fixed
 
+- The pedantic-clippy gate regression in the newest CLI code (four
+  warnings): `lintel-cli`'s unused `types_flag` helper is used again by the
+  `--types` parse arms (the inline duplicates are gone), its mangled doc
+  comment is restored to `parse_args`, the duplicated `--to` handling is
+  the shared `migrate_to` helper (`parse_args` back under the
+  `too_many_lines` budget), and `tests/stale_hints.rs` uses the
+  message-carrying `assert!(…is_empty(), …)` and drops a needless borrow.
+  The gate (`clippy --workspace --all-targets --all-features -- -D
+  warnings -W clippy::pedantic`) is zero-warning again, no `#[allow]`
+  anywhere.
+- The `analyze_children` bench drift-check was red on `main` (never able
+  to fire): the hint scanner grepped for `page {{$page}} of` — the
+  double-brace spelling as written in Rust source — while the source
+  builder's `writeln!` format escaping emits the literal `page {$page} of`
+  (single braces), so the scan found zero hints and the bench died on
+  `assert_eq!(hints.len(), 20)` before measuring. The scanner now matches
+  the emitted bytes and the drift-check runs (40 dynamic children / 20
+  elided / rate 0.5).
 - Root PHPStan level max is clean again: the bridge's `json_decode` shapes
   decode through `Bridge::decodeDiagnostic` into validated field shapes
   (no ignores, no level changes), the Plugin's `prod.artifacts` lookup
