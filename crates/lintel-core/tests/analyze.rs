@@ -343,3 +343,76 @@ fn compile_errors_are_unchanged_under_analyze() {
     assert!(plain.is_err());
     assert!(analyzed.is_err());
 }
+
+#[test]
+fn bool_typed_child_folds_to_the_parity_safe_ternary() {
+    // The M3 fold: `c()` renders every bool as `''` (both truth values)
+    // while a raw interpolation renders '1'. The ternary evaluates the
+    // expression (side effects ride along) and emits the same constant —
+    // byte-identical to `c()`'s output, no runtime value in the markup.
+    let src =
+        "<?php\nfunction Panel(bool $flag) {\n  return <div data-on={$flag}>{$flag}</div>;\n}\n";
+    let out = compile_analyzed(
+        src,
+        &Options::default(),
+        &hints(vec![hint(3, "$flag", ChildKind::Bool)]),
+        lintel_core::builtin_rules(),
+    )
+    .expect("compiles");
+    assert!(
+        out.output.php.contains("(($flag) ? '' : '')"),
+        "the child folds to the ternary: {}",
+        out.output.php
+    );
+    assert!(
+        !out.output.php.contains("\\Lintel\\c($flag)"),
+        "the helper is gone: {}",
+        out.output.php
+    );
+    assert_eq!(out.elided, 1);
+}
+
+#[test]
+fn multiline_bool_expression_stays_wrapped() {
+    // The ternary is a one-line emission; a multi-line expression would
+    // shift the artifact's lines (doc 13.4) — it keeps the helper.
+    let src = "<?php\nfunction Panel($flag) {\n  return <div>{\n    $flag\n  }</div>;\n}\n";
+    let out = compile_analyzed(
+        src,
+        &Options::default(),
+        &hints(vec![hint(4, "$flag", ChildKind::Bool)]),
+        lintel_core::builtin_rules(),
+    )
+    .expect("compiles");
+    assert!(
+        out.output.php.contains("\\Lintel\\c($flag)"),
+        "the multi-line expression keeps the helper: {}",
+        out.output.php
+    );
+    assert_eq!(out.elided, 0);
+}
+
+#[test]
+fn mis_proven_bool_type_cannot_leak_content() {
+    // The threat contract of the fold: the emitted markup is the constant
+    // `''` — even if the analysis WRONGLY proved bool for a value that is
+    // actually a hostile string, the artifact renders empty, never the
+    // content. The PHP suite executes this artifact with a hostile value
+    // (AnalyzeElisionTest's mis-proven case); here the emitted PHP shape
+    // pins the guarantee: no runtime expression concatenates into the
+    // markup, only the ternary's two constant branches.
+    let src = "<?php\nfunction Panel($flag) {\n  return <div>{$flag}</div>;\n}\n";
+    let out = compile_analyzed(
+        src,
+        &Options::default(),
+        &hints(vec![hint(3, "$flag", ChildKind::Bool)]),
+        lintel_core::builtin_rules(),
+    )
+    .expect("compiles");
+    let folded = "(($flag) ? '' : '')";
+    assert!(
+        out.output.php.contains(folded),
+        "the fold emits only constant branches: {}",
+        out.output.php
+    );
+}
