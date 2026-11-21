@@ -130,6 +130,8 @@ The runtime that consumes these chunks ships in `php/runtime/src/functions.php`:
   above. Compiler emission of boundary scaffolding is future work.
 - **Adapters beyond the four shipped ones** (OpenSwoole, AMPHP): the same
   `FlushTransport` seam; the live Swoole/AMPHP lanes need those
-  runtimes — CI-lane work, and the RoadRunner adapter's progressive
-  per-boundary flush timing (the current RR lane streams the flush-ordered
-  chunks as one response) rides the same lane.
+  runtimes — CI-lane work. The RoadRunner adapter's progressive
+  per-boundary flush timing is measured and asserted by the Phase 11 M2
+  lane (`bench/lib/ProgressiveTiming.php`, CI's `bench` job): the
+  placeholder for boundary N flushes before the resolved content for
+  boundary N-1, and the wire order equals the flush order.
