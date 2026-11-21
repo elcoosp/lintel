@@ -22,11 +22,11 @@ use crate::ast::{visit_node, Node, NodeVisitor};
 
 /// One proven child kind the elision accepts (architecture doc §7.3-Y2).
 ///
-/// `bool` is deliberately absent: `c()` renders every bool as `''` while a
-/// raw bool interpolates as `'1'` — elision cannot preserve the rendered
-/// output without dropping the expression (and its evaluation), so the
-/// kind stays unelidable and the helper keeps it
-/// (`docs/type-elision.md` records the decision).
+/// `bool` folds through the parity-safe ternary (M3): `c()` renders every
+/// bool as `''` — both `true` and `false` — and the emitted
+/// `(($expr) ? '' : '')` evaluates the expression (side effects ride
+/// along) while emitting the same constant, so no runtime value reaches
+/// the markup (`docs/type-elision.md` records the fold and its proof).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildKind {
     /// `is_int` values interpolate as digits.
@@ -42,6 +42,12 @@ pub enum ChildKind {
     /// for it, and attacker-uncontrollable by construction (the value is
     /// baked into the artifact, not read at runtime).
     Literal(String),
+    /// A PHPStan-proven `bool`. The ternary fold emits
+    /// `(($expr) ? '' : '')` — byte-identical to `c()`'s `''` for both
+    /// truth values, side-effect-preserving, and attacker-uncontrollable:
+    /// the emitted markup is the constant `''` even if the proven type
+    /// was wrong (a mis-proven string renders empty, never its content).
+    Bool,
 }
 
 impl ChildKind {
@@ -54,6 +60,7 @@ impl ChildKind {
             Self::Float => "float",
             Self::NumericString => "numeric-string",
             Self::Literal(_) => "literal",
+            Self::Bool => "bool",
         }
     }
 
@@ -71,13 +78,14 @@ impl ChildKind {
             "int" => Ok(Some(Self::Int)),
             "float" => Ok(Some(Self::Float)),
             "numeric-string" => Ok(Some(Self::NumericString)),
+            "bool" => Ok(Some(Self::Bool)),
             "literal" => value
                 .map(|v| Some(Self::Literal(v.to_string())))
                 .ok_or_else(|| "a `literal` entry requires its `value`".to_string()),
-            // Known, resolved, NOT elidable: bool (render parity — see the
-            // enum doc), plain `string` (can carry markup), and the
-            // composite/unknown-shape kinds the helper keeps.
-            "bool" | "string" | "mixed" | "null" | "object" | "array" | "callable" | "iterable"
+            // Known, resolved, NOT elidable: plain `string` (can carry
+            // markup) and the composite/unknown-shape kinds the helper
+            // keeps.
+            "string" | "mixed" | "null" | "object" | "array" | "callable" | "iterable"
             | "resource" => Ok(None),
             other => Err(format!(
                 "unknown child type `{other}` in the analyze report"
@@ -307,8 +315,8 @@ mod tests {
         assert!(ChildKind::parse("literal", None).is_err());
         assert_eq!(
             ChildKind::parse("bool", None),
-            Ok(None),
-            "bool is known but deferred"
+            Ok(Some(ChildKind::Bool)),
+            "bool folds through the parity-safe ternary"
         );
         assert_eq!(ChildKind::parse("string", None), Ok(None));
         assert!(
