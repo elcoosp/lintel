@@ -87,10 +87,23 @@ The runtime that consumes these chunks ships in `php/runtime/src/functions.php`:
   inline: no fallback, the resolved value renders whole.
 - **Flush transports** (`Lintel\FlushTransport`): `stream_via($tree, $transport)`
   wires `begin()` / per-chunk `write()` / `end()`. `CliFlushTransport`
-  (echo + flush) and `FpmFlushTransport` (`X-Accel-Buffering: no` +
-  buffered-output teardown + flush) ship; FrankenPHP streams through the
-  same echo+flush shape, and the live RoadRunner/Swoole/OpenSwoole and
-  ReactPHP/AMPHP adapters are CI-lane work.
+  (echo + flush), `FpmFlushTransport` (`X-Accel-Buffering: no` +
+  buffered-output teardown + flush) and the §10 server adapters ship in
+  `php/runtime/src/transports.php`: `SwooleFlushTransport` (status +
+  headers + one `write()` per chunk + `end()`, raw responses adapted by
+  `fromSwoole()`), `ReactPHPFlushTransport` (`writeHead()` + per-chunk
+  `write()` + `end()`, adapted by `fromReact()`), `FrankenPHPFlushTransport`
+  (the same echo + flush shape over a real `php -S` e2e lane) and
+  `RoadRunnerFlushTransport` (the RR PHP worker is pull-based —
+  `stream_via()` queues the flush-ordered chunks and `respond()` hands
+  them to `HttpWorkerInterface::respond(status, generator, headers)`, one
+  midflight stream chunk per queued chunk; exercised end-to-end against a
+  real `rr serve` in the php job's `adapters` CI step, `LINTEL_E2E_RR=1`).
+  Each adapter exposes `isAvailable()` (`RR_MODE=http`, `ext-swoole`,
+  `FRANKENPHP_WORKER`, `React\Http\Response`) and only owns HOW a chunk
+  reaches the wire — chunk content is untouched, so streaming never
+  bypasses the escapers (the adapters e2e asserts the escaped late
+  payload over the wire).
 
 ## What this target does not do yet
 
@@ -100,5 +113,8 @@ The runtime that consumes these chunks ships in `php/runtime/src/functions.php`:
   boundary consumed through a `c()` call (a nested component rendered by
   the string-result `c(…)` chunk shape) runs inline by the sync rule
   above. Compiler emission of boundary scaffolding is future work.
-- **Adapters beyond the transport seam** (live FrankenPHP, RoadRunner,
-  Swoole/OpenSwoole, ReactPHP/AMPHP) need those runtimes — CI-lane work.
+- **Adapters beyond the four shipped ones** (OpenSwoole, AMPHP): the same
+  `FlushTransport` seam; the live Swoole/AMPHP lanes need those
+  runtimes — CI-lane work, and the RoadRunner adapter's progressive
+  per-boundary flush timing (the current RR lane streams the flush-ordered
+  chunks as one response) rides the same lane.
