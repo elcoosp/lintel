@@ -15,9 +15,12 @@ daemon's recompiles run through the same content-addressed build cache the
   temp dir). A stale socket file from a killed daemon is removed on bind.
 - **Windows fallback:** a loopback TCP listener; the ephemeral port is
   written to `<socket-path>.port` (the same protocol, one transport
-  difference). The Windows lane compiles everywhere; its socket tests are
-  accepted DEFERRED-TO-CI/MAINTAINER (no Windows runner in the dev
-  sandbox) — the T-12 card names this exact limit.
+  difference). The Windows lane is verified end-to-end by CI: the
+  `windows-daemon` job runs the whole watch suite over the TCP fallback on
+  a `windows-latest` runner — serve + recompile-on-change, the
+  build-cache-backed rebuilds, the concurrent-clients lane and the
+  latency measurement (the Phase 11 M3 card closed the carried
+  DEFERRED-TO-CI/MAINTAINER acceptance).
 
 ## Framing
 
