@@ -40,7 +40,10 @@ jobs:
             archive: lintel-linux-arm64.tar.gz
             cross: cargo-zigbuild
           - name: macos-x64
-            os: macos-13
+            # macos-13 is retired (GitHub removed the label; actionlint's
+            # runner DB rejects it — the workflow-lint gate caught the
+            # drift): macos-15 is the current x64 Intel runner.
+            os: macos-15
             target: x86_64-apple-darwin
             binary: lintel
             archive: lintel-macos-x64.tar.gz
