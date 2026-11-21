@@ -8,8 +8,12 @@ uses the `RoadRunnerFlushTransport`
 chunk in flush order, and `respond()` then hands the queued chunks to the
 worker as one midflight frame per yielded chunk — the flush order, the
 `<template id="lt-N-r">` + swap-script protocol and the escaper contract
-are byte-identical to the FPM lane. (Progressive per-boundary *timing* on
-RR is CI-lane work — the §10 header comment records that honest limit.)
+are byte-identical to the FPM lane. The progressive per-boundary *timing*
+is measured and asserted by the Phase 11 lane
+(`bench/lib/ProgressiveTiming.php`, wired into `bench/run.php`'s S6
+section and CI's `bench` job): the placeholder for boundary N is flushed
+before the resolved content for boundary N-1, and the wire order equals
+the flush order — the invariant the lane fails the bench run on.
 
 ## Prerequisites
 
