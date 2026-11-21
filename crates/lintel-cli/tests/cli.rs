@@ -705,9 +705,10 @@ fn build_manifest_on_a_stdout_build_omits_prod() {
 #[test]
 fn build_manifest_without_a_value_defaults_to_lintel_json() {
     // Bare `--manifest` never consumes the next token: a following path is
-    // a build input, not a manifest value. The default writes `lintel.json`
-    // in the process's working directory, so this one runs the real binary
-    // from the scratch dir (the in-process engine shares this process's cwd).
+    // a build input, not a manifest value. The default anchors to the
+    // workspace being compiled — the common ancestor of the build inputs
+    // and `--out` — so this one runs the real binary from the scratch dir
+    // (a single file input: the workspace is its parent directory).
     let dir = scratch("manifest-default");
     let source = write_source(&dir, "Card.lintel.php", FUNCTION_SOURCE);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_lintel"))
@@ -722,7 +723,131 @@ fn build_manifest_without_a_value_defaults_to_lintel_json() {
     );
     assert!(
         dir.join("lintel.json").is_file(),
-        "the default manifest path is ./lintel.json"
+        "the default manifest path is <workspace>/lintel.json"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bare_manifest_lands_in_the_workspace_never_the_process_cwd() {
+    // The M0 cwd-hygiene regression: the bare `--manifest` console lanes
+    // used to depend on the process cwd (the PHP suites chdir'd into the
+    // workspace for the write, and under some invocation orderings a stray
+    // empty `lintel.json` landed at the outer cwd). The default now
+    // resolves against the workspace — the common ancestor of the build
+    // inputs and `--out` — so running the real binary from a DIFFERENT
+    // cwd leaves the manifest inside the workspace and nothing outside it.
+    let dir = scratch("manifest-cwd-hygiene");
+    let workspace = dir.join("app");
+    fs::create_dir_all(workspace.join("src")).expect("creates the workspace src/");
+    let source = write_source(&workspace.join("src"), "Badge.lintel.php", FUNCTION_SOURCE);
+    let elsewhere = dir.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("creates the foreign cwd");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lintel"))
+        .args([
+            "build",
+            source.to_str().expect("utf8 source path"),
+            "--out",
+            workspace.join("build").to_str().expect("utf8 out path"),
+            "--manifest",
+        ])
+        .current_dir(&elsewhere)
+        .output()
+        .expect("runs the lintel binary");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        workspace.join("lintel.json").is_file(),
+        "the manifest lands at the workspace root (the src/… + build/ ancestor)"
+    );
+    assert!(
+        !elsewhere.join("lintel.json").exists(),
+        "no manifest may land at the process cwd"
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(workspace.join("lintel.json")).expect("reads"))
+            .expect("valid JSON");
+    assert_eq!(
+        manifest["components"]["card"], "src/Badge.lintel.php",
+        "the manifest keys stay relative to the workspace: {manifest}"
+    );
+    assert_eq!(
+        manifest["prod"]["artifacts"]["src/Badge.lintel.php"], "build/Badge.php",
+        "{manifest}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn in_process_bare_manifest_never_litters_the_engine_cwd() {
+    // The stray-file scenario the Phase 8 backlog recorded: the in-process
+    // engine shares the caller's cwd, so a bare `--manifest` resolved
+    // against it could drop `lintel.json` into whatever directory a test
+    // runner or REPL happened to sit in. The workspace rule keeps the
+    // write inside the compiled inputs' common ancestor even when the
+    // engine's cwd is somewhere unrelated (this test's cwd is the crate
+    // root — it must stay manifest-free).
+    let dir = scratch("manifest-in-process-cwd");
+    let workspace = dir.join("ws");
+    fs::create_dir_all(workspace.join("src")).expect("creates the workspace src/");
+    let source = write_source(&workspace.join("src"), "Badge.lintel.php", FUNCTION_SOURCE);
+    let before = PathBuf::from(".").join("lintel.json");
+    assert!(!before.exists(), "the test cwd starts manifest-free");
+    let (code, _stdout, stderr) = run_cli(&[
+        "build",
+        source.to_str().expect("utf8 source path"),
+        "--out",
+        workspace.join("out").to_str().expect("utf8 out path"),
+        "--manifest",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        workspace.join("lintel.json").is_file(),
+        "the manifest lands at the workspace root"
+    );
+    assert!(
+        !before.exists(),
+        "no manifest may land at the engine's working directory"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_root_anchors_to_the_shared_ancestor_of_inputs_and_out() {
+    // Multiple inputs + `--out`: the manifest goes to the deepest
+    // directory containing them all (the app root the console lanes run
+    // against), not to either input dir or the cwd.
+    let dir = scratch("manifest-multi-root");
+    let app = dir.join("app");
+    fs::create_dir_all(app.join("views")).expect("creates views/");
+    fs::create_dir_all(app.join("widgets")).expect("creates widgets/");
+    let first = write_source(&app.join("views"), "Card.lintel.php", FUNCTION_SOURCE);
+    let second = write_source(
+        &app.join("widgets"),
+        "Badge.lintel.php",
+        "<?php\n\nuse Lintel\\Html;\n\nfunction badge(string $label): Html\n{\n    return <b>{$label}</b>;\n}\n",
+    );
+    let (code, _stdout, stderr) = run_cli(&[
+        "build",
+        first.to_str().expect("utf8 path"),
+        second.to_str().expect("utf8 path"),
+        "--out",
+        app.join("cache").to_str().expect("utf8 out path"),
+        "--manifest",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let manifest = fs::read_to_string(app.join("lintel.json")).expect("workspace-root manifest");
+    assert!(
+        manifest.contains("\"card\": \"views/Card.lintel.php\"")
+            && manifest.contains("\"badge\": \"widgets/Badge.lintel.php\""),
+        "keys are relative to the shared ancestor: {manifest}"
+    );
+    assert!(
+        !dir.join("lintel.json").exists() && !app.join("views").join("lintel.json").exists(),
+        "nowhere but the workspace root"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1058,4 +1183,206 @@ fn analyze_reports_stale_hint_counts() {
     assert_eq!(decoded["stale"], 1, "{decoded}");
     assert_eq!(decoded["elided"], 1, "{decoded}");
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 M2: the content-addressed build cache (§9.3's warm-build target)
+// — the stats sidecar (.lintel-cache/stats.json) is the compile-count
+// observable: run 2 must compile nothing, an edited file must recompile
+// alone, `--no-cache` must bypass, and the target must ride the key.
+// ---------------------------------------------------------------------------
+
+/// A two-source workspace (the manifest fixture's sources) + the stats
+/// reader.
+fn cache_workspace(name: &str) -> (PathBuf, Vec<PathBuf>, PathBuf) {
+    let workspace = scratch(name);
+    let src = workspace.join("src");
+    fs::create_dir_all(&src).expect("creates src/");
+    let first = write_source(&src, "Card.lintel.php", FUNCTION_SOURCE);
+    let second = write_source(
+        &src,
+        "Badge.lintel.php",
+        "<?php\n\nuse Lintel\\Html;\n\nfunction badge(string $label): Html\n{\n    return <b>{$label}</b>;\n}\n",
+    );
+    let out = workspace.join("out");
+    (workspace, vec![first, second], out)
+}
+
+/// The last build's counters from `.lintel-cache/stats.json`.
+fn cache_stats(workspace: &std::path::Path) -> (usize, usize, bool) {
+    let body = fs::read_to_string(workspace.join(".lintel-cache/stats.json")).expect("reads stats");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+    (
+        usize::try_from(value["compiled"].as_u64().unwrap_or(0)).unwrap_or(0),
+        usize::try_from(value["cache_hits"].as_u64().unwrap_or(0)).unwrap_or(0),
+        value["bypassed"].as_bool().unwrap_or(false),
+    )
+}
+
+#[test]
+fn build_cache_hits_on_unchanged_sources() {
+    // Cold run compiles both; the warm run over the identical workspace is
+    // a full cache hit — zero compiles (the §9.3 warm-build target), and
+    // the artifacts still land.
+    let (workspace, sources, out) = cache_workspace("cache-hit");
+    let source_args: Vec<&str> = sources
+        .iter()
+        .map(|path| path.to_str().expect("utf8 path"))
+        .collect();
+    let out_arg = out.to_str().expect("utf8 out");
+    let mut argv: Vec<&str> = vec!["build"];
+    argv.extend(source_args.iter().copied());
+    argv.extend(["--out", out_arg]);
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        cache_stats(&workspace),
+        (2, 0, false),
+        "the cold build compiles"
+    );
+
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        cache_stats(&workspace),
+        (0, 2, false),
+        "the warm build is all hits"
+    );
+    assert!(
+        out.join("Card.php").is_file() && out.join("Badge.php").is_file(),
+        "the artifacts land on a warm build too"
+    );
+    let _ = fs::remove_dir_all(&workspace);
+}
+
+#[test]
+fn build_cache_recompiles_only_the_changed_source() {
+    // One edited file: exactly one recompile, the other stays a hit — and
+    // the rebuilt artifact carries the edit.
+    let (workspace, sources, out) = cache_workspace("cache-partial");
+    let source_args: Vec<&str> = sources
+        .iter()
+        .map(|path| path.to_str().expect("utf8 path"))
+        .collect();
+    let out_arg = out.to_str().expect("utf8 out");
+    let mut argv: Vec<&str> = vec!["build"];
+    argv.extend(source_args.iter().copied());
+    argv.extend(["--out", out_arg]);
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(cache_stats(&workspace), (2, 0, false));
+
+    fs::write(
+        &sources[1],
+        "<?php\n\nuse Lintel\\Html;\n\nfunction badge(string $label): Html\n{\n    return <b class=\"v2\">{$label}</b>;\n}\n",
+    )
+    .expect("edits one source");
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        cache_stats(&workspace),
+        (1, 1, false),
+        "only the edited source recompiles"
+    );
+    let artifact = fs::read_to_string(out.join("Badge.php")).expect("reads the artifact");
+    assert!(
+        artifact.contains("v2"),
+        "the rebuilt artifact reflects the edit: {artifact}"
+    );
+    let _ = fs::remove_dir_all(&workspace);
+}
+
+#[test]
+fn no_cache_bypasses_lookup_and_store() {
+    // A populated cache plus `--no-cache`: everything recompiles and the
+    // stats sidecar says so (CI's honest cold shape).
+    let (workspace, sources, out) = cache_workspace("cache-bypass");
+    let source_args: Vec<&str> = sources
+        .iter()
+        .map(|path| path.to_str().expect("utf8 path"))
+        .collect();
+    let out_arg = out.to_str().expect("utf8 out");
+    let mut argv: Vec<&str> = vec!["build"];
+    argv.extend(source_args.iter().copied());
+    argv.extend(["--out", out_arg]);
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(cache_stats(&workspace), (2, 0, false));
+
+    let mut bypass: Vec<&str> = vec!["build"];
+    bypass.extend(source_args.iter().copied());
+    bypass.extend(["--out", out_arg, "--no-cache"]);
+    let (code, _stdout, stderr) = run_cli(&bypass);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        cache_stats(&workspace),
+        (2, 0, true),
+        "the bypass compiles everything and records itself"
+    );
+    let _ = fs::remove_dir_all(&workspace);
+}
+
+#[test]
+fn the_cache_is_target_aware() {
+    // The same source under two targets: the stream build must not hit
+    // the string entries (the artifacts differ for the same source).
+    let (workspace, sources, out) = cache_workspace("cache-targets");
+    let source_args: Vec<&str> = sources
+        .iter()
+        .map(|path| path.to_str().expect("utf8 path"))
+        .collect();
+    let out_arg = out.to_str().expect("utf8 out");
+    let mut argv: Vec<&str> = vec!["build"];
+    argv.extend(source_args.iter().copied());
+    argv.extend(["--out", out_arg]);
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(cache_stats(&workspace), (2, 0, false));
+
+    let mut stream: Vec<&str> = vec!["build", "--target=stream"];
+    stream.extend(source_args.iter().copied());
+    stream.extend(["--out", out_arg]);
+    let (code, _stdout, stderr) = run_cli(&stream);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        cache_stats(&workspace),
+        (2, 0, false),
+        "a different target misses: the key carries the target"
+    );
+    let stream_artifact = fs::read_to_string(out.join("Badge.php")).expect("reads");
+    assert!(
+        stream_artifact.contains("\\Generator"),
+        "the stream artifact really is the stream lowering: {stream_artifact}"
+    );
+    let _ = fs::remove_dir_all(&workspace);
+}
+
+#[test]
+fn check_never_touches_the_cache() {
+    // `check` must always re-validate — no cache directory appears.
+    let (workspace, sources, _out) = cache_workspace("cache-check");
+    let source_args: Vec<&str> = sources
+        .iter()
+        .map(|path| path.to_str().expect("utf8 path"))
+        .collect();
+    let mut argv: Vec<&str> = vec!["check"];
+    argv.extend(source_args.iter().copied());
+    let (code, _stdout, stderr) = run_cli(&argv);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        !workspace.join(".lintel-cache").exists(),
+        "check writes no cache"
+    );
+    // And `--no-cache` is refused on the lanes that never cache.
+    assert!(
+        usage_error(&["check", "--no-cache", source_args[0]])
+            .contains("--no-cache is a `build` flag"),
+        "check rejects the bypass flag"
+    );
+    assert!(
+        usage_error(&["migrate", "--no-cache", source_args[0]])
+            .contains("--no-cache is a `build` flag"),
+        "migrate rejects the bypass flag"
+    );
+    let _ = fs::remove_dir_all(&workspace);
 }
