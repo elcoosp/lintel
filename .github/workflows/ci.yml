@@ -139,6 +139,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: "T-17 docs site v0: build + link check (§13.7)"
         run: make docs-site
+      - name: "M4 claims sweep — no stale pre-1.0 / v0.x maturity claims outside the allowlist"
+        run: bash scripts/claims-sweep.sh
       - uses: actions/upload-artifact@v4
         with:
           name: docs-site
@@ -241,7 +243,9 @@ jobs:
           php-version: '8.4'
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
-      - name: "T-09: the ten-minute fuzz acceptance on compile()"
+      - name: "M2 corpus seeding — the differential templates, the fallback edges and the §7.2 payloads"
+        run: cargo test -p lintel-core --test fuzz_corpus
+      - name: "T-09: the ten-minute fuzz acceptance on compile(), over the seeded corpus"
         run: cargo fuzz run compile_fuzz -- -max_total_time=600
         env:
           PHP_BIN: php
