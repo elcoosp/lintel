@@ -3,7 +3,8 @@
 Two Phase 9 capabilities make Lintel pleasant at project scale: the build
 cache that turns a warm `lintel build` into pure I/O, and the language
 server's persistent workspace index that lets rename, references, symbols
-and definition see the files you have not opened.
+and definition see the files you have not opened. Phase 11 extends the
+index with an independent tree-sitter parse (the section below).
 
 ## Incremental builds (the build cache)
 
@@ -67,3 +68,18 @@ re-parses the synced text immediately — the editor's buffer is the truth
 while the file is open, the disk re-asserts itself the moment it is not.
 The walk skips dot-directories and the dependency directories
 (`vendor`, `node_modules`).
+
+## The tree-sitter lane (Phase 11)
+
+Every declaration the index serves is a **merged** view: the scanner's
+facts (the JSX-structure authority) unioned with an independent
+tree-sitter parse of the same file — the upstream PHP grammar runs as a
+second opinion on every workspace source, and its scan rides the same
+`lsp-index.json` cache row. A component only one lane sees (a shape the
+scanner misses, or — on malformed input — a declaration tree-sitter's
+error recovery cannot see) still resolves, renames and lists references.
+A file whose tree-sitter parse produces no usable declaration structure
+falls back to the scanner alone, so broken input never blanks a file out
+of the workspace. Markup regions stay the scanner's job: the PHP grammar
+does not model JSX, so the lane contributes declaration structure while
+lintel-core remains the authority on component invocations.
