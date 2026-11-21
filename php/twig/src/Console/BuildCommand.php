@@ -14,8 +14,9 @@ use Symfony\Component\Console\Output\OutputInterface;
  * `bin/console lintel:build` (§11 Symfony wrapper, §17.1-Q2's remaining
  * Symfony surface): compiles the app's `.lintel.php` sources with the
  * lintel binary — artifacts into the configured cache dir and the T-31
- * `lintel.json` manifest into the working directory (console runs from
- * the project root) — the same prod warm-up the artisan lane drives.
+ * `lintel.json` manifest into the workspace root (the common ancestor of
+ * the source dirs and the cache dir — the project root, wherever the
+ * console runs from) — the same prod warm-up the artisan lane drives.
  * Paths arrive as constructor arguments (the kernel extension wires them
  * from the app's configuration), so the command respects the environment
  * it booted in. Diagnostics stream RAW — they carry raw `<…>` markup the
