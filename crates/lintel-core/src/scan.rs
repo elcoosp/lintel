@@ -960,6 +960,98 @@ impl<'s> Scanner<'s> {
             close_depth: 0,
             rebind_armed: false,
         });
+        self.copy_return_type(out);
+    }
+
+    /// Copy the declared function's closing `)` and — when the lowering
+    /// rewrites return types ([`Lowering::rewrites_return_types`], the
+    /// stream target) — its `Html`-typed return declaration, rewritten to
+    /// `\Generator`: the stream body returns the generator closure the
+    /// lowering emits, and the author's `Html` return type `TypeError`s
+    /// against it under `strict_types` the moment a real PHP consumer
+    /// invokes the artifact (the Phase 9 parity bug the
+    /// `renderStreaming()` acceptance proved). Nullable and qualified
+    /// spellings (`?Html`, `\Lintel\Html`) rewrite to the non-null
+    /// `\Generator` too (the generator is never null); any other type, a
+    /// union (`Html|string` — the span stops at `|`), or a body-less
+    /// declaration (`abstract`/interface `;` — the contract must stay)
+    /// copies verbatim. The rewrite is same-line: line preservation holds.
+    fn copy_return_type(&mut self, out: &mut String) {
+        // The closing parenthesis is already copied (and `self.pos` stepped
+        // past it) by [`Scanner::copy_param_list`]'s tail — this capture
+        // picks up exactly where it left off.
+        if !self.lowering.rewrites_return_types() {
+            return;
+        }
+        let Some((colon, type_end)) = self.lookahead_return_type() else {
+            return; // no type, a union, or no body: the loop copies verbatim
+        };
+        out.push_str(&self.src[self.pos..colon]);
+        out.push_str(": \\Generator");
+        self.pos = type_end;
+    }
+
+    /// The declared return type's span when it is an `Html` spelling with
+    /// a body following: `(colon_start, type_end)` — whitespace and
+    /// comments between the tokens are lexed; anything else (no colon, no
+    /// type, a union, a `;` body-less declaration) yields `None`.
+    fn lookahead_return_type(&self) -> Option<(usize, usize)> {
+        let mut cursor = self.skip_ws_comments(self.pos)?;
+        if self.b.get(cursor) != Some(&b':') {
+            return None;
+        }
+        let colon = cursor;
+        cursor = self.skip_ws_comments(cursor + 1)?;
+        let type_start = cursor;
+        if self.b.get(cursor) == Some(&b'?') {
+            cursor += 1;
+        }
+        while self
+            .b
+            .get(cursor)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'\\')
+        {
+            cursor += 1;
+        }
+        let type_end = cursor;
+        if type_end == type_start || cursor >= self.b.len() {
+            return None;
+        }
+        // A BODY must follow: `;` (abstract/interface) keeps its contract.
+        cursor = self.skip_ws_comments(cursor)?;
+        if self.b.get(cursor) != Some(&b'{') {
+            return None;
+        }
+        let spelled = self.src[type_start..type_end].trim_start_matches('?');
+        let html = spelled
+            .rsplit('\\')
+            .next()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("Html"));
+        html.then_some((colon, type_end))
+    }
+
+    /// Lexically skip whitespace and comments from `cursor` (line `//`/`#`
+    /// comments stop at their newline, block comments at `*/`); `None`
+    /// past EOF or on a malformed region.
+    fn skip_ws_comments(&self, mut cursor: usize) -> Option<usize> {
+        loop {
+            match (self.b.get(cursor), self.b.get(cursor + 1)) {
+                (Some(b), _) if b.is_ascii_whitespace() => cursor += 1,
+                (Some(b'/'), Some(b'*')) => {
+                    cursor += self.src[cursor..].find("*/")? + 2;
+                }
+                (Some(b'#'), Some(b'[')) => {
+                    // An attribute (`#[…]`) is not a comment: the return
+                    // type region never carries one — stop.
+                    return Some(cursor);
+                }
+                // `// …` and `# …` line comments share the same skip.
+                (Some(b'/'), Some(b'/')) | (Some(b'#'), _) => {
+                    cursor += self.src[cursor..].find('\n')?;
+                }
+                _ => return Some(cursor),
+            }
+        }
     }
 
     /// Copy a parameter list verbatim (through the closing `)`) and parse
