@@ -33,6 +33,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -41,6 +42,34 @@ use serde_json::{json, Value};
 /// The on-disk cache's shape version — a mismatch resets the cache (the
 /// index re-parses; the file is rewritten on the next persist).
 const CACHE_VERSION: u64 = 1;
+
+/// The persist's write goes through an exclusive `flock(2)` (fs2:
+/// `flock` on Unix, `LockFileEx` on Windows): two concurrent LSP sessions
+/// over one workspace both rewrite `.lintel-cache/lsp-index.json`, and an
+/// interleaved plain write would leave one session's loader a truncated
+/// mix. Best-effort like the persist itself: any failure degrades to the
+/// unlocked write the previous sessions shipped, never to a failed
+/// session.
+fn lock_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        // No truncate at open: an open-time truncate of a locked writer's
+        // file would punch a hole mid-write. The length resets under the
+        // lock, where the racing writer is serialized out.
+        .open(path)?;
+    // fs2's trait methods are called EXPLICITLY: std's own `File` locking
+    // (stable 1.89) would win inherent-method resolution and break the
+    // workspace MSRV (1.80).
+    fs2::FileExt::lock_exclusive(&file)?;
+    // The length resets under the lock: a previous longer write must not
+    // leave stale tail bytes past this write's length.
+    file.set_len(0)?;
+    file.write_all(bytes)?;
+    fs2::FileExt::unlock(&file)?;
+    Ok(())
+}
 
 /// One component declaration indexed from a workspace file: the scan
 /// table's facts the rename/references/symbols/definition queries read
@@ -88,10 +117,12 @@ impl WorkspaceIndex {
     /// no walk (a single-file client sees the open documents only, like
     /// the v0.5 seam).
     ///
-    /// The walk collects `.lintel.php` files (dot-directories and the
-    /// dependency directories skipped), loads the on-disk cache, keeps
-    /// entries whose mtime+size still match, parses the rest, and persists
-    /// the refreshed map best-effort.
+    /// The walk collects `.lintel.php` files — through the `lintel.json`
+    /// `lsp.include` glob patterns when the workspace configures them
+    /// (the monorepo override), else the default walk (dot-directories
+    /// and the dependency directories skipped) — loads the on-disk cache,
+    /// keeps entries whose mtime+size still match, parses the rest, and
+    /// persists the refreshed map best-effort.
     pub(crate) fn for_root(root_uri: Option<&str>) -> Self {
         let Some(root) = root_uri.and_then(uri_to_path) else {
             return Self::default();
@@ -99,7 +130,10 @@ impl WorkspaceIndex {
         let cached = load_cache(&root).unwrap_or_default();
         let mut files: HashMap<String, Entry> = HashMap::new();
         let mut paths: Vec<PathBuf> = Vec::new();
-        walk(&root, &mut paths);
+        match workspace_include_patterns(&root) {
+            Some(patterns) => walk_with_includes(&root, &patterns, &mut paths),
+            None => walk(&root, &mut paths),
+        }
         for path in paths {
             let Some(uri) = path_to_uri(&path) else {
                 continue;
@@ -248,7 +282,10 @@ impl WorkspaceIndex {
             return;
         }
         let body = json!({"version": CACHE_VERSION, "files": Value::Object(files)});
-        let _ = fs::write(cache_dir.join("lsp-index.json"), body.to_string());
+        let _ = lock_write(
+            &cache_dir.join("lsp-index.json"),
+            body.to_string().as_bytes(),
+        );
     }
 }
 
@@ -436,6 +473,122 @@ fn walk(root: &Path, paths: &mut Vec<PathBuf>) {
             walk(&path, paths);
         } else if name.ends_with(".lintel.php") {
             paths.push(path);
+        }
+    }
+}
+
+/// The `lintel.json` `lsp.include` patterns: `{"lsp": {"include":
+/// ["packages/*/src/**/*.lintel.php"]}}` — read relative to the workspace
+/// root. `None` when the file, the `lsp` object or the list is absent or
+/// unparseable (the default walk); a present-but-EMPTY list indexes
+/// nothing (the configuration says what to walk, and it says nothing).
+/// Non-string entries are ignored; an all-non-string list is empty.
+fn workspace_include_patterns(root: &Path) -> Option<Vec<String>> {
+    let body = fs::read_to_string(root.join("lintel.json")).ok()?;
+    let value: Value = serde_json::from_str(&body).ok()?;
+    let include = value.get("lsp")?.get("include")?.as_array()?;
+    let patterns: Vec<String> = include
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    Some(patterns)
+}
+
+/// Whether `relative` (a `/`-separated path, root-relative) matches one
+/// `lsp.include` glob: `**` spans directory levels, `*` matches any run
+/// of characters within one segment, `?` exactly one. Matching is
+/// byte-wise and case-sensitive (the walk is deterministic; patterns name
+/// the components as written on disk).
+fn glob_matches(pattern: &str, relative: &str) -> bool {
+    let pattern: Vec<&str> = pattern.split('/').collect();
+    let path: Vec<&str> = relative.split('/').collect();
+    segments_match(&pattern, &path)
+}
+
+/// Segment-wise glob matching: `**` matches zero or more whole segments
+/// (the recursion either skips it or consumes one path segment), any
+/// other pattern segment must match its path segment exactly.
+fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
+    match (pattern.first(), path.first()) {
+        (None, None) => true,
+        (Some(&"**"), _) => {
+            segments_match(&pattern[1..], path)
+                || (!path.is_empty() && segments_match(pattern, &path[1..]))
+        }
+        (Some(pattern_segment), Some(path_segment)) => {
+            segment_matches(pattern_segment, path_segment)
+                && segments_match(&pattern[1..], &path[1..])
+        }
+        _ => false,
+    }
+}
+
+/// One path segment's wildcard match: `*` (zero or more bytes), `?`
+/// (exactly one byte), everything else byte-equal. No escaping — the
+/// include list names source paths, not regexes.
+fn segment_matches(pattern: &str, segment: &str) -> bool {
+    fn inner(pattern: &[u8], segment: &[u8]) -> bool {
+        match (pattern.first(), segment.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => {
+                inner(&pattern[1..], segment)
+                    || (!segment.is_empty() && inner(pattern, &segment[1..]))
+            }
+            (Some(b'?'), Some(_)) => inner(&pattern[1..], &segment[1..]),
+            (Some(a), Some(b)) if a == b => inner(&pattern[1..], &segment[1..]),
+            _ => false,
+        }
+    }
+    inner(pattern.as_bytes(), segment.as_bytes())
+}
+
+/// Recursively collect the `.lintel.php` files under `root` whose
+/// root-relative path matches ANY of the `lsp.include` glob patterns —
+/// the monorepo override (the Phase 9 §f backlog): only the configured
+/// patterns walk in. The dependency and dot-directory skips stay (they
+/// are properties of the walk, not of the selection — an explicit pattern
+/// cannot re-include vendored dependencies), the `.lintel.php` suffix
+/// requirement stays (the index parses Lintel sources), and the walk
+/// stays sorted per directory for determinism.
+fn walk_with_includes(root: &Path, patterns: &[String], paths: &mut Vec<PathBuf>) {
+    walk_includes_at(root, root, patterns, paths);
+}
+
+/// The per-directory recursion of [`walk_with_includes`].
+fn walk_includes_at(root: &Path, dir: &Path, patterns: &[String], paths: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let Some(name) = name else { continue };
+        if name.starts_with('.') || name == "vendor" || name == "node_modules" {
+            continue;
+        }
+        if path.is_dir() {
+            walk_includes_at(root, &path, patterns, paths);
+        } else if name.ends_with(".lintel.php") {
+            let relative: Vec<String> = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let relative = relative.join("/");
+            if patterns
+                .iter()
+                .any(|pattern| glob_matches(pattern, &relative))
+            {
+                paths.push(path);
+            }
         }
     }
 }
@@ -676,6 +829,129 @@ mod tests {
         assert_eq!(
             declarations[0].name, "Badge",
             "the disk re-validates the entry"
+        );
+    }
+
+    #[test]
+    fn globs_match_segments_stars_and_double_stars() {
+        use super::glob_matches;
+        assert!(glob_matches(
+            "packages/*/src/**/*.lintel.php",
+            "packages/ui/src/Badge.lintel.php"
+        ));
+        assert!(glob_matches(
+            "packages/*/src/**/*.lintel.php",
+            "packages/app/src/deep/Page.lintel.php"
+        ));
+        assert!(glob_matches(
+            "**/*.lintel.php",
+            "anywhere/deep/Tree.lintel.php"
+        ));
+        assert!(
+            !glob_matches(
+                "packages/*/src/**/*.lintel.php",
+                "packages/ui/lib/Badge.lintel.php"
+            ),
+            "a literal segment must match exactly"
+        );
+        assert!(
+            !glob_matches(
+                "packages/*/src/*.lintel.php",
+                "packages/app/src/deep/Page.lintel.php"
+            ),
+            "a single `*` stays within one segment"
+        );
+        assert!(
+            !glob_matches("packages/ui/**", "packages/app/src/Page.lintel.php"),
+            "a literal prefix pins the subtree"
+        );
+        assert!(glob_matches("?.lintel.php", "a.lintel.php"));
+        assert!(!glob_matches("?.lintel.php", "ab.lintel.php"));
+    }
+
+    #[test]
+    fn the_monorepo_include_list_indexes_only_the_configured_patterns() {
+        // The Phase 9 §f backlog: a monorepo with vendored component
+        // sources needs an explicit include list. The fixture mirrors it:
+        // real sources in packages/{ui,app}/src, vendored sources in
+        // vendor/, and a stray root source none of the patterns name.
+        let root = scratch("monorepo");
+        fs::create_dir_all(root.join("packages/ui/src")).expect("dirs");
+        fs::create_dir_all(root.join("packages/app/src/deep")).expect("dirs");
+        fs::create_dir_all(root.join("vendor/acme")).expect("dirs");
+        fs::write(root.join("packages/ui/src/Badge.lintel.php"), DECLARING).expect("writes");
+        fs::write(
+            root.join("packages/app/src/deep/Page.lintel.php"),
+            DECLARING,
+        )
+        .expect("writes");
+        fs::write(root.join("vendor/acme/Vendored.lintel.php"), DECLARING).expect("writes");
+        fs::write(root.join("Stray.lintel.php"), DECLARING).expect("writes");
+        fs::write(
+            root.join("lintel.json"),
+            r#"{"lsp": {"include": ["packages/*/src/**/*.lintel.php"]}}"#,
+        )
+        .expect("writes the config");
+
+        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        let uris = index.uris();
+        assert_eq!(
+            uris.len(),
+            2,
+            "only the configured patterns walk in: {uris:?}"
+        );
+        let badge_uri =
+            super::path_to_uri(&root.join("packages/ui/src/Badge.lintel.php")).expect("uri");
+        assert!(
+            uris.contains(&badge_uri),
+            "the ui package's source is indexed: {uris:?}"
+        );
+        let page_uri =
+            super::path_to_uri(&root.join("packages/app/src/deep/Page.lintel.php")).expect("uri");
+        assert!(
+            uris.contains(&page_uri),
+            "the app package's nested source is indexed: {uris:?}"
+        );
+        assert!(
+            !uris.iter().any(|uri| uri.contains("vendor")),
+            "vendored sources stay out even though `**` would match them: {uris:?}"
+        );
+        assert!(
+            !uris.iter().any(|uri| uri.contains("Stray")),
+            "sources outside the patterns stay out: {uris:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_broken_include_config_keeps_the_default_walk() {
+        // No lintel.json, an unparseable one, and an `lsp` object without
+        // `include`: the default walk indexes every non-vendored source.
+        let root = scratch("include-default");
+        fs::write(root.join("Badge.lintel.php"), DECLARING).expect("writes");
+        fs::write(root.join("lintel.json"), "{ not json").expect("writes broken config");
+        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        assert_eq!(index.uris().len(), 1, "broken config: the default walk ran");
+
+        let root = scratch("include-default-2");
+        fs::write(root.join("Badge.lintel.php"), DECLARING).expect("writes");
+        fs::write(root.join("lintel.json"), r#"{"lsp": {}}"#).expect("writes config");
+        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        assert_eq!(
+            index.uris().len(),
+            1,
+            "no include key: the default walk ran"
+        );
+
+        // A present-but-EMPTY include list indexes nothing: the config
+        // says what to walk, and it says nothing.
+        let root = scratch("include-empty");
+        fs::write(root.join("Badge.lintel.php"), DECLARING).expect("writes");
+        fs::write(root.join("lintel.json"), r#"{"lsp": {"include": []}}"#).expect("writes config");
+        let index = WorkspaceIndex::for_root(Some(&super::path_to_uri(&root).expect("uri")));
+        assert!(
+            index.uris().is_empty(),
+            "an empty include list is the literal configuration: {:?}",
+            index.uris()
         );
     }
 }
