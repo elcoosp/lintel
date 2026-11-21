@@ -701,3 +701,249 @@ fn definition_positions_round_trip_through_utf16() {
         "the declaration position is a UTF-16 position: {location}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M2: code actions + formatting (§17.1 Q3+ / Year-2 formatter lane)
+// ---------------------------------------------------------------------------
+
+/// The codeAction request for `range` on `uri`.
+fn code_action_request(id: i32, uri: &str, start: (u32, u32), end: (u32, u32)) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/codeAction",
+        "params": {
+            "textDocument": {"uri": uri},
+            "range": {"start": {"line": start.0, "character": start.1},
+                      "end": {"line": end.0, "character": end.1}},
+            "context": {"diagnostics": []},
+        },
+    }))
+}
+
+/// The formatting request on `uri` (the options the client always sends).
+fn formatting_request(id: i32, uri: &str) -> String {
+    message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/formatting",
+        "params": {
+            "textDocument": {"uri": uri},
+            "options": {"tabSize": 4, "insertSpaces": true},
+        },
+    }))
+}
+
+const EXTRACT_SOURCE: &str = concat!(
+    "<?php\n\n",
+    "function Page(string $u): Html\n{\n",
+    "    return (\n",
+    "        <section>\n",
+    "            <b class=\"hi\">{$u}</b>\n",
+    "        </section>\n",
+    "    );\n}\n",
+);
+
+#[test]
+fn initialize_advertises_code_actions_and_formatting() {
+    let session = session(&[message(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+    }))]);
+    let init = &bodies(&session)[0];
+    assert_eq!(init["result"]["capabilities"]["codeActionProvider"], true);
+    assert_eq!(
+        init["result"]["capabilities"]["documentFormattingProvider"],
+        true
+    );
+}
+
+#[test]
+fn code_action_extracts_a_selection_to_a_component() {
+    let uri = "file:///proj/Extract.lintel.php";
+    // The selection covers `<b class="hi">{$u}</b>` — a complete subtree.
+    let start = position_of(EXTRACT_SOURCE, "<b class=\"hi\">");
+    let end = position_of(EXTRACT_SOURCE, "</b>");
+    let end = (end.0, end.1 + u32::try_from("</b>".len()).unwrap_or(0));
+    let session = session(&[
+        open_message(uri, EXTRACT_SOURCE),
+        code_action_request(60, uri, start, end),
+        EXIT.to_string(),
+    ]);
+    let response = bodies(&session)
+        .into_iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(60)))
+        .expect("the codeAction response arrives");
+    let actions = response["result"].as_array().expect("a list of actions");
+    let extract = actions
+        .iter()
+        .find(|action| action["title"] == "Extract to Lintel component")
+        .expect("the extract action is offered");
+    assert_eq!(extract["kind"], "refactor.extract");
+
+    // The edit creates the sibling file, fills it with the component, and
+    // replaces the selection with the invocation.
+    let ops = &extract["edit"]["documentChanges"];
+    assert_eq!(ops.as_array().map(Vec::len), Some(3), "{extract}");
+    assert_eq!(ops[0]["kind"], "create");
+    assert_eq!(ops[0]["uri"], "file:///proj/Extracted.lintel.php");
+
+    let body = ops[1]["edits"][0]["newText"].as_str().expect("body text");
+    assert!(
+        body.contains("function Extracted($u)"),
+        "the free $u becomes the component's parameter: {body}"
+    );
+    assert!(
+        body.contains("return <b class=\"hi\">{$u}</b>;"),
+        "the selection is the component body: {body}"
+    );
+
+    let replace = ops[2]["edits"][0]["newText"].as_str().expect("invocation");
+    let replacement = ops[2].clone();
+    assert_eq!(replace, "<Extracted u={$u} />", "{replacement}");
+}
+
+#[test]
+fn code_action_extract_skips_php_and_broken_selections() {
+    let uri = "file:///proj/NoExtract.lintel.php";
+    // A selection with inline PHP never extracts (the body must compile).
+    let start = position_of(EXTRACT_SOURCE, "<?php");
+    let end = position_of(EXTRACT_SOURCE, "function Page");
+    // An unclosed element is rejected by the same compile gate: the
+    // selection opens <section> and stops before </section>.
+    let broken_start = position_of(EXTRACT_SOURCE, "<section>");
+    let broken_end = position_of(EXTRACT_SOURCE, "</b>");
+    let broken_end = (
+        broken_end.0,
+        broken_end.1 + u32::try_from("</b>".len()).unwrap_or(0),
+    );
+
+    let session = session(&[
+        open_message(uri, EXTRACT_SOURCE),
+        code_action_request(61, uri, start, end),
+        code_action_request(62, uri, broken_start, broken_end),
+        EXIT.to_string(),
+    ]);
+    let bodies = bodies(&session);
+    for id in [61, 62] {
+        let response = bodies
+            .iter()
+            .find(|body| body.get("id") == Some(&serde_json::json!(id)))
+            .expect("the codeAction response arrives");
+        let actions = response["result"].as_array().expect("a list");
+        assert!(
+            actions
+                .iter()
+                .all(|action| action["title"] != "Extract to Lintel component"),
+            "id {id}: no extract for a PHP/broken selection: {response}"
+        );
+    }
+}
+
+const REQUIRED_SOURCE: &str = concat!(
+    "<?php\n\n",
+    "function Card(string $name, ?Html $children = null): Html\n{\n",
+    "    return <div class=\"card\">{$name}{$children}</div>;\n}\n\n",
+    "echo <Card />;\n"
+);
+
+#[test]
+fn code_action_adds_missing_required_props() {
+    let uri = "file:///proj/Props.lintel.php";
+    let at = position_of(REQUIRED_SOURCE, "<Card");
+    let session = session(&[
+        open_message(uri, REQUIRED_SOURCE),
+        code_action_request(63, uri, at, at),
+        EXIT.to_string(),
+    ]);
+    let response = bodies(&session)
+        .into_iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(63)))
+        .expect("the codeAction response arrives");
+    let actions = response["result"].as_array().expect("a list of actions");
+    let fix = actions
+        .iter()
+        .find(|action| action["title"] == "Add missing required props: name")
+        .expect("the quickfix is offered");
+    assert_eq!(fix["kind"], "quickfix");
+
+    let edits = &fix["edit"]["changes"][uri];
+    assert_eq!(edits.as_array().map(Vec::len), Some(1));
+    assert_eq!(edits[0]["newText"], " name=\"\"", "{fix}");
+    // The insertion sits right before the self-closing `/>`.
+    let tag_line = REQUIRED_SOURCE
+        .lines()
+        .position(|line| line.contains("<Card />"))
+        .unwrap_or(0);
+    assert_eq!(edits[0]["range"]["start"]["line"], tag_line as u64);
+}
+
+#[test]
+fn code_action_offers_nothing_when_required_props_are_passed() {
+    let uri = "file:///proj/PropsDone.lintel.php";
+    let complete = REQUIRED_SOURCE.replace("<Card />", "<Card name=\"x\" />");
+    let at = position_of(&complete, "<Card");
+    let session = session(&[
+        open_message(uri, &complete),
+        code_action_request(64, uri, at, at),
+        EXIT.to_string(),
+    ]);
+    let response = bodies(&session)
+        .into_iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(64)))
+        .expect("the codeAction response arrives");
+    let actions = response["result"].as_array().expect("a list");
+    assert!(
+        actions.iter().all(|action| action["kind"] != "quickfix"),
+        "every required prop is passed: {response}"
+    );
+}
+
+const MESSY_SOURCE: &str = concat!(
+    "<?php\n\n",
+    "function Page(): Html\n{\n",
+    "    return (\n",
+    "      <div>\n",
+    "   <b>bold text stays</b>\n",
+    "      </div>\n",
+    "    );\n}\n",
+);
+
+#[test]
+fn formatting_normalizes_tag_indentation_and_keeps_php_and_text() {
+    let uri = "file:///proj/Fmt.lintel.php";
+    let session = session(&[
+        open_message(uri, MESSY_SOURCE),
+        formatting_request(65, uri),
+        EXIT.to_string(),
+    ]);
+    let response = bodies(&session)
+        .into_iter()
+        .find(|body| body.get("id") == Some(&serde_json::json!(65)))
+        .expect("the formatting response arrives");
+    let edits = response["result"].as_array().expect("a list of edits");
+
+    // Apply the edits the way a client would and check every line.
+    let mut lines: Vec<String> = MESSY_SOURCE.lines().map(str::to_string).collect();
+    for edit in edits {
+        let line =
+            usize::try_from(edit["range"]["start"]["line"].as_u64().unwrap_or(0)).unwrap_or(0);
+        let line_value = lines.get(line).expect("the edit targets a line");
+        let first = line_value.len() - line_value.trim_start().len();
+        let indent = edit["newText"].as_str().expect("indent");
+        let updated = format!("{indent}{}", &line_value[first..]);
+        lines[line] = updated;
+    }
+
+    // PHP lines and the JSX text keep their exact bytes.
+    assert_eq!(lines[0], "<?php");
+    assert_eq!(lines[2], "function Page(): Html");
+    assert_eq!(lines[3], "{");
+    assert_eq!(lines[4], "    return (");
+    assert_eq!(
+        lines[5], "    <div>",
+        "the root tag aligns with the PHP base: {lines:?}"
+    );
+    assert_eq!(
+        lines[6], "        <b>bold text stays</b>",
+        "the text after <b> is data — the tag line re-indents: {lines:?}"
+    );
+    assert_eq!(lines[7], "    </div>", "{lines:?}");
+    assert_eq!(lines[8], "    );", "PHP tail untouched");
+    assert_eq!(lines[9], "}");
+}
