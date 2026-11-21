@@ -173,66 +173,110 @@ final class Loader
     }
 
     /**
-     * The T-12 daemon protocol (one request per connection): the client
-     * sends `<abs path>\n`, the daemon answers `OK <len>\n<php>` or
-     * `ERR <len>\n<rendered diagnostics>`. Returns `null` on any
-     * transport failure (the caller falls back to proc_open); an `ERR`
-     * answer is a *compile* failure, surfaced as the daemon rendered it.
+     * The T-12 daemon protocol (`docs/daemon-protocol.md`, one request per
+     * connection): both directions frame ten ASCII decimal digits + `\n` +
+     * exactly that many bytes of UTF-8 JSON. The request is
+     * `{"path": "…"}`; the answer is `{"ok":true,"php":"…"}` or
+     * `{"ok":false,"diag":[…]}` (one rendered diagnostic per entry).
+     * The connect retries once after 100 ms (the window a restarting
+     * daemon rebinds its socket within) — a failure on both attempts
+     * returns `null` (the caller falls back to proc_open); a failure
+     * AFTER the daemon accepted is also `null`, never a half-answer. An
+     * `ok:false` answer is a *compile* failure, surfaced as the daemon
+     * rendered it.
      */
     private static function compileOverSocket(string $file): ?string
     {
-        $stream = @\stream_socket_client('unix://' . self::$sock, $errno, $errstr, 5.0);
-        if ($stream === false) {
+        $request = \json_encode(['path' => $file], JSON_UNESCAPED_SLASHES);
+        if ($request === false) {
             return null;
         }
-        $written = @\fwrite($stream, $file . "\n");
-        if ($written === false || \strpos($file, "\n") !== false) {
-            \fclose($stream);
-
-            return null;
-        }
-        $header = self::socketLine($stream);
-        if ($header === null || !\preg_match('/^(OK|ERR) (\d+)$/', $header, $m)) {
-            \fclose($stream);
-
-            return null;
-        }
-        $length = (int) $m[2];
-        $body = '';
-        while (\strlen($body) < $length && !\feof($stream)) {
-            $chunk = @\fread($stream, (int) \max(1, $length - \strlen($body)));
-            if ($chunk === false || $chunk === '') {
-                break;
+        $frame = \sprintf('%010d', \strlen($request)) . "\n" . $request;
+        // The reconnection window: one retry after 100 ms covers a daemon
+        // that is restarting; the proc_open fallback covers anything else.
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            if ($attempt > 0) {
+                \usleep(100_000);
             }
-            $body .= $chunk;
-        }
-        \fclose($stream);
-        if (\strlen($body) !== $length) {
-            return null;
+            $answer = self::daemonRequest($frame);
+            if ($answer === false) {
+                continue; // transport failure: retry, then fall back
+            }
+            $value = \json_decode($answer, true);
+            if (!\is_array($value) || !\array_key_exists('ok', $value)) {
+                return null;
+            }
+            if ($value['ok'] !== true) {
+                $diag = $value['diag'] ?? [];
+                $rendered = \is_array($diag) ? \implode("\n", \array_filter($diag, 'is_string')) : '';
+                // A compile failure the daemon already rendered — surface
+                // it like the proc_open fallback surfaces a non-zero exit.
+                throw new \RuntimeException("lintel build failed for {$file}: " . $rendered);
+            }
+
+            return \is_string($value['php'] ?? null) ? $value['php'] : null;
         }
 
-        if ($m[1] === 'ERR') {
-            // A compile failure the daemon already rendered — surface it
-            // like the proc_open fallback surfaces a non-zero exit.
-            throw new \RuntimeException("lintel build failed for {$file}: " . $body);
-        }
-
-        return $body;
+        return null;
     }
 
     /**
-     * One `\n`-terminated line from the socket, or `null` on EOF/error.
+     * One framed request/answer round trip on the configured socket:
+     * writes the framed request, reads the ten-digit prefix + payload, and
+     * returns the answer payload — or `false` on ANY transport failure
+     * (connect refused, half-write, truncated body).
      *
-     * @param resource $stream the socket the daemon handshake returned
+     * @return string|false the answer payload, or false on transport failure
      */
-    private static function socketLine($stream): ?string
+    private static function daemonRequest(string $frame)
     {
-        $line = \fgets($stream);
-        if ($line === false) {
-            return null;
+        $stream = @\stream_socket_client('unix://' . self::$sock, $errno, $errstr, 5.0);
+        if ($stream === false) {
+            return false;
+        }
+        $written = @\fwrite($stream, $frame);
+        if ($written === false || $written < \strlen($frame)) {
+            \fclose($stream);
+
+            return false;
+        }
+        $prefix = '';
+        while (\strlen($prefix) < 10) {
+            $chunk = @\fread($stream, 10 - \strlen($prefix));
+            if ($chunk === false || $chunk === '') {
+                \fclose($stream);
+
+                return false;
+            }
+            $prefix .= $chunk;
+        }
+        if (!\ctype_digit($prefix)) {
+            \fclose($stream);
+
+            return false;
+        }
+        // The separator newline between the prefix and the payload.
+        $separator = @\fread($stream, 1);
+        if ($separator === false || $separator !== "\n") {
+            \fclose($stream);
+
+            return false;
+        }
+        $length = (int) $prefix;
+        $payload = '';
+        while (\strlen($payload) < $length && !\feof($stream)) {
+            $chunk = @\fread($stream, (int) \max(1, $length - \strlen($payload)));
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $payload .= $chunk;
+        }
+        \fclose($stream);
+        if (\strlen($payload) !== $length) {
+            return false;
         }
 
-        return \rtrim($line, "\r\n");
+        return $payload;
     }
 
     /**
