@@ -367,7 +367,7 @@ fn json_format_emits_one_object_per_diagnostic() {
     );
     assert!(lines[0].contains("\"line\":2"), "{stderr}");
     assert!(
-        lines[0].ends_with("\"docs\":\"https://lintel.sh/e/LNT0301\"}"),
+        lines[0].ends_with("\"docs\":\"https://elcoosp.github.io/lintel/e/LNT0301\"}"),
         "{stderr}"
     );
     let _ = fs::remove_dir_all(&dir);
