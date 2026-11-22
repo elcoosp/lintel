@@ -1671,22 +1671,27 @@ benches, cargo-deny, the PHP gates, the claims sweep, the docs-site link
 check) was re-run on the tree before the cards started and again after
 they landed:
 
-- **T-18 v1.0.0 release automation.** The workspace version is now
-  **1.0.0**, declared once in `[workspace.package]` (`cargo update -w`
-  refreshed the lock; `tests/cli.rs`'s version assertion reads
-  `CARGO_PKG_VERSION` — the hardcoded `0.1.0` string would have broken
-  every future bump). The release dry-run
+- **T-18 v0.1.0 release automation (M0 release-readiness correction).**
+  The workspace version is **0.1.0**, declared once in
+  `[workspace.package]` (`cargo update -w` refreshed the lock;
+  `tests/cli.rs`'s version assertion reads `CARGO_PKG_VERSION` — the
+  hardcoded `0.1.0` string would have broken every future bump). M0
+  reverted the 1.0.0 drift (zero external users, zero production soak —
+  §15 T-18's acceptance is "tagged v0.1.0") back to the honest 0.1.0; the
+  CHANGELOG's `## [0.1.0]` section states the maturity evidence (625
+  tests, CI lanes), and README's Status note says early-but-tested, not
+  "Stable v1.0.0". The release dry-run
   (`scripts/release-dry-run.sh`: actionlint, one-version check, publish
   -order topological check against the real `cargo metadata` graph,
   CHANGELOG section check, composer target check, per-crate
   `cargo publish --dry-run` packaging, the §12 structural promises) found
   **two real release blockers before any tag existed**: the internal path
   dependencies carried no version requirement (crates.io refuses the
-  manifest — every internal dep now pins `version = "1.0.0"` alongside
+  manifest — every internal dep now pins `version = "0.1.0"` alongside
   its path), and the publish order would have violated the graph —
   `lintel-diag` is the graph's ROOT (`lintel-core` depends on it), so the
   order is diag → core → lsp → cli. `.github/workflows/release.yml` now
-  extracts the release body from the CHANGELOG's `## [v1.0.0]` section
+  extracts the release body from the CHANGELOG's `## [0.1.0]` section
   (cut from `[Unreleased]`; the dry-run previews the exact text), stages
   the release as a DRAFT, guards the tag against the workspace version,
   interleaves a `--dry-run` pre-flight with each real `cargo publish`
@@ -1698,8 +1703,13 @@ they landed:
   missing publish secrets fail loudly with setup instructions — never a
   silent skip. Pre-tag, the local dry-run fully packages the graph root
   and states exactly why the three dependents verify only in the release
-  job (chicken-and-egg: the sibling's 1.0.0 does not exist on crates.io
-  yet).
+  job (chicken-and-egg: the sibling's 0.1.0 does not exist on crates.io
+  yet). **Note:** the `lintel` crate name on crates.io is TAKEN by an
+  unrelated package (a JSON/YAML validator); `lintel-cli` and `lintel-core`
+  are also taken. The maintainer is running a community naming process;
+  `scripts/rename-readiness.sh <candidate>` reports the full rename
+  surface (crate names, composer names, namespaces, docs URLs, badge URLs,
+  CLI strings, release.yml) for any candidate without renaming anything.
 - **T-14/CI completeness.** `make bench-docker` is the pinned
   reproduction as its own target (no native fallback — the target IS the
   docker path), and the CI `bench` job runs exactly it;
