@@ -26,7 +26,12 @@ mkdir -p "$HOME/project" && cd "$HOME/project"
 lintel init
 
 echo; echo "== step 3: edit the component =="
-sed -i 's|<h1>Hello,|<h1>Rendered by Lintel —|' hello.lintel.php
+# `sed -i.bak` (then drop the backup) is portable across GNU sed (Linux CI,
+# Git Bash) and BSD sed (macOS): a bare `sed -i 's|...|...|'` makes BSD sed
+# take the script as the backup suffix and fail with "extra characters at
+# the end of h command".
+sed -i.bak 's|<h1>Hello,|<h1>Rendered by Lintel —|' hello.lintel.php
+rm -f hello.lintel.php.bak
 grep -n "Rendered by Lintel" hello.lintel.php
 
 echo; echo "== step 4: rebuild in place (edit → refresh) =="
