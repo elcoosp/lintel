@@ -1,0 +1,53 @@
+# M3 release-readiness: publish the docs-site + playground to GitHub Pages.
+#
+# `lintel.sh` is not live at launch, so every diagnostic the product emits
+# (the 13 LNT docs URLs) points at the configurable `LINTEL_DOCS_BASE`,
+# whose default is this Pages URL. The docs-site builder (make docs-site)
+# emits docs-site/build/ with every markdown page rendered, the error
+# index at /e/LNTxxxx/ for all 13 codes, and the playground mirrored at
+# /playground/. This workflow publishes that tree to Pages on every push
+# to main, so the emitted URLs resolve from launch day.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/configure-pages@v5
+        id: pages
+        with:
+          enablement: true
+      - name: Build the docs-site + error index + playground mirror (link-checked)
+        run: make docs-site
+      - name: "M3 emitted-URL integrity gate — every URL the product emits resolves"
+        run: bash scripts/emitted-url-gate.sh
+        env:
+          LINTEL_DOCS_BASE: ${{ steps.pages.outputs.base_url }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/build
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
