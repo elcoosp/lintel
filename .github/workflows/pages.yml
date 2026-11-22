@@ -36,9 +36,15 @@ jobs:
       - name: Build the docs-site + error index + playground mirror (link-checked)
         run: make docs-site
       - name: "M3 emitted-URL integrity gate — every URL the product emits resolves"
+        # Run the gate against the LOCAL build tree (file://), not the live
+        # Pages URL: the build job runs BEFORE the deploy job publishes the
+        # site, so on a fresh repo (or the first run after Pages is enabled)
+        # the live /e/LNTxxxx/ URLs do not exist yet and would 404 — a
+        # chicken-and-egg that reds the build and blocks the deploy that
+        # would publish them. The gate's job is to prove every emitted URL
+        # HAS a page (the docs-site build emitted it); the deploy job's
+        # page_url is the liveness check that the site is actually served.
         run: bash scripts/emitted-url-gate.sh
-        env:
-          LINTEL_DOCS_BASE: ${{ steps.pages.outputs.base_url }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs-site/build
