@@ -192,7 +192,10 @@ jobs:
           extensions: swoole
           tools: composer
       - name: composer install (the runtime package the lanes drive)
-        run: composer install --working-dir=php/runtime --no-interaction --no-progress
+        # --ignore-platform-req=php: the lock requires >=8.6 but this lane
+        # pins 8.5 for swoole compatibility; the runtime source is
+        # PHP 8.6-target but swoole-independent, so 8.5 runs the lanes.
+        run: composer install --working-dir=php/runtime --no-interaction --no-progress --ignore-platform-req=php
       - name: Assert the live lanes can run (the gates must be satisfiable, never silently skipped)
         run: |
           php -r "if (!extension_loaded('swoole')) { fwrite(STDERR, 'ext-swoole missing on the runner'); exit(1); } echo 'ext-swoole loaded: ', phpversion('swoole'), PHP_EOL;"
