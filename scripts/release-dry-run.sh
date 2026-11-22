@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The T-18 release dry-run (v1.0.0): validates .github/workflows/release.yml
-# and the release prep BEFORE the maintainer tags v1.0.0, entirely
+# The T-18 release dry-run (v0.1.0): validates .github/workflows/release.yml
+# and the release prep BEFORE the maintainer tags v0.1.0, entirely
 # offline-except-packaging:
 #
 #   1. actionlint parses every workflow (the workflow-lint gate, re-run here
@@ -8,7 +8,7 @@
 #   2. The four publishable crates resolve to ONE workspace version.
 #   3. The `cargo publish -p …` order in release.yml is topologically sound:
 #      every crate's internal lintel-* dependency publishes earlier.
-#   4. The CHANGELOG carries a valid `## [v1.0.0]` release section with
+#   4. The CHANGELOG carries a valid `## [0.1.0]` release section with
 #      content — the exact text the release job extracts for the release body
 #      (the same awk is run here, so what you preview is what ships).
 #   5. The composer publish targets exist: lintel/lintel + markup/markup,
@@ -102,17 +102,17 @@ PY
     echo "publish order: OK (every dependency precedes its dependent)"
 fi
 
-step "4. CHANGELOG: the v1.0.0 release section"
-SECTION=$(awk '/^## \[v1\.0\.0\]/{flag=1; next} /^## /{flag=0} flag' "$CHANGELOG") || SECTION=""
+step "4. CHANGELOG: the v0.1.0 release section"
+SECTION=$(awk '/^## \[0\.1\.0\]/{flag=1; next} /^## /{flag=0} flag' "$CHANGELOG") || SECTION=""
 if [ -z "$SECTION" ]; then
-    bail "CHANGELOG.md has no '## [v1.0.0]' section — the release body would be empty"
+    bail "CHANGELOG.md has no '## [0.1.0]' section — the release body would be empty"
 else
     BULLETS=$(printf '%s\n' "$SECTION" | grep -c '^- ') || BULLETS=0
     if [ "$BULLETS" -lt 1 ]; then
-        bail "the '## [v1.0.0]' section carries no bullet entries"
+        bail "the '## [0.1.0]' section carries no bullet entries"
     fi
     CHARS=$(printf '%s' "$SECTION" | wc -m)
-    echo "release body: '## [v1.0.0]' — $BULLETS bullets, $CHARS chars (the release job attaches exactly this text)"
+    echo "release body: '## [0.1.0]' — $BULLETS bullets, $CHARS chars (the release job attaches exactly this text)"
 fi
 
 step "5. composer publish targets exist"
@@ -183,7 +183,7 @@ fi
 
 printf '\n'
 if [ "$fail" = 0 ]; then
-    echo "release dry-run: ALL OK — the v1.0.0 automation is ready for the tag"
+    echo "release dry-run: ALL OK — the v0.1.0 automation is ready for the tag"
     exit 0
 fi
 echo "release dry-run: FAILED — fix the steps above before tagging"
