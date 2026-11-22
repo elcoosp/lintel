@@ -183,10 +183,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
-          # ext-swoole prebuilt for 8.6 — the live Swoole lane runs here and
-          # ONLY here (the main php job's probe asserts the ext is absent,
-          # so loading it there would break that lane).
-          php-version: '8.6'
+          # ext-swoole (v6.3) does not yet support PHP 8.6 (requires
+          # >=8.2 <8.6), so this lane pins 8.5 — the latest swoole-
+          # compatible PHP. The main php job runs 8.6 and asserts the
+          # ext is absent, so loading it there would break that lane.
+          php-version: '8.5'
           coverage: none
           extensions: swoole
           tools: composer

@@ -18,12 +18,14 @@ WORKDIR /src/bench
 COPY bench/composer.json bench/composer.lock ./
 COPY php/runtime /src/php/runtime
 # roadrunner/worker + goridge (require-dev, pulled transitively by
-# spiral/roadrunner-http) declare ext-sockets, which the composer image does
-# not bundle. The bench harness drives the simulated RoadRunnerFlushTransport
+# spiral/roadrunner-http) declare ext-sockets, which the composer image
+# does not bundle. The bench harness drives the simulated RoadRunnerFlushTransport
 # (a pure-PHP queue, no real socket), so the extension is not needed at
 # runtime — ignore the platform req here so `composer install` resolves the
-# locked vendor tree the harness requires.
-RUN composer install --no-interaction --no-progress --ignore-platform-req=ext-sockets
+# locked vendor tree the harness requires. --ignore-platform-req=php is
+# needed because the composer:2 image ships PHP 8.5 while the lock file
+# requires >=8.6 (the actual runtime is stage 2, the pinned php:8.6-cli).
+RUN composer install --no-interaction --no-progress --ignore-platform-req=php --ignore-platform-req=ext-sockets
 
 # Stage 2: the pinned runtime.
 FROM php:8.6-cli@sha256:d84acf3155d907afaa5afa9b9457c5f12016b6dc7ade84659f40cdc505cc087d
