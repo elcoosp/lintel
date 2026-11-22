@@ -31,10 +31,14 @@ lintel build --in-place hello.lintel.php
 
 echo; echo "== step 5: load the runtime and render over HTTP =="
 # Published flow: `composer require lintel/runtime` (the autoload chain
-# registers the helpers). The pre-release dry run vendors the single
-# runtime file instead — same class, same helpers.
+# registers the helpers). The pre-release dry run vendors the runtime
+# source instead — same classes, same helpers. The runtime is more than
+# one file: functions.php require_once's its sibling transports.php, so
+# the whole src/ directory is copied, never just functions.php (copying
+# the single file leaves transports.php behind and the render 500s).
 if [ -n "${LINTEL_RUNTIME_PATH:-}" ]; then
-    cp "$LINTEL_RUNTIME_PATH" functions.php
+    src_dir="$(dirname "$LINTEL_RUNTIME_PATH")"
+    cp "$src_dir"/*.php .
 fi
 cat > index.php <<'PHP'
 <?php
