@@ -32,10 +32,10 @@ size-budget:  ## the T-13 acceptance test: bundle + page gzip under 1 MB
 docs-site:  ## build + link-check the T-17 docs site into docs-site/build/
 	cargo run -p lintel-docs --quiet
 
-claims:  ## the M4 v1.0 readiness sweep: no stale maturity claims outside the allowlist
+claims:  ## the maturity sweep (M0-corrected for 0.1.0): no stale maturity claims outside the allowlist
 	bash scripts/claims-sweep.sh
 
-ci:  ## workflows, fmt, clippy, test, docs-site link check + claims sweep, php lint, phpunit, phpstan
+ci:  ## workflows, fmt, clippy, test, docs-site link check + maturity sweep, php lint, phpunit, phpstan
 	$(MAKE) workflows
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
