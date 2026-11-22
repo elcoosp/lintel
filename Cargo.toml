@@ -3,10 +3,15 @@ resolver = "2"
 members = ["crates/lintel-diag", "crates/lintel-core", "crates/lintel-cli", "crates/lintel-lsp", "crates/lintel-wasm", "crates/lintel-docs"]
 
 [workspace.package]
-# The v1.0.0 release version (T-18): declared ONCE here — every workspace
-# crate inherits it (`version.workspace = true`), and the release
-# workflow's tag guard refuses a `v*` tag that disagrees with it.
-version = "1.0.0"
+# The v0.1.0 release version (T-18, M0 release-readiness correction):
+# declared ONCE here — every workspace crate inherits it
+# (`version.workspace = true`), and the release workflow's tag guard
+# refuses a `v*` tag that disagrees with it. M0 reverted the 1.0.0 drift
+# (zero external users, zero production soak — architecture §15 T-18's
+# acceptance is "tagged v0.1.0") back to the honest 0.1.0; the
+# `## [0.1.0]` CHANGELOG section carries the maturity evidence (test
+# counts, CI lanes), and README's Status note states it plainly.
+version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.80"
