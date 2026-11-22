@@ -37,14 +37,33 @@ say "detected $OS-$ARCH — fetching $ARCHIVE"
 
 # 2. Download the archive and the checksum file, verify (§12.3 supply-chain stance).
 fetch() {
-    # $1 = URL, $2 = output path — curl or wget, whichever the fresh machine has.
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1" -o "$2"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$2" "$1"
-    else
-        say "need curl or wget to download the release"; exit 1
-    fi
+    # $1 = URL or local path, $2 = output path. LINTEL_RELEASE_ROOT may be a
+    # local directory (the CI install-smoke job and the local dry run stage
+    # archives on disk) or a file:// URL — both are copied verbatim; only a
+    # remote http(s) URL needs curl/wget. curl rejects a bare local path with
+    # "No host part in the URL", so the local case is handled before it.
+    case "$1" in
+        file://*)
+            cp "${1#file://}" "$2"
+            ;;
+        *://*)
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL "$1" -o "$2"
+            elif command -v wget >/dev/null 2>&1; then
+                wget -qO "$2" "$1"
+            else
+                say "need curl or wget to download the release"; exit 1
+            fi
+            ;;
+        *)
+            # A bare local path (no scheme): copy it if it exists.
+            if [ -f "$1" ]; then
+                cp "$1" "$2"
+            else
+                say "no such file: $1"; exit 1
+            fi
+            ;;
+    esac
 }
 fetch "${RELEASE_ROOT}/${ARCHIVE}" "$TMP/$ARCHIVE"
 fetch "${RELEASE_ROOT}/SHA256SUMS" "$TMP/SHA256SUMS"

@@ -97,15 +97,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          if [[ "${{ matrix.os }}" == windows-* ]]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
-            7z a "dist/${{ matrix.archive }}" ./dist/${{ matrix.binary }}
-            rm dist/${{ matrix.binary }}
-          else
-            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
-            tar -czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.binary }}"
-            rm "dist/${{ matrix.binary }}"
-          fi
+          # `case`, not `[[ == ]]`: actionlint substitutes the unknown
+          # `${{ matrix.os }}` with an empty string, so shellcheck flags the
+          # `if` form as SC2193 (a comparison that can never be equal).
+          case "${{ matrix.os }}" in
+            windows-*)
+              cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
+              7z a "dist/${{ matrix.archive }}" ./dist/${{ matrix.binary }}
+              rm dist/${{ matrix.binary }}
+              ;;
+            *)
+              cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
+              tar -czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.binary }}"
+              rm "dist/${{ matrix.binary }}"
+              ;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}

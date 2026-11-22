@@ -199,6 +199,20 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         if (!\str_starts_with($path, '/')) {
             return $path;
         }
+        // Resolve symlinks on BOTH sides before the prefix check (macOS:
+        // /var → /private/var; a no-op on Linux CI). Without this, a path
+        // built from a symlinked temp dir (`/var/...`) never matches the
+        // realpath'd project root (`/private/var/...`), so the prefix test
+        // fails and the files-autoload injection is silently skipped — the
+        // exact macOS-only failure `PluginTest` caught.
+        $realPath = \realpath($path);
+        if ($realPath !== false) {
+            $path = $realPath;
+        }
+        $realRoot = \realpath($root);
+        if ($realRoot !== false) {
+            $root = $realRoot;
+        }
         if (\str_starts_with($path, $root . '/')) {
             return \substr($path, \strlen($root) + 1);
         }

@@ -50,7 +50,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use lintel_core::{compile, Options, Target};
 use serde_json::{json, Value};
@@ -147,7 +147,14 @@ fn encode_request(path: &Path) -> String {
 /// One compiled file: the stat key it was compiled under and the result
 /// (compiled PHP, or one rendered diagnostic string per problem).
 struct CacheEntry {
-    mtime: u64,
+    // The native mtime, NOT seconds-truncated: two edits inside the same
+    // wall-clock second (a same-size rewrite — the cache-invalidation tests'
+    // discriminating case, and a real editor's fast save) must produce
+    // different keys, or the daemon serves the stale first artifact. The
+    // nanosecond-resolution `SystemTime` macOS/Linux/Windows all report
+    // keeps rapid rewrites distinct; the watcher event is the fast path,
+    // the stat key the self-heal.
+    mtime: SystemTime,
     size: u64,
     result: Result<String, Vec<String>>,
 }
@@ -669,11 +676,10 @@ impl Daemon {
     fn compiled(&self, file: &Path) -> Result<String, Vec<String>> {
         let (mtime, size) = match fs::metadata(file) {
             Ok(meta) => {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_secs());
+                // The native mtime (nanosecond resolution on macOS/Linux/
+                // Windows): keep it whole, not seconds-truncated, so two
+                // edits inside the same second get distinct keys.
+                let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 (mtime, meta.len())
             }
             Err(e) => return Err(vec![format!("cannot stat {}: {e}", file.display())]),
@@ -736,7 +742,13 @@ impl Daemon {
 
     /// Cache one result in the in-memory stat-key map (the disk cache
     /// already holds compile successes by the time this runs).
-    fn remember(&self, file: &Path, mtime: u64, size: u64, result: &Result<String, Vec<String>>) {
+    fn remember(
+        &self,
+        file: &Path,
+        mtime: SystemTime,
+        size: u64,
+        result: &Result<String, Vec<String>>,
+    ) {
         if let Ok(mut guard) = self.cache.lock() {
             guard.insert(
                 file.to_path_buf(),

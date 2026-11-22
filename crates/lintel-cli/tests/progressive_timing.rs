@@ -54,7 +54,23 @@ fn the_rr_progressive_timing_invariant_holds_over_the_bench_lane() {
         return;
     };
 
+    // The lane requires the bench vendor tree (`bench/vendor/autoload.php`).
+    // It is installed by the php job's `composer install --working-dir=bench`
+    // and by the bench image build — NOT by the plain `rust` job, which only
+    // has the toolchain. When the vendor tree is absent there is nothing to
+    // drive, so skip (naming the steps that do install it) instead of letting
+    // the PHP `require` fatal and red the unrelated rust job.
     let entry = repo_root().join("bench/lib/progressive_invariant.php");
+    if !repo_root().join("bench/vendor/autoload.php").is_file() {
+        eprintln!(
+            "SKIP: the RR progressive-timing invariant test needs the bench \
+             vendor tree (bench/vendor/autoload.php); CI installs it in the php \
+             job (`composer install --working-dir=bench`) and the bench image \
+             build, both of which run this lane"
+        );
+        return;
+    }
+
     let output = Command::new(&php)
         .arg(&entry)
         .current_dir(repo_root())
