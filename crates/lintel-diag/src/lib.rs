@@ -1,7 +1,9 @@
 //! Stable-coded diagnostics for the Lintel JSX-for-PHP compiler.
 //!
 //! Every diagnostic carries a stable `LNTxxxx` code (see the error index at
-//! `https://lintel.sh/e/LNTxxxx`), a [`Severity`], a human message, a byte
+//! the configured docs base, default `https://elcoosp.github.io/lintel/e/LNTxxxx`
+//! — set `LINTEL_DOCS_BASE` to repoint; M3 release-readiness, since `lintel.sh`
+//! is not live at launch), a [`Severity`], a human message, a byte
 //! offset into the source and an optional `help:` line. The crate has no
 //! dependencies: the compiler core (and later the WASM playground) can render
 //! diagnostics without pulling in `miette`. The CLI crate may still choose to
@@ -103,9 +105,20 @@ impl Code {
     }
 
     /// Link to the documentation page for this code.
+    ///
+    /// The docs base is configurable via the `LINTEL_DOCS_BASE` environment
+    /// variable (M3 release-readiness): the default is the GitHub Pages URL
+    /// where the docs-site + error index deploy, because `lintel.sh` is not
+    /// live at launch. A maintainer who brings `lintel.sh` up (or any other
+    /// domain) sets `LINTEL_DOCS_BASE=https://lintel.sh` and every emitted
+    /// diagnostic URL repoints — no code change, no dead links.
     #[must_use]
     pub fn docs_url(self) -> String {
-        format!("https://lintel.sh/e/{}", self.lnt())
+        let base = std::env::var("LINTEL_DOCS_BASE")
+            .unwrap_or_else(|_| "https://elcoosp.github.io/lintel".to_string());
+        // The base never carries a trailing slash (the format adds the path).
+        let base = base.trim_end_matches('/');
+        format!("{base}/e/{}", self.lnt())
     }
 }
 
@@ -437,7 +450,7 @@ mod tests {
     fn docs_url_embeds_the_code() {
         assert_eq!(
             Code::DynamicHandler.docs_url(),
-            "https://lintel.sh/e/LNT0301"
+            "https://elcoosp.github.io/lintel/e/LNT0301"
         );
     }
 
@@ -468,7 +481,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("= docs: https://lintel.sh/e/LNT0301"),
+            rendered.contains("= docs: https://elcoosp.github.io/lintel/e/LNT0301"),
             "{rendered}"
         );
     }
@@ -533,7 +546,7 @@ mod tests {
             Diagnostic::new(Code::DynamicHandler, "boom", 16).with_help("use `data-action={...}`");
         assert_eq!(
             problem.to_json(src),
-            "{\"code\":\"LNT0301\",\"severity\":\"error\",\"message\":\"boom\",\"offset\":16,\"line\":2,\"col\":11,\"help\":\"use `data-action={...}`\",\"docs\":\"https://lintel.sh/e/LNT0301\"}"
+            "{\"code\":\"LNT0301\",\"severity\":\"error\",\"message\":\"boom\",\"offset\":16,\"line\":2,\"col\":11,\"help\":\"use `data-action={...}`\",\"docs\":\"https://elcoosp.github.io/lintel/e/LNT0301\"}"
         );
     }
 
@@ -548,7 +561,7 @@ mod tests {
         );
         assert!(json.contains("\"help\":null"), "{json}");
         assert!(
-            json.ends_with("\"docs\":\"https://lintel.sh/e/LNT0302\"}"),
+            json.ends_with("\"docs\":\"https://elcoosp.github.io/lintel/e/LNT0302\"}"),
             "{json}"
         );
         assert!(
@@ -572,7 +585,7 @@ mod tests {
         let problem = Diagnostic::new(Code::UnterminatedTag, "unclosed", 99);
         assert_eq!(
             problem.to_json("abc"),
-            "{\"code\":\"LNT0101\",\"severity\":\"error\",\"message\":\"unclosed\",\"offset\":99,\"line\":1,\"col\":4,\"help\":null,\"docs\":\"https://lintel.sh/e/LNT0101\"}"
+            "{\"code\":\"LNT0101\",\"severity\":\"error\",\"message\":\"unclosed\",\"offset\":99,\"line\":1,\"col\":4,\"help\":null,\"docs\":\"https://elcoosp.github.io/lintel/e/LNT0101\"}"
         );
     }
 }
