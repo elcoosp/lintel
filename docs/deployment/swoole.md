@@ -10,7 +10,7 @@ out-of-order flushes arrive progressively with no queueing layer.
 
 ## Prerequisites
 
-- PHP 8.4 with `ext-swoole` (or `ext-openswoole`) — the transport detects
+- PHP 8.6 with `ext-swoole` (or `ext-openswoole`) — the transport detects
   the runtime (`SwooleFlushTransport::isAvailable()`); the response
   surface is validated up front by `fromSwoole()`, which throws before
   any byte is written when the object is not a Swoole HTTP response.

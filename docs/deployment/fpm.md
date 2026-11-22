@@ -9,7 +9,7 @@ decision), built once at deploy time by `lintel build`.
 
 ## Prerequisites
 
-- PHP 8.4+ with FPM (the runtime package itself needs only `>=8.1`),
+- PHP 8.6+ with FPM (the runtime package needs `>=8.6`),
   `ext-mbstring` recommended for the dev tooling.
 - nginx 1.20+.
 - The Lintel compiler binary once, at deploy time (`cargo install
@@ -87,7 +87,7 @@ opcache.validate_timestamps=0        ; artifacts are immutable per deploy
 opcache.revalidate_freq=0
 opcache.memory_consumption=192
 opcache.max_accelerated_files=20000
-opcache.jit_buffer_size=64M          ; PHP 8.4 JIT: measure on your pages
+opcache.jit_buffer_size=64M          ; PHP 8.6 JIT: measure on your pages
 ```
 
 **Preload** the hot artifacts and the runtime helpers once at FPM start

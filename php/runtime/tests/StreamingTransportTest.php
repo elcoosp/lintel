@@ -129,7 +129,7 @@ PHP;
             $context = stream_context_create(['http' => ['ignore_errors' => true]]);
             $body = @file_get_contents('http://127.0.0.1:' . (22000 + $attempt) . '/router.php', false, $context);
             if ($body !== false) {
-                $headers = $http_response_header;
+                $headers = http_get_last_response_headers() ?? [];
                 $server = $proc;
                 break;
             }

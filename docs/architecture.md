@@ -1452,10 +1452,9 @@ failing gate rather than preference:
   or end of value (so `data:text/html,x` keeps its URL-internal comma), and
   keeps only a trailing width/density descriptor on a blocked candidate.
 
-The CI `php` job pins PHP 8.4 (`shivammathur/setup-php`), not the doc's
-"PHP 8.6 container": 8.6 is the launch target, 8.4 is the maintained
-runtime the corpus can actually exercise; the runtime package declares
-`php: >=8.1`.
+The CI `php` job pins PHP 8.6 (`shivammathur/setup-php`) — the launch
+target and the maintained runtime the corpus exercises; the runtime package
+declares `php: >=8.6`.
 
 The fourteenth pass (F0/F1 + cards T-13/T-17/T-16/T-09) recorded the
 following closures and deviations, each forced by a failing gate rather

@@ -8,7 +8,7 @@ side-by-side with Blade, with no disruption to the existing templates.
 
 ## Prerequisites
 
-- PHP 8.1+ (Laravel 10+; this guide targets Laravel 12)
+- PHP 8.6+ (Laravel 13+; this guide targets Laravel 13)
 - Composer
 - A prebuilt `lintel` binary (the installer plugin fetches it on
   `composer require`; if you are on a fresh checkout before the v0.1.0

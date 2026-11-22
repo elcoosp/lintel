@@ -12,7 +12,7 @@ as the render produces it.
 
 - FrankenPHP (the official Docker image `dunglas/frankenphp` is the
   standard install; the Caddy builds with the `frankenphp` module are the
-  non-Docker path). PHP ≥ 8.4 inside the image.
+  non-Docker path). PHP ≥ 8.6 inside the image.
 - `composer require lintel/runtime` (the helpers + the transport). The
   transport detects the runtime (`FrankenPHPFlushTransport::isAvailable()`
   checks `FRANKENPHP_WORKER` and `SERVER_SOFTWARE`).

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "266e0834d56ad0c0214cad7eceed9bd4",
+    "content-hash": "521a8bff2c742fd0d72f3e38eeee7750",
     "packages": [
         {
             "name": "lintel/lintel",
@@ -12,16 +12,19 @@
             "dist": {
                 "type": "path",
                 "url": "../lintel",
-                "reference": "2567f2c62812e2a9526d477164f49e37659210c9"
+                "reference": "7e8f1e010949fc3843efd8ef9a6e3ff5c3b6e34e"
             },
             "require": {
                 "composer-plugin-api": "^2.0",
-                "php": ">=8.1"
+                "php": ">=8.6"
             },
             "require-dev": {
                 "composer/composer": "^2.0",
                 "phpstan/phpstan": "^2.1",
                 "phpunit/phpunit": "^11.5"
+            },
+            "suggest": {
+                "phpunit/phpunit": "For ComponentTester's assert* helpers (render() alone needs none)"
             },
             "type": "composer-plugin",
             "extra": {
@@ -51,15 +54,18 @@
             "dist": {
                 "type": "path",
                 "url": "../runtime",
-                "reference": "70a6505fdc3e4f04ce9c0ad545984aa461b1853a"
+                "reference": "f6c56aaebab15e41a49147260ff275ca1506a183"
             },
             "require": {
-                "php": ">=8.1"
+                "php": ">=8.6"
             },
             "require-dev": {
+                "illuminate/filesystem": "^12.0",
+                "illuminate/view": "^12.0",
                 "phpstan/phpstan": "^2.1",
                 "phpunit/phpunit": "^11.5",
-                "spiral/roadrunner-http": "^4.2"
+                "spiral/roadrunner-http": "^4.2",
+                "twig/twig": "^3.0"
             },
             "type": "library",
             "autoload": {
@@ -3758,7 +3764,7 @@
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.1"
+        "php": ">=8.6"
     },
     "platform-dev": {},
     "plugin-api-version": "2.11.0"

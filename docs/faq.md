@@ -17,7 +17,7 @@ that discussion, not a competitor to it. The differences that matter:
   — `crates/lintel-cli/tests/cli.rs`), so a codebase that outlives Lintel
   can walk to the native runtime when it lands.
 - **Availability.** The RFC targets PHP 8.7/9 and is still under
-  discussion; Lintel runs on PHP ≥ 8.1 today. `docs/rfc-alignment.md`
+  discussion; Lintel runs on PHP ≥ 8.6 today. `docs/rfc-alignment.md`
   tracks the RFC point by point and is kept current on purpose (T-60).
 - **Tooling.** The RFC specifies a language; Lintel ships the surrounding
   machinery — diagnostics with source maps, `check` for CI, inventory

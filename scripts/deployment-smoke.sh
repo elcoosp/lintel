@@ -4,7 +4,7 @@
 # pool, curl the endpoint, assert the rendered HTML byte for byte.
 #
 # Needs on PATH (or env): LINTEL_BIN (the built compiler), PHP_BIN
-# (PHP >= 8.1 with the RR worker extensions), rr (RoadRunner binary), and
+# (PHP >= 8.6 with the RR worker extensions), rr (RoadRunner binary), and
 # php/runtime composer-installed (spiral/roadrunner-http for the worker
 # API) — the CI deployment job installs all four; the guide names the
 # same steps a human runs.

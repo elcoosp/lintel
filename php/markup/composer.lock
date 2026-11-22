@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c7c795cb1db6868e0564a704e2229ea5",
+    "content-hash": "972ab58547d16599de9fded51af1e73a",
     "packages": [],
     "packages-dev": [
         {
@@ -13,15 +13,18 @@
             "dist": {
                 "type": "path",
                 "url": "../runtime",
-                "reference": "70a6505fdc3e4f04ce9c0ad545984aa461b1853a"
+                "reference": "f6c56aaebab15e41a49147260ff275ca1506a183"
             },
             "require": {
-                "php": ">=8.1"
+                "php": ">=8.6"
             },
             "require-dev": {
+                "illuminate/filesystem": "^12.0",
+                "illuminate/view": "^12.0",
                 "phpstan/phpstan": "^2.1",
                 "phpunit/phpunit": "^11.5",
-                "spiral/roadrunner-http": "^4.2"
+                "spiral/roadrunner-http": "^4.2",
+                "twig/twig": "^3.0"
             },
             "type": "library",
             "autoload": {
@@ -1913,7 +1916,7 @@
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.1"
+        "php": ">=8.6"
     },
     "platform-dev": {},
     "plugin-api-version": "2.11.0"

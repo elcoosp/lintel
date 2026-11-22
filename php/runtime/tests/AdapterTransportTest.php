@@ -275,7 +275,7 @@ PHP;
                 $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/worker.php', false, $context);
                 if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
                     $body = $fetched;
-                    $headers = $http_response_header;
+                    $headers = http_get_last_response_headers() ?? [];
                     break;
                 }
             }
@@ -305,7 +305,7 @@ PHP;
      * placeholder before its resolved template, the late chunk escaped,
      * and `X-Accel-Buffering: no` + the content type on the wire.
      *
-     * @param list<string> $headers the $http_response_header of the fetch
+     * @param list<string> $headers the last response headers from the fetch
      */
     private function assertStreamedPageResponse(string $body, array $headers, string $label): void
     {
@@ -388,7 +388,7 @@ PHP);
                     $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/index.php', false, $context);
                     if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
                         $body = $fetched;
-                        $headers = $http_response_header;
+                        $headers = http_get_last_response_headers() ?? [];
                         break;
                     }
                 }
@@ -473,7 +473,7 @@ PHP);
                     $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/', false, $context);
                     if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
                         $body = $fetched;
-                        $headers = $http_response_header;
+                        $headers = http_get_last_response_headers() ?? [];
                         break;
                     }
                 }

@@ -11,14 +11,14 @@
     ],
     "minimum-stability": "dev",
     "require": {
-        "php": ">=8.1",
+        "php": ">=8.6",
         "lintel/runtime": "*"
     },
     "require-dev": {
         "spiral/roadrunner-http": "^4.2",
-        "illuminate/events": "^12.0",
-        "illuminate/filesystem": "^12.0",
-        "illuminate/view": "^12.0",
+        "illuminate/events": "^13.0",
+        "illuminate/filesystem": "^13.0",
+        "illuminate/view": "^13.0",
         "league/plates": "^3.6",
         "twig/twig": "^3.0"
     },

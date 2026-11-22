@@ -34,7 +34,7 @@ cat > "$WORK/plain/composer.json" <<'JSON'
     "name": "smoke/plain-php",
     "description": "T-11 acceptance: fresh plain-PHP skeleton",
     "require": {
-        "php": ">=8.1"
+        "php": ">=8.6"
     },
     "config": {
         "sort-packages": true

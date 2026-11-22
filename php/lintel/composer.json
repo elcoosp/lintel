@@ -14,7 +14,7 @@
         }
     },
     "require": {
-        "php": ">=8.1",
+        "php": ">=8.6",
         "composer-plugin-api": "^2.0"
     },
     "require-dev": {

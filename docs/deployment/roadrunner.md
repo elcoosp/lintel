@@ -19,7 +19,7 @@ the flush order — the invariant the lane fails the bench run on.
 
 - RoadRunner ≥ 2025.1 (the CI verification lane pins
   `roadrunner-2025.1.15-linux-amd64`).
-- PHP 8.4 with `ext-sockets`/`ext-pcntl` (the RR worker lifecycle).
+- PHP 8.6 with `ext-sockets`/`ext-pcntl` (the RR worker lifecycle).
 - `composer require lintel/runtime spiral/roadrunner-http` — the
   `spiral/roadrunner-http` package the transport's `HttpWorkerInterface`
   comes from.

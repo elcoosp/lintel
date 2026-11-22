@@ -3,7 +3,7 @@
 Lintel is a compiler that lets you write PHP components with JSX-style
 markup and compiles them to **plain PHP string concatenation**. The output
 is readable PHP: auto-escaped by default, line numbers preserved, no virtual
-DOM, no runtime past a handful of small helpers. It runs on PHP 8.1+ today
+DOM, no runtime past a handful of small helpers. It runs on PHP 8.6+ today
 and lowers to the same markup shape the native JSX-in-PHP RFC for PHP 8.7/9
 proposes, so a future `lintel migrate --to=native` is a lowering change, not
 a rewrite.
