@@ -32,3 +32,13 @@ parameters:
         # not PHP (the bridge's own integration test drives PHPStan over
         # their compiled artifacts with its own ruleset).
         - php/lintel-phpstan/tests/fixture
+        # The M2 starter's components are `.lintel.php` sources — compiler
+        # input, not PHP (the starter smoke compiles them with the real
+        # binary; php -l and PHPStan run over the compiled artifacts, not
+        # the JSX sources — the same rule every other fixture uses).
+        - php/starter/components
+        # The starter's public/index.php entrypoint calls App\Page (a
+        # .lintel.php source compiled at runtime by the dev loader) — the
+        # function exists only after the dev loader runs, so PHPStan cannot
+        # discover it statically. The starter smoke exercises it end-to-end.
+        - php/starter/public
