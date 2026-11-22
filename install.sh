@@ -67,7 +67,10 @@ fetch() {
 }
 fetch "${RELEASE_ROOT}/${ARCHIVE}" "$TMP/$ARCHIVE"
 fetch "${RELEASE_ROOT}/SHA256SUMS" "$TMP/SHA256SUMS"
-EXPECTED="$(grep " ${ARCHIVE}\$" "$TMP/SHA256SUMS" | cut -d' ' -f1)"
+# sha256sum writes `<hash>  <file>` (text mode) or `<hash> *<file>`
+# (binary mode — the default on Windows Git Bash). Accept both: the
+# filename is preceded by whitespace and an optional `*` marker.
+EXPECTED="$(grep -E " ${ARCHIVE}\$| \*${ARCHIVE}\$" "$TMP/SHA256SUMS" | head -1 | cut -d' ' -f1)"
 if [ -z "$EXPECTED" ]; then
     say "no checksum for ${ARCHIVE} in SHA256SUMS — refusing to install"
     exit 1
