@@ -99,6 +99,24 @@ jobs:
         env:
           LINTEL_BIN: ${{ github.workspace }}/target/release/lintel
 
+  starter:
+    name: starter (M2 — the zero-Rust first-run path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the lintel binary (the prebuilt binary the installer plugin caches)
+        run: cargo build --release -p lintel-cli
+      - name: M2 starter smoke — composer create-project → dev loader → prod build → HTTP serve (NO Rust toolchain at runtime)
+        run: bash scripts/starter-smoke.sh
+        env:
+          LINTEL_BIN: ${{ github.workspace }}/target/release/lintel
+
   bench:
     runs-on: ubuntu-latest
     steps:
