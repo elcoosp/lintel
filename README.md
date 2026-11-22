@@ -6,7 +6,7 @@
   </p>
   <p>
     <a href="https://github.com/elcoosp/lintel/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/elcoosp/lintel/ci.yml?style=flat-square&label=CI" alt="CI status"/></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Version 1.0.0"/></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="Version 0.1.0"/></a>
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue?style=flat-square" alt="License: MIT OR Apache-2.0"/></a>
     <a href="docs/architecture.md"><img src="https://img.shields.io/badge/docs-architecture-blue?style=flat-square" alt="Documentation"/></a>
   </p>
@@ -188,7 +188,7 @@ let rfc = compile(src, &Options { target: Target::Rfc }).unwrap();
 ## Status
 
 > [!NOTE]
-> Stable v1.0.0. Supports PHP 8.4+ and Rust 1.80+ on Linux, macOS, and Windows.
+> **0.1.0 — early but tested.** Supports PHP 8.4+ and Rust 1.80+ on Linux, macOS, and Windows. Zero external users, zero production soak; the `lintel` crate name on crates.io is taken by an unrelated package, so the maintainer is running a community naming process (`scripts/rename-readiness.sh <candidate>` reports the rename surface). Maturity evidence at this tag: 625 tests across the Rust crates (516) and the six PHP packages (109), pedantic Clippy zero-warning, PHPStan level-max clean, cargo-deny clean, actionlint + the docs-site link check + the claims sweep green on every push.
 
 Implemented and tested end to end: the scanner, parser, validation pass, all three lowering targets (`string`/`stream`/`rfc`), escape elision, suppression directives, JSON diagnostics, the `NodeVisitor` and rule-registry seams, the `lintel init/build/check/analyze/migrate/watch` CLI, the content-addressed incremental build cache, the PHP runtime (`\Lintel\Html` and the `c/a/u/cls/sty/srcset/attrs` helpers) with the §7.2 threat corpus, streaming with `<Suspense>` and the four server-adapter transports, the Laravel and Symfony bridges, the persistent LSP workspace index with the tree-sitter lane, the WASM playground, the benchmark harness and the deployment guides. CI runs actionlint, `cargo fmt --check`, pedantic Clippy with `-D warnings`, cargo-deny, the full Rust and PHP suites, the fuzz lane over the seeded corpus and the docs link check on every push. The [implementation status table](docs/architecture.md) reconciles shipped versus planned.
 
