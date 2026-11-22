@@ -5,8 +5,13 @@ Lintel's design starts from one rule: **escape by default, and reject the
 sinks escaping cannot fix.** Every dynamic value in emitted markup goes
 through a context-aware helper; every helper ships in
 `php/runtime/src/functions.php` and every one is exercised by the §7.2
-PHPUnit threat corpus in CI — 31 tests over the vector list below plus
-PHPStan level max over the runtime.
+PHPUnit threat corpus in CI — 31 hand-written tests over the vector list
+below, PLUS the M1 expanded corpus of 893 REAL published payloads (OWASP
+XSS Filter Evasion Cheat Sheet + PortSwigger Web Security Academy XSS
+cheat sheet), each compiled with the real `lintel` binary and executed
+under real PHP to assert inertness — plus PHPStan level max over the
+runtime and the M1 independent oracle (Lintel's `c()`/`a()` compared
+byte-for-byte against Blade's `{{ }}` and Twig's autoescape).
 
 ## The context matrix
 
@@ -69,3 +74,34 @@ spread with an `onclick` key, `<`-in-attribute-name injection via spread
 keys. Each vector is a named PHPUnit test that fails CI on regression; the
 [XSS gallery demo](/playground/) renders the same payloads in the browser.
 The full diagnostic catalogue lives in the [error index](/errors/).
+
+## The M1 expanded corpus — independent, published, attributed
+
+The §7.2 hand-written corpus (31 tests) was authored by the same agent that
+wrote the escaper, so oracle and implementation shared a blind spot by
+construction. The M1 release-readiness card closes that gap two ways:
+
+- **893 REAL published payloads** (OWASP XSS Filter Evasion Cheat Sheet, CC
+  BY-SA 4.0; PortSwigger Web Security Academy XSS cheat sheet) — each
+  compiled with the real `lintel` binary, the compiled PHP executed under
+  real PHP, and the rendered output asserted inert (no payload-injected
+  `<script>`/`<img>`/`<svg>`/`<iframe>`/`<style>`/`<object>`/`<embed>` tag,
+  no payload-injected `on\w+=` event handler, no live `javascript:`/
+  `vbscript:`/`data:text/html` scheme at the start of a rendered URL
+  attribute). A compile-time validator rejection (LNT0301 etc.) is the
+  strongest inertness and is counted as a passing vector with its code
+  pinned. Run `bash scripts/php-gates.sh test` (the `ExpandedThreatCorpusTest`
+  lane, driven by `php/runtime/tests/ExpandedThreatCorpus.php`).
+- **An independent second oracle** (`IndependentOracleTest`): the same
+  dynamic values rendered through Blade's `{{ }}` (Laravel's
+  `htmlspecialchars`) and Twig's autoescape, compared byte-for-byte against
+  Lintel's `c()`/`a()`. A disagreement with a third-party engine is a
+  finding, not a rounding error. The oracle's first finding: Lintel escapes
+  `'` as `&apos;` (it uses `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5`, the
+  modern HTML5-correct entity); Blade and Twig escape `'` as `&#039;`
+  (`ENT_QUOTES` without `ENT_HTML5`, the older numeric entity). Both are
+  valid HTML5 escaping of the apostrophe and render identically in every
+  browser — an investigated, inert encoding-style choice, not an escape
+  hole. The oracle normalizes the two equivalent apostrophe entities before
+  the byte-for-byte comparison so a REAL divergence (which would be a bug)
+  is never masked.
