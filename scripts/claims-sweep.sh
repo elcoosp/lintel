@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# The v1.0 readiness claims sweep (the Phase 12 M4 card): the user-facing
-# docs — README, the docs/ contract and deployment pages, the docs-site
-# pages and the CLI --help text (its source literal) — must not carry
-# stale pre-1.0 / v0.x / "not built yet" maturity claims now that the
-# feature set shipped. A hit outside the explicit allowlist fails the
-# sweep; the allowlist is where a genuinely-open note stays, each entry
-# named with its reason. The roadmap (docs/architecture.md §17.1) and the
-# status reconciliation (§21) are excluded by name — future-facing
-# language there is the tracked backlog itself, and the CHANGELOG's
-# released sections are historical record.
+# The maturity claims sweep (the Phase 12 M4 card, corrected by M0 for the
+# 0.1.0 release-readiness milestone): the user-facing docs — README, the
+# docs/ contract and deployment pages, the docs-site pages and the CLI
+# --help text (its source literal) — must not carry stale pre-1.0 / v0.x /
+# "not built yet" maturity claims now that the feature set shipped. A hit
+# outside the explicit allowlist fails the sweep; the allowlist is where a
+# genuinely-open note stays, each entry named with its reason. The roadmap
+# (docs/architecture.md §17.1) and the status reconciliation (§21) are
+# excluded by name — future-facing language there is the tracked backlog
+# itself, and the CHANGELOG's released sections are historical record.
 #
 # Not in this sweep: the honest open-backlog phrasing ("future work",
 # "stays backlog") in the contract pages — those notes describe seams
@@ -31,7 +31,7 @@ allow_filter() {
     fi
 }
 
-echo "== v1.0 readiness claims sweep =="
+echo "== maturity claims sweep =="
 while IFS= read -r -d '' f; do
     hits=$(grep -nE "$PATTERN" "$f" 2>/dev/null | allow_filter || true)
     if [ -n "$hits" ]; then
