@@ -1,9 +1,9 @@
-# T-18 release engineering, the v1.0.0 automation (architecture doc §15,
+# T-18 release engineering, the v0.1.0 automation (architecture doc §15,
 # §12): a pushed `v*` tag builds the five binaries (§12: linux x64/arm64
 # musl, macOS x64/arm64, Windows x64), checksums them (SHA256SUMS), attests
 # build provenance (actions/attest-build-provenance — GitHub artifact
 # attestation instead of minisign/cosign), extracts the release body from
-# the CHANGELOG's `## [v1.0.0]` section and stages the DRAFT release for
+# the CHANGELOG's `## [0.1.0]` section and stages the DRAFT release for
 # the maintainer's review. The publish job then ships the four publishable
 # crates to crates.io in dependency order (diag → core → lsp → cli, with
 # index-propagation waits and a `--dry-run` pre-flight per crate) and
@@ -67,8 +67,8 @@ jobs:
       - uses: actions/checkout@v4
       # The tag guard: a `v*` tag that disagrees with the ONE workspace
       # version ([workspace.package].version — every crate inherits it)
-      # refuses before anything builds. `v1.0.0` must mean every crate is
-      # 1.0.0; the release-dry-run checks the same equality offline.
+      # refuses before anything builds. `v0.1.0` must mean every crate is
+      # 0.1.0; the release-dry-run checks the same equality offline.
       - name: Tag guard — the tag must equal the workspace version
         shell: bash
         run: |
@@ -128,16 +128,16 @@ jobs:
         with:
           subject-path: |
             dist/lintel-*
-      # The release body is the CHANGELOG's `## [v1.0.0]` section — the
+      # The release body is the CHANGELOG's `## [0.1.0]` section — the
       # same text scripts/release-dry-run.sh previews, so what was
       # reviewed offline is exactly what the draft carries.
       - name: Extract the release body from the CHANGELOG
         run: |
-          awk '/^## \[v1\.0\.0\]/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md > release-notes.md
+          awk '/^## \[0\.1\.0\]/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then
-            echo "::error::CHANGELOG.md carries no '## [v1.0.0]' section (or it is empty) — the release body would be empty"; exit 1
+            echo "::error::CHANGELOG.md carries no '## [0.1.0]' section (or it is empty) — the release body would be empty"; exit 1
           fi
-          echo "release body: $(wc -m < release-notes.md) chars from '## [v1.0.0]'"
+          echo "release body: $(wc -m < release-notes.md) chars from '## [0.1.0]'"
       - name: Stage the DRAFT GitHub release (binaries + SHA256SUMS + the changelog body)
         uses: softprops/action-gh-release@v2
         with:
