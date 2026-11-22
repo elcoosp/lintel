@@ -9,7 +9,7 @@ repository = "https://github.com/elcoosp/lintel"
 
 [dependencies]
 # the version rides the release (T-18): crates.io refuses a path dep without one
-lintel-diag = { version = "1.0.0", path = "../lintel-diag" }
+lintel-diag = { version = "0.1.0", path = "../lintel-diag" }
 
 [dev-dependencies]
 criterion = "0.5"
