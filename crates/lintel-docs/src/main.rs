@@ -28,6 +28,54 @@ use pulldown_cmark::{html, Options, Parser};
 /// The repo root (the crate lives at `crates/lintel-docs`).
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
+/// The base path the site is served under. GitHub Pages project sites
+/// live at `/<repo>/`; locally the site is served from `/`. Override
+/// with `DOCS_SITE_BASE` (e.g. `/lintel/`). Defaults to `/lintel/`
+/// to match the GitHub Pages deployment.
+fn base() -> String {
+    std::env::var("DOCS_SITE_BASE").unwrap_or_else(|_| "/lintel/".to_string())
+}
+
+/// Rewrite root-absolute `href="/…"` and `src="/…"` in rendered HTML
+/// to include the base prefix, so links resolve under the deploy path.
+/// URLs that already carry the base are left untouched (idempotent).
+fn prefix_links(html: &str, base: &str) -> String {
+    if base == "/" {
+        return html.to_string();
+    }
+    let trimmed = base.trim_end_matches('/');
+    let mut out = String::with_capacity(html.len() + 32);
+    let mut rest = html;
+    while let Some(pos) = rest.find("=\"") {
+        out.push_str(&rest[..pos + 2]);
+        rest = &rest[pos + 2..];
+        if rest.starts_with('/') && !rest.starts_with("//") {
+            let end = rest.find('"').unwrap_or(rest.len());
+            let url = &rest[..end];
+            if url.starts_with(trimmed) {
+                out.push_str(url);
+            } else {
+                out.push_str(trimmed);
+                out.push_str(url);
+            }
+            rest = &rest[end..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Strip the deploy base prefix from a site-absolute path so the link
+/// checker resolves it against the build tree. `/lintel/style.css` →
+/// `/style.css`. A no-op when the base is `/`.
+fn strip_base<'a>(path: &'a str, base: &str) -> &'a str {
+    if base == "/" {
+        return path;
+    }
+    let trimmed = base.trim_end_matches('/');
+    path.strip_prefix(trimmed).unwrap_or(path)
+}
+
 /// The committed nav, in order — every entry must resolve (the check at the
 /// bottom enforces it).
 const NAV: &[(&str, &str)] = &[
@@ -243,7 +291,7 @@ fn render_page(markdown: &str, active: &str) -> String {
             if is_active { " class=\"active\"" } else { "" },
         );
     }
-    format!(
+    let page = format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>Lintel — JSX for PHP</title>\n<link rel=\"stylesheet\" href=\"/style.css\">\n\
@@ -253,7 +301,8 @@ fn render_page(markdown: &str, active: &str) -> String {
          auto-escaped, line-preserving, no runtime past a handful of helpers. \
          The <a href=\"/playground/\">playground</a> runs the compiler in your browser.</p></footer>\n\
          </body>\n</html>\n",
-    )
+    );
+    prefix_links(&page, &base())
 }
 
 /// The benchmarks page: committed artifacts embedded verbatim, methodology
@@ -393,6 +442,9 @@ fn check_links(out: &Path, emitted: &[String]) -> Vec<String> {
                     continue;
                 }
                 let stripped = target.strip_prefix("https://lintel.sh").unwrap_or(&target);
+                // Strip the deploy base prefix so /lintel/style.css
+                // resolves against the build tree as /style.css.
+                let stripped = strip_base(stripped, &base());
                 let Some(resolved) = resolve_link(path, stripped) else {
                     broken.push(format!("{path} -> {target} (escapes the site root)"));
                     continue;
