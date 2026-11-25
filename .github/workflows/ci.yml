@@ -44,7 +44,7 @@ jobs:
           coverage: none
           tools: composer
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Pun (PHP tooling: format, lint, install)
+      - name: "Install Pun (PHP tooling: format, lint, install)"
         run: |
           curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
           pun --version
@@ -201,7 +201,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the lintel binary
         run: cargo build --release -p lintel-cli
-      - name: T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin; no native fallback in CI)
+      - name: "T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin; no native fallback in CI)"
         run: make bench-docker
       - name: Commit-nothing guard — results land as job artifacts, not tree edits
         uses: actions/upload-artifact@v4
