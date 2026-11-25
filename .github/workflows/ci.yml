@@ -50,7 +50,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: "Install Pun (PHP tooling: format, lint, install)"
         run: |
-          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz --strip-components=1 -C /usr/local/bin
           pun --version
       - name: Install PHP deps with Pun (replaces composer install)
         run: |
@@ -103,12 +103,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Lela
         run: |
-          curl -fsSL "https://github.com/${LELA_REPO}/releases/download/v${LELA_VERSION}/${LELA_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${LELA_REPO}/releases/download/v${LELA_VERSION}/${LELA_ASSET}" | tar -xz -C /tmp
+          cp "/tmp/lela-${LELA_VERSION}-linux-x86_64/bin/lela" /usr/local/bin/
           lela --version
       - uses: dtolnay/rust-toolchain@stable
       - name: "Install Pun (for deps with --ignore-platform-req=php)"
         run: |
-          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz --strip-components=1 -C /usr/local/bin
           pun --version
       - name: Install PHP deps with Pun (ignore platform req since lock requires 8.6)
         run: |
@@ -149,7 +150,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: "Install Pun"
         run: |
-          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz --strip-components=1 -C /usr/local/bin
           pun --version
       - name: Install PHP deps with Pun
         run: |
@@ -180,7 +181,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: "Install Pun"
         run: |
-          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz --strip-components=1 -C /usr/local/bin
           pun --version
       - name: Install PHP deps with Pun
         run: |
@@ -394,7 +395,7 @@ jobs:
           tools: composer
       - name: "Install Pun"
         run: |
-          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz -C /usr/local/bin
+          curl -fsSL "https://github.com/${PUN_REPO}/releases/download/v${PUN_VERSION}/${PUN_ASSET}" | tar -xz --strip-components=1 -C /usr/local/bin
           pun --version
       - name: Install PHP deps with Pun
         run: |
