@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Lintel\Tests\Support;
 
+use Lintel\ReactResponse;
+
 /**
  * The structural fake for the `Lintel\ReactResponse` contract
  * (AdapterTransportTest): records the adapter's calls in order.
  */
-final class FakeReactResponse implements \Lintel\ReactResponse
+final class FakeReactResponse implements ReactResponse
 {
     /** @var list<string> */
     public array $calls = [];
@@ -18,15 +20,15 @@ final class FakeReactResponse implements \Lintel\ReactResponse
     {
         $flat = [];
         foreach ($headers as $k => $v) {
-            $flat[] = $k . '=' . $v;
+            $flat[] = $k.'='.$v;
         }
-        $this->calls[] = 'writeHead:' . $status . ':' . implode('|', $flat);
+        $this->calls[] = 'writeHead:'.$status.':'.implode('|', $flat);
     }
 
     #[\Override]
     public function write(string $chunk): void
     {
-        $this->calls[] = 'write:' . $chunk;
+        $this->calls[] = 'write:'.$chunk;
     }
 
     #[\Override]

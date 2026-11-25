@@ -26,35 +26,35 @@ final class ConsoleCommandTest extends TestCase
      * the project root), never the process cwd, so this runs from wherever
      * PHPUnit sits and the manifest must still land at `$root` with no
      * stray `lintel.json` at the runner's cwd. */
-    public function testBuildCommandCompilesIntoCacheDir(): void
+    public function test_build_command_compiles_into_cache_dir(): void
     {
-        $root = sys_get_temp_dir() . '/lintel-sf-console-' . bin2hex((string) random_bytes(4));
-        \mkdir($root . '/src', 0777, true);
-        \copy(__DIR__ . '/fixture/Badge.lintel.php', $root . '/src/Badge.lintel.php');
+        $root = sys_get_temp_dir().'/lintel-sf-console-'.bin2hex((string) random_bytes(4));
+        \mkdir($root.'/src', 0777, true);
+        \copy(__DIR__.'/fixture/Badge.lintel.php', $root.'/src/Badge.lintel.php');
 
         $runnerCwd = \getcwd() ?: '.';
-        $cmd = new BuildCommand($root . '/cache', [$root . '/src']);
-        $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput());
+        $cmd = new BuildCommand($root.'/cache', [$root.'/src']);
+        $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput);
 
         self::assertSame(0, $rc, $out->fetch());
-        self::assertFileExists($root . '/cache/Badge.php');
-        self::assertFileExists($root . '/lintel.json', 'the manifest lands at the workspace root');
+        self::assertFileExists($root.'/cache/Badge.php');
+        self::assertFileExists($root.'/lintel.json', 'the manifest lands at the workspace root');
         self::assertFileDoesNotExist(
-            $runnerCwd . '/lintel.json',
+            $runnerCwd.'/lintel.json',
             'no stray manifest at the process cwd (M0 cwd hygiene)',
         );
     }
 
     /** The binary's error diagnostics map to FAILURE and render RAW — the
      * `<` markup of the diagnostic survives into the output. */
-    public function testBuildCommandFailsOnBrokenSourceWithRawDiagnostics(): void
+    public function test_build_command_fails_on_broken_source_with_raw_diagnostics(): void
     {
-        $root = sys_get_temp_dir() . '/lintel-sf-console-' . bin2hex((string) random_bytes(4));
-        \mkdir($root . '/src', 0777, true);
-        \file_put_contents($root . '/src/Broken.lintel.php', '<?php function Broken({a}: string) { return <div>{a}</span>; }');
+        $root = sys_get_temp_dir().'/lintel-sf-console-'.bin2hex((string) random_bytes(4));
+        \mkdir($root.'/src', 0777, true);
+        \file_put_contents($root.'/src/Broken.lintel.php', '<?php function Broken({a}: string) { return <div>{a}</span>; }');
 
-        $cmd = new BuildCommand($root . '/cache', [$root . '/src']);
-        $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput());
+        $cmd = new BuildCommand($root.'/cache', [$root.'/src']);
+        $rc = $cmd->run(new ArrayInput([]), $out = new BufferedOutput);
         $text = $out->fetch();
 
         self::assertSame(1, $rc);
@@ -63,7 +63,7 @@ final class ConsoleCommandTest extends TestCase
     }
 
     /** The command carries the §11 signature for `bin/console list`. */
-    public function testCommandNameAndDescription(): void
+    public function test_command_name_and_description(): void
     {
         $cmd = new BuildCommand(sys_get_temp_dir(), []);
 

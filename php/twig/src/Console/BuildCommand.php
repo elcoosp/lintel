@@ -40,14 +40,14 @@ final class BuildCommand extends Command
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ], $pipes);
-        if (!\is_resource($process)) {
-            $output->writeln('could not start ' . Loader::binary(), OutputInterface::OUTPUT_RAW);
+        if (! \is_resource($process)) {
+            $output->writeln('could not start '.Loader::binary(), OutputInterface::OUTPUT_RAW);
 
             return self::FAILURE;
         }
         $stdout = '';
         $stderr = '';
-        while (!\feof($pipes[1]) || !\feof($pipes[2])) {
+        while (! \feof($pipes[1]) || ! \feof($pipes[2])) {
             $read = [$pipes[1], $pipes[2]];
             $write = null;
             $except = null;

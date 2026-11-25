@@ -30,7 +30,7 @@ final class StreamingPage
     public static function oneBoundary(): \Generator
     {
         yield '<header>shell</header>';
-        yield new Suspense('Loading…', static fn(): Html => Html::unsafeRaw('<p>Resolved</p>'));
+        yield new Suspense('Loading…', static fn (): Html => Html::unsafeRaw('<p>Resolved</p>'));
         yield '<footer>done</footer>';
     }
 
@@ -40,6 +40,7 @@ final class StreamingPage
         yield '<header>shell</header>';
         yield new Suspense('Loading…', static function () use ($us): Html {
             \usleep($us);
+
             return Html::unsafeRaw('<p>Slow</p>');
         });
         yield '<footer>done</footer>';
@@ -52,10 +53,11 @@ final class StreamingPage
         yield new Suspense('A…', static function (): Html {
             \Fiber::suspend();
             \Fiber::suspend();
+
             return Html::unsafeRaw('<p>A</p>');
         });
         yield '<hr>';
-        yield new Suspense('B…', static fn(): Html => Html::unsafeRaw('<p>B</p>'));
+        yield new Suspense('B…', static fn (): Html => Html::unsafeRaw('<p>B</p>'));
         yield '</main>';
     }
 
@@ -76,7 +78,7 @@ final class StreamingPage
         yield '<main>';
         yield new Suspense('outer…', static function (): \Generator {
             yield '<p>outer</p>';
-            yield new Suspense('nested…', static fn(): Html => Html::unsafeRaw('<p>nested-done</p>'));
+            yield new Suspense('nested…', static fn (): Html => Html::unsafeRaw('<p>nested-done</p>'));
             yield '<p>outer-end</p>';
         });
         yield '</main>';
@@ -92,7 +94,7 @@ final class StreamingPage
                 // The "async" work: a blocking call, then streamed markup.
                 \usleep(20_000);
                 yield '<ul>';
-                yield '<li>user: ' . c('<script>alert(1)</script>') . '</li>';
+                yield '<li>user: '.c('<script>alert(1)</script>').'</li>';
                 yield '</ul>';
             },
         );

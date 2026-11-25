@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Lintel\Tests;
 
+use const JSON_PRETTY_PRINT;
+
 use Lintel\PhpStan\Bridge;
 use PHPUnit\Framework\TestCase;
 
@@ -26,8 +28,6 @@ use function strstr;
 use function trim;
 use function uniqid;
 
-use const JSON_PRETTY_PRINT;
-
 /**
  * The §7.3-Y2 acceptance (architecture doc §7.3-Y2, `docs/type-elision.md`),
  * driven end to end: the analyze runner (`bin/analyze`) prepares the
@@ -41,7 +41,7 @@ use const JSON_PRETTY_PRINT;
  */
 final class AnalyzeElisionTest extends TestCase
 {
-    private const FIXTURE = __DIR__ . '/fixture/Elision.lintel.php';
+    private const FIXTURE = __DIR__.'/fixture/Elision.lintel.php';
 
     /** The runner's compiled PHP (its `--compile` stdout). */
     private string $compiled;
@@ -55,7 +55,7 @@ final class AnalyzeElisionTest extends TestCase
         if (! is_string($binary) || $binary === '' || ! is_executable($binary)) {
             self::markTestSkipped(sprintf('the lintel binary is not available: set %s', Bridge::BINARY_ENV));
         }
-        if (! is_file(dirname(__DIR__) . '/vendor/phpstan/phpstan/phpstan')) {
+        if (! is_file(dirname(__DIR__).'/vendor/phpstan/phpstan/phpstan')) {
             self::markTestSkipped('phpstan is not vendored');
         }
     }
@@ -65,13 +65,13 @@ final class AnalyzeElisionTest extends TestCase
         // The full path, once per test: runner → report → compiled PHP.
         // The report stays in the cache (`--out`) — never a fixture
         // sidecar in the tree.
-        $cache = sys_get_temp_dir() . '/lintel-elision-' . uniqid();
+        $cache = sys_get_temp_dir().'/lintel-elision-'.uniqid();
         [$stdout, $stderr, $exit] = self::runCommand([
             PHP_BINARY,
-            dirname(__DIR__) . '/bin/analyze',
+            dirname(__DIR__).'/bin/analyze',
             self::FIXTURE,
-            '--cache=' . $cache,
-            '--out=' . $cache . '/Elision.lintel-types.json',
+            '--cache='.$cache,
+            '--out='.$cache.'/Elision.lintel-types.json',
             '--compile',
         ]);
         self::assertSame(0, $exit, "the analyze runner ran: {$stdout}{$stderr}");
@@ -102,7 +102,7 @@ final class AnalyzeElisionTest extends TestCase
         $this->compiled = (string) strstr($stdout, '<?php');
     }
 
-    public function testTheReportCarriesTheProvenTypesPerChild(): void
+    public function test_the_report_carries_the_proven_types_per_child(): void
     {
         $types = [];
         foreach ($this->report as $entry) {
@@ -127,7 +127,7 @@ final class AnalyzeElisionTest extends TestCase
     }
 
     /** (a) The emitted-PHP goldens: elided only where proven. */
-    public function testTheCompiledOutputElidesExactlyTheProvenChildren(): void
+    public function test_the_compiled_output_elides_exactly_the_proven_children(): void
     {
         // int/float/numeric-string fold to the raw expression, the literal
         // to its escaped value, bool to the parity-safe ternary (M3); mixed
@@ -169,13 +169,13 @@ final class AnalyzeElisionTest extends TestCase
      * attacker-shaped payloads — the elided children render markup-free
      * (proven scalars cannot carry markup) and every kept helper escapes.
      */
-    public function testTheCompiledArtifactCannotReintroduceInjection(): void
+    public function test_the_compiled_artifact_cannot_reintroduce_injection(): void
     {
-        $dir = sys_get_temp_dir() . '/lintel-elision-' . uniqid();
+        $dir = sys_get_temp_dir().'/lintel-elision-'.uniqid();
         @mkdir($dir);
-        $artifact = $dir . '/Elision.php';
+        $artifact = $dir.'/Elision.php';
         file_put_contents($artifact, $this->compiled);
-        $runtime = dirname(__DIR__, 2) . '/runtime/src/functions.php';
+        $runtime = dirname(__DIR__, 2).'/runtime/src/functions.php';
         $harness = <<<'PHP'
 <?php
 declare(strict_types=1);
@@ -195,7 +195,7 @@ echo 'c(true)=', \Lintel\c(true), "\n";
 echo "c('42')=", \Lintel\c('42'), "\n";
 PHP;
         $harness = str_replace(['__RUNTIME__', '__ARTIFACT__'], [$runtime, $artifact], $harness);
-        $harnessPath = $dir . '/harness.php';
+        $harnessPath = $dir.'/harness.php';
         file_put_contents($harnessPath, $harness);
         [$stdout] = self::runCommand([PHP_BINARY, $harnessPath, '42']);
         $renders = json_decode(trim(strstr($stdout, "\n", true) ?: ''), true);
@@ -230,16 +230,16 @@ PHP;
         self::assertSame('<i></i>', $rendered($renders['flags_false']));
         // Parity evidence: what c() renders for the same values the
         // elision's runtime forms produce.
-        self::assertStringContainsString('c(true)=' . \PHP_EOL, $stdout, 'c(true) is empty');
+        self::assertStringContainsString('c(true)='.\PHP_EOL, $stdout, 'c(true) is empty');
         self::assertStringContainsString("c('42')=42", $stdout, 'c(numeric-string) is the identity');
     }
 
     /** (c) The M3 bool fold: parity for both truth values, the side
      * effects preserved, and a mis-proven hostile string renders empty —
      * the fold's markup is the constant `''`, never runtime content. */
-    public function testBoolFoldIsParitySafeSideEffectPreservingAndMisProofSafe(): void
+    public function test_bool_fold_is_parity_safe_side_effect_preserving_and_mis_proof_safe(): void
     {
-        $dir = sys_get_temp_dir() . '/lintel-bool-' . uniqid();
+        $dir = sys_get_temp_dir().'/lintel-bool-'.uniqid();
         @mkdir($dir);
         $lines = [
             '<?php',
@@ -264,8 +264,8 @@ PHP;
             '    return <q>{$x}</q>;',
             '}',
         ];
-        $src = $dir . '/Bool.lintel.php';
-        file_put_contents($src, implode("\n", $lines) . "\n");
+        $src = $dir.'/Bool.lintel.php';
+        file_put_contents($src, implode("\n", $lines)."\n");
         $lineOf = static function (string $needle) use ($lines): int {
             foreach ($lines as $index => $line) {
                 if (str_contains($line, $needle)) {
@@ -289,7 +289,7 @@ PHP;
                 ['line' => $lineOf('return <q>'), 'expr' => '$x', 'type' => 'bool'],
             ],
         ];
-        $types = $dir . '/types.json';
+        $types = $dir.'/types.json';
         file_put_contents($types, json_encode($report) ?: '[]');
         [$stdout, $stderr, $exit] = self::runCommand([
             getenv(Bridge::BINARY_ENV) ?: 'lintel',
@@ -304,9 +304,9 @@ PHP;
         self::assertStringContainsString("((probe()) ? '' : '')", $compiled, $compiled);
         self::assertStringContainsString("((\$x) ? '' : '')", $compiled, $compiled);
 
-        $artifact = $dir . '/Bool.php';
+        $artifact = $dir.'/Bool.php';
         file_put_contents($artifact, $compiled);
-        $runtime = dirname(__DIR__, 2) . '/runtime/src/functions.php';
+        $runtime = dirname(__DIR__, 2).'/runtime/src/functions.php';
         $harness = <<<'PHP'
 <?php
 declare(strict_types=1);
@@ -322,7 +322,7 @@ echo json_encode($renders), "\n";
 echo 'probes=', $GLOBALS['probes'], "\n";
 PHP;
         $harness = str_replace(['__RUNTIME__', '__ARTIFACT__'], [$runtime, $artifact], $harness);
-        $harnessPath = $dir . '/harness.php';
+        $harnessPath = $dir.'/harness.php';
         file_put_contents($harnessPath, $harness);
         [$stdout] = self::runCommand([PHP_BINARY, $harnessPath]);
         $renders = json_decode(trim(strstr($stdout, "\n", true) ?: ''), true);
@@ -344,11 +344,12 @@ PHP;
             self::fail('the harness rendered a non-object shape');
         }
         $s = $item['s'] ?? null;
+
         return is_string($s) ? $s : '';
     }
 
     /**
-     * @param list<string> $command
+     * @param  list<string>  $command
      * @return array{0: string, 1: string, 2: int} stdout, stderr, exit
      */
     private static function runCommand(array $command): array
@@ -360,6 +361,7 @@ PHP;
         $stderr = (string) stream_get_contents($pipes[2]);
         fclose($pipes[2]);
         $exit = proc_close($process);
+
         return [$stdout, $stderr, $exit];
     }
 }

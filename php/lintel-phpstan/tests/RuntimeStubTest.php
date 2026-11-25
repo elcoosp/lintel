@@ -7,9 +7,7 @@ namespace Lintel\Tests;
 use PHPUnit\Framework\TestCase;
 
 use function array_map;
-use function array_slice;
 use function class_exists;
-use function dirname;
 use function file_exists;
 use function file_get_contents;
 use function preg_match_all;
@@ -25,9 +23,9 @@ use function sprintf;
  */
 final class RuntimeStubTest extends TestCase
 {
-    private const RUNTIME = __DIR__ . '/../../runtime/src/functions.php';
+    private const RUNTIME = __DIR__.'/../../runtime/src/functions.php';
 
-    private const STUB = __DIR__ . '/../resources/runtime.stub';
+    private const STUB = __DIR__.'/../resources/runtime.stub';
 
     /** @var array<string, array<int, array{name: string, type: string}>> function → ordered params */
     private array $stubFunctions = [];
@@ -52,7 +50,7 @@ final class RuntimeStubTest extends TestCase
             PREG_SET_ORDER,
         );
         foreach ($functions as $match) {
-            $this->stubFunctions['Lintel\\' . $match[1]] = self::parseParams($match[2]);
+            $this->stubFunctions['Lintel\\'.$match[1]] = self::parseParams($match[2]);
         }
         preg_match_all(
             '/^    (?:public |private |protected |static |readonly )*function ([a-zA-Z_]+)\(([^)]*)\)/m',
@@ -65,7 +63,7 @@ final class RuntimeStubTest extends TestCase
         }
     }
 
-    public function testEveryRuntimeHelperIsDeclaredInTheStub(): void
+    public function test_every_runtime_helper_is_declared_in_the_stub(): void
     {
         $declared = self::runtimeFunctions();
         foreach ($declared as $name => $params) {
@@ -83,7 +81,7 @@ final class RuntimeStubTest extends TestCase
         self::assertCount(count($declared), $this->stubFunctions, 'the stub declares only real helpers');
     }
 
-    public function testTheHtmlClassSurfaceMatches(): void
+    public function test_the_html_class_surface_matches(): void
     {
         self::assertTrue(class_exists('Lintel\\Html'));
         $reflection = new \ReflectionClass('Lintel\\Html');
@@ -96,7 +94,7 @@ final class RuntimeStubTest extends TestCase
             self::assertSame(
                 array_map(
                     static fn (\ReflectionParameter $parameter): array => [
-                        'name' => '$' . $parameter->getName(),
+                        'name' => '$'.$parameter->getName(),
                         'type' => self::typeString($parameter->getType()),
                     ],
                     $method->getParameters(),
@@ -117,15 +115,16 @@ final class RuntimeStubTest extends TestCase
         $names = ['e', 'c', 'a', 'u', 'srcset', 'cls', 'sty', 'attrs'];
         $declared = [];
         foreach ($names as $name) {
-            $reflection = new \ReflectionFunction('Lintel\\' . $name);
-            $declared['Lintel\\' . $name] = array_map(
+            $reflection = new \ReflectionFunction('Lintel\\'.$name);
+            $declared['Lintel\\'.$name] = array_map(
                 static fn (\ReflectionParameter $parameter): array => [
-                    'name' => '$' . $parameter->getName(),
+                    'name' => '$'.$parameter->getName(),
                     'type' => self::typeString($parameter->getType()),
                 ],
                 $reflection->getParameters(),
             );
         }
+
         return $declared;
     }
 
@@ -144,7 +143,7 @@ final class RuntimeStubTest extends TestCase
                 $type = trim($match[1], ' &');
                 // Promotion modifiers ride the declaration, not the type.
                 foreach (['public', 'private', 'protected', 'readonly'] as $modifier) {
-                    $type = preg_replace('/^' . $modifier . '\s+/i', '', $type) ?? $type;
+                    $type = preg_replace('/^'.$modifier.'\s+/i', '', $type) ?? $type;
                 }
                 $params[] = [
                     'name' => self::paramName($segment),
@@ -152,6 +151,7 @@ final class RuntimeStubTest extends TestCase
                 ];
             }
         }
+
         return $params;
     }
 
@@ -161,7 +161,8 @@ final class RuntimeStubTest extends TestCase
         if (preg_match('/\$(\w+)/', $segment, $nameMatch) !== 1) {
             return '';
         }
-        return '$' . $nameMatch[1];
+
+        return '$'.$nameMatch[1];
     }
 
     private static function typeString(?\ReflectionType $type): string
@@ -169,6 +170,7 @@ final class RuntimeStubTest extends TestCase
         if ($type === null) {
             return '';
         }
+
         return self::normalize((string) $type);
     }
 
@@ -177,6 +179,7 @@ final class RuntimeStubTest extends TestCase
     {
         $type = str_replace(['?'], '', $type);
         $type = ltrim($type, '\\');
+
         // The runtime spells namespaces with a leading backslash in some
         // positions; compare unqualified names structurally.
         return $type;

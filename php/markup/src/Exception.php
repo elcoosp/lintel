@@ -8,6 +8,4 @@ use InvalidArgumentException;
 
 /** Thrown for rendering-contract violations (bad tag/attr names, hostile
  * values the contract rejects, unknown child types). */
-final class Exception extends InvalidArgumentException
-{
-}
+final class Exception extends InvalidArgumentException {}

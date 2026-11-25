@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Lintel\Tests\Support;
 
+use Spiral\RoadRunner\Http\HttpWorkerInterface;
 use Spiral\RoadRunner\Http\Request;
 use Spiral\RoadRunner\Payload;
 use Spiral\RoadRunner\WorkerInterface;
@@ -13,20 +14,24 @@ use Spiral\RoadRunner\WorkerInterface;
  * `respond()` arguments and drains the response generator exactly the way
  * the real worker does (each yielded value is one stream chunk).
  */
-final class FakeRoadRunnerHttpWorker implements \Spiral\RoadRunner\Http\HttpWorkerInterface
+final class FakeRoadRunnerHttpWorker implements HttpWorkerInterface
 {
     public int $status = 0;
+
     /** @var array<string, list<string>> */
     public array $headers = [];
+
     /** @var list<string> the yielded stream chunks, in order */
     public array $frames = [];
+
     /** The throwable pulled out of the generator (set when the page errors). */
     public ?\Throwable $pullError = null;
 
     #[\Override]
     public function getWorker(): WorkerInterface
     {
-        return new class implements WorkerInterface {
+        return new class implements WorkerInterface
+        {
             #[\Override]
             public function waitPayload(): ?Payload
             {
@@ -63,8 +68,8 @@ final class FakeRoadRunnerHttpWorker implements \Spiral\RoadRunner\Http\HttpWork
     }
 
     /**
-     * @param array<string, list<string>> $headers
-     * @param \Generator<mixed, scalar|\Stringable, mixed, mixed>|string $body
+     * @param  array<string, list<string>>  $headers
+     * @param  \Generator<mixed, scalar|\Stringable, mixed, mixed>|string  $body
      */
     #[\Override]
     public function respond(int $status, string|\Generator $body, array $headers = [], bool $endOfStream = true): void

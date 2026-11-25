@@ -4,6 +4,17 @@ declare(strict_types=1);
 
 namespace Lintel\Bench;
 
+use Illuminate\Events\Dispatcher;
+use Illuminate\Filesystem\Filesystem;
+use Illuminate\View\Compilers\BladeCompiler;
+use Illuminate\View\Engines\CompilerEngine;
+use Illuminate\View\Engines\EngineResolver;
+use Illuminate\View\Factory;
+use Illuminate\View\FileViewFinder;
+use League\Plates\Engine;
+use Twig\Environment;
+use Twig\Loader\FilesystemLoader;
+
 /**
  * The competitor template engines (§9.2: hand-written echo as the floor,
  * Blade and Twig pre-compiled, Plates) wired standalone, plus the template
@@ -16,26 +27,27 @@ final class Engines
 {
     public static function blade(string $viewsDir, string $cacheDir): object
     {
-        $fs = new \Illuminate\Filesystem\Filesystem();
-        $compiler = new \Illuminate\View\Compilers\BladeCompiler($fs, $cacheDir);
-        $engine = new \Illuminate\View\Engines\CompilerEngine($compiler);
-        $resolver = new \Illuminate\View\Engines\EngineResolver();
+        $fs = new Filesystem;
+        $compiler = new BladeCompiler($fs, $cacheDir);
+        $engine = new CompilerEngine($compiler);
+        $resolver = new EngineResolver;
         $resolver->register('blade', static fn () => $engine);
-        $finder = new \Illuminate\View\FileViewFinder($fs, [$viewsDir]);
-        $factory = new \Illuminate\View\Factory($resolver, $finder, new \Illuminate\Events\Dispatcher());
+        $finder = new FileViewFinder($fs, [$viewsDir]);
+        $factory = new Factory($resolver, $finder, new Dispatcher);
 
         return $factory;
     }
 
     public static function twig(string $viewsDir, string $cacheDir): object
     {
-        $loader = new \Twig\Loader\FilesystemLoader($viewsDir);
-        return new \Twig\Environment($loader, ['cache' => $cacheDir, 'autoescape' => 'html']);
+        $loader = new FilesystemLoader($viewsDir);
+
+        return new Environment($loader, ['cache' => $cacheDir, 'autoescape' => 'html']);
     }
 
     public static function plates(string $viewsDir): object
     {
-        return new \League\Plates\Engine($viewsDir);
+        return new Engine($viewsDir);
     }
 
     /** Write the competitor templates for one scenario into $viewsDir. */
@@ -67,7 +79,7 @@ final class Engines
             ],
         ];
         foreach ($writes[$scenarioId] ?? [] as $name => $content) {
-            \file_put_contents($viewsDir . '/' . $name, $content);
+            \file_put_contents($viewsDir.'/'.$name, $content);
         }
     }
 }
@@ -100,7 +112,9 @@ BLADE;
 
     public const S3 = <<<'BLADE'
 @include('node', ['depth' => $d['depth']])
-BLADE;    public const S4 = <<<'BLADE'
+BLADE;
+
+    public const S4 = <<<'BLADE'
 <div class="links">
 @foreach ($d['links'] as $i => $l)
 <a href="{{ $l['href'] }}" class="btn{{ $l['active'] ? ' btn--on' : '' }}" data-i="{{ $i }}" data-kind="{{ $l['kind'] }}">{{ $l['label'] }}</a>

@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+env:
+  PUN_VERSION: "0.4.3"
+  LELA_VERSION: "0.1.0-alpha"
+
 jobs:
   workflow-lint:
     runs-on: ubuntu-latest
@@ -40,15 +44,19 @@ jobs:
           coverage: none
           tools: composer
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install PHP dev tooling (both packages + the bench lane)
+      - name: Install Pun (PHP tooling: format, lint, install)
         run: |
-          composer install --working-dir=php/runtime --no-interaction --no-progress
-          composer install --working-dir=php/lintel --no-interaction --no-progress
-          composer install --working-dir=php/lintel-phpstan --no-interaction --no-progress
-          composer install --working-dir=php/markup --no-interaction --no-progress
-          composer install --working-dir=php/blade --no-interaction --no-progress
-          composer install --working-dir=php/twig --no-interaction --no-progress
-          composer install --working-dir=bench --no-interaction --no-progress
+          curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          pun --version
+      - name: Install PHP deps with Pun (replaces composer install)
+        run: |
+          pun install --working-dir=php/runtime
+          pun install --working-dir=php/lintel
+          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/markup
+          pun install --working-dir=php/blade
+          pun install --working-dir=php/twig
+          pun install --working-dir=bench
       - name: Build the lintel binary for the PHP gates
         run: cargo build --release -p lintel-cli
       - name: composer validate (every composer.json)
@@ -60,8 +68,10 @@ jobs:
           composer validate --working-dir=php/blade --no-check-all
           composer validate --working-dir=php/twig --no-check-all
           composer validate --working-dir=bench --no-check-all
-      - name: php -l (every tracked PHP file)
-        run: bash scripts/php-gates.sh lint
+      - name: Pun format + lint (src directories only)
+        run: |
+          pun format php/runtime/src php/lintel/src php/lintel-phpstan/src php/markup/src php/blade/src php/twig/src
+          pun lint php/runtime/src php/lintel/src php/lintel-phpstan/src php/markup/src php/blade/src php/twig/src
       - name: Rust PHP gates (php -l on every golden output + init demo execution)
         run: cargo test --workspace --all-features
         env:
@@ -82,6 +92,47 @@ jobs:
       - name: PHPStan (level max)
         run: bash scripts/php-gates.sh stan
 
+  php-lela:
+    name: php (Lela 8.5 — faster PHPUnit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lela
+        run: |
+          curl -fsSL "https://github.com/lela-php/lela/releases/download/v${LELA_VERSION}/lela-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          lela --version
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Pun (for deps with --ignore-platform-req=php)
+        run: |
+          curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          pun --version
+      - name: Install PHP deps with Pun (ignore platform req since lock requires 8.6)
+        run: |
+          pun install --working-dir=php/runtime --ignore-platform-req=php
+          pun install --working-dir=php/lintel --ignore-platform-req=php
+          pun install --working-dir=php/lintel-phpstan --ignore-platform-req=php
+          pun install --working-dir=php/markup --ignore-platform-req=php
+          pun install --working-dir=php/blade --ignore-platform-req=php
+          pun install --working-dir=php/twig --ignore-platform-req=php
+          pun install --working-dir=bench --ignore-platform-req=php
+      - name: Build the lintel binary
+        run: cargo build --release -p lintel-cli
+      - name: PHPUnit with Lela (all packages)
+        run: |
+          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          lela php/lintel/vendor/bin/phpunit --configuration php/lintel/phpunit.xml
+          lela php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
+          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          lela php/lintel-phpstan/vendor/bin/phpunit --configuration php/lintel-phpstan/phpunit.xml
+          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          lela php/markup/vendor/bin/phpunit --configuration php/markup/phpunit.xml
+          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          lela php/blade/vendor/bin/phpunit --configuration php/blade/phpunit.xml
+          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          lela php/twig/vendor/bin/phpunit --configuration php/twig/phpunit.xml
+        env:
+          LINTEL_TEST_BIN: ${{ github.workspace }}/target/release/lintel
+
   dx:
     runs-on: ubuntu-latest
     steps:
@@ -92,6 +143,19 @@ jobs:
           coverage: none
           tools: composer
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Pun
+        run: |
+          curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          pun --version
+      - name: Install PHP deps with Pun
+        run: |
+          pun install --working-dir=php/runtime
+          pun install --working-dir=php/lintel
+          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/markup
+          pun install --working-dir=php/blade
+          pun install --working-dir=php/twig
+          pun install --working-dir=bench
       - name: Build the lintel binary
         run: cargo build --release -p lintel-cli
       - name: T-11 acceptance — fresh plain-PHP AND Laravel skeletons (composer require → edit → refresh, no watcher)
@@ -110,6 +174,19 @@ jobs:
           coverage: none
           tools: composer
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Pun
+        run: |
+          curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          pun --version
+      - name: Install PHP deps with Pun
+        run: |
+          pun install --working-dir=php/runtime
+          pun install --working-dir=php/lintel
+          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/markup
+          pun install --working-dir=php/blade
+          pun install --working-dir=php/twig
+          pun install --working-dir=bench
       - name: Build the lintel binary (the prebuilt binary the installer plugin caches)
         run: cargo build --release -p lintel-cli
       - name: M2 starter smoke — composer create-project → dev loader → prod build → HTTP serve (NO Rust toolchain at runtime)
@@ -311,10 +388,21 @@ jobs:
           php-version: '8.6'
           coverage: none
           tools: composer
+      - name: Install Pun
+        run: |
+          curl -fsSL "https://github.com/pun-php/pun/releases/download/v${PUN_VERSION}/pun-linux-x64.tar.gz" | tar -xz -C /usr/local/bin
+          pun --version
+      - name: Install PHP deps with Pun
+        run: |
+          pun install --working-dir=
+          pun install --working-dir=php/lintel --no-interaction --no-progress
+          pun install --working-dir=php/lintel-phpstan --no-interaction --no-progress
+          pun install --working-dir=php/markup --no-interaction --no-progress
+          pun install --working-dir=php/blade --no-interaction --no-progress
+          pun install --working-dir=php/twig --no-interaction --no-progress
+          pun install --working-dir=bench --no-interaction --no-progress
       - name: Build the lintel binary
         run: cargo build --release -p lintel-cli
-      - name: Install the runtime package the RR worker loads
-        run: composer install --working-dir=php/runtime --no-interaction --no-progress
       - name: Install RoadRunner (the version docs/deployment/roadrunner.md pins)
         run: |
           curl -fsSL --retry 2 -o /tmp/rr.tar.gz \

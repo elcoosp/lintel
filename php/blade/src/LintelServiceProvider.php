@@ -29,7 +29,7 @@ final class LintelServiceProvider extends IlluminateServiceProvider
     {
         $this->app->singleton(Bridge::class, static function (Application $app): Bridge {
             $config = $app->make('config');
-            if (!$config instanceof ConfigRepository) {
+            if (! $config instanceof ConfigRepository) {
                 throw new BridgeException('the "config" binding must be an Illuminate config repository');
             }
             $cacheDir = $config->get('lintel.cache_dir');
@@ -47,7 +47,7 @@ final class LintelServiceProvider extends IlluminateServiceProvider
     public function boot(): void
     {
         $compiler = $this->app->make('blade.compiler');
-        if (!$compiler instanceof BladeCompiler) {
+        if (! $compiler instanceof BladeCompiler) {
             throw new BridgeException('the "blade.compiler" binding must be an Illuminate\\View\\Compilers\\BladeCompiler');
         }
         Directive::register($compiler, $this->app->make(Bridge::class));

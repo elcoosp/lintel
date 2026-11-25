@@ -31,9 +31,9 @@ final class BladeBridgeTest extends TestCase
     }
 
     /** The directive compiles and the compiled string renders the component. */
-    public function testDirectiveCompilesAndRenders(): void
+    public function test_directive_compiles_and_renders(): void
     {
-        $blade = new BladeCompiler(new Filesystem(), sys_get_temp_dir() . '/lintel-blade-cache');
+        $blade = new BladeCompiler(new Filesystem, sys_get_temp_dir().'/lintel-blade-cache');
         Directive::register($blade, $this->bridge());
 
         $compiled = $blade->compileString('@lintel(\'Badge\', [\'name\' => $user])');
@@ -42,7 +42,7 @@ final class BladeBridgeTest extends TestCase
         $user = '<script>alert(1)</script>';
         \ob_start();
         try {
-            eval('?>' . $compiled);
+            eval('?>'.$compiled);
         } finally {
             $out = \ob_get_clean();
         }
@@ -52,7 +52,7 @@ final class BladeBridgeTest extends TestCase
 
     /** The bridge loads the component through the dev loader and renders
      * through c(); a second render reuses the compiled cache. */
-    public function testBridgeLoadsCompilesAndEscapes(): void
+    public function test_bridge_loads_compiles_and_escapes(): void
     {
         $bridge = $this->bridge();
 
@@ -66,7 +66,7 @@ final class BladeBridgeTest extends TestCase
     }
 
     /** A component with no source dir entry throws with the searched dirs. */
-    public function testUnknownComponentThrows(): void
+    public function test_unknown_component_throws(): void
     {
         $bridge = $this->bridge();
         $this->expectException(BridgeException::class);
@@ -75,7 +75,7 @@ final class BladeBridgeTest extends TestCase
     }
 
     /** `render()` before any register throws (the directive is unconfigured). */
-    public function testRenderBeforeRegisterThrows(): void
+    public function test_render_before_register_throws(): void
     {
         $this->expectException(BridgeException::class);
         $this->expectExceptionMessage('before Directive::register()');
@@ -84,8 +84,8 @@ final class BladeBridgeTest extends TestCase
 
     private function bridge(): Bridge
     {
-        $cacheDir = sys_get_temp_dir() . '/lintel-blade-bridge-' . bin2hex((string) random_bytes(4));
+        $cacheDir = sys_get_temp_dir().'/lintel-blade-bridge-'.bin2hex((string) random_bytes(4));
 
-        return new Bridge($cacheDir, [__DIR__ . '/fixture']);
+        return new Bridge($cacheDir, [__DIR__.'/fixture']);
     }
 }

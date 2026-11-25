@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Lintel\Tests;
 
-use Illuminate\View\Compilers\BladeCompiler;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\View\Compilers\BladeCompiler;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Twig\Environment;
@@ -54,9 +54,10 @@ final class IndependentOracleTest extends TestCase
     /** A fresh Blade compiler with its own cache dir (parallel-safe). */
     private function bladeCompiler(): BladeCompiler
     {
-        $cache = sys_get_temp_dir() . '/lintel-oracle-blade-' . bin2hex((string) random_bytes(4));
+        $cache = sys_get_temp_dir().'/lintel-oracle-blade-'.bin2hex((string) random_bytes(4));
         @mkdir($cache, 0o777, true);
-        return new BladeCompiler(new Filesystem(), $cache);
+
+        return new BladeCompiler(new Filesystem, $cache);
     }
 
     /** Render a value through Blade's `{{ }}` (the htmlspecialchars escaper). */
@@ -64,15 +65,17 @@ final class IndependentOracleTest extends TestCase
     {
         $blade = $this->bladeCompiler();
         $compiled = $blade->compileString('{{ $v }}');
-        $file = sys_get_temp_dir() . '/lintel-oracle-blade-run-' . bin2hex((string) random_bytes(4)) . '.php';
+        $file = sys_get_temp_dir().'/lintel-oracle-blade-run-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($file, $compiled);
         try {
             $extract = static function (string $__f, string $v): string {
                 $__v = $v;
                 ob_start();
                 include $__f;
+
                 return (string) ob_get_clean();
             };
+
             return $extract($file, $value);
         } finally {
             @unlink($file);
@@ -83,6 +86,7 @@ final class IndependentOracleTest extends TestCase
     private function twigChild(string $value): string
     {
         $twig = new Environment(new ArrayLoader(['c.twig' => '{{ v }}']));
+
         return $twig->render('c.twig', ['v' => $value]);
     }
 
@@ -112,13 +116,14 @@ final class IndependentOracleTest extends TestCase
         // Blade escapes {{ }} with htmlspecialchars (ENT_QUOTES), matching
         // Lintel's a() for a quoted attribute value.
         $compiled = $blade->compileString('<a title="{{ $v }}">x</a>');
-        $file = sys_get_temp_dir() . '/lintel-oracle-blade-attr-' . bin2hex((string) random_bytes(4)) . '.php';
+        $file = sys_get_temp_dir().'/lintel-oracle-blade-attr-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($file, $compiled);
         try {
             $extract = static function (string $__f, string $v): string {
                 $__v = $v;
                 ob_start();
                 include $__f;
+
                 return (string) ob_get_clean();
             };
             $out = $extract($file, $value);
@@ -126,7 +131,8 @@ final class IndependentOracleTest extends TestCase
             if (preg_match('/ title="([^"]*)"/', $out, $m) !== 1) {
                 throw new \RuntimeException("blade attr: could not extract title from: {$out}");
             }
-            return ' title="' . $m[1] . '"';
+
+            return ' title="'.$m[1].'"';
         } finally {
             @unlink($file);
         }
@@ -140,7 +146,8 @@ final class IndependentOracleTest extends TestCase
         if (preg_match('/ title="([^"]*)"/', $out, $m) !== 1) {
             throw new \RuntimeException("twig attr: could not extract title from: {$out}");
         }
-        return ' title="' . $m[1] . '"';
+
+        return ' title="'.$m[1].'"';
     }
 
     /** Render a value as a quoted attribute through Lintel's a(). */
@@ -187,6 +194,7 @@ final class IndependentOracleTest extends TestCase
         foreach ($values as $name => $value) {
             $out[$name] = ['value' => $value];
         }
+
         return $out;
     }
 
@@ -194,7 +202,7 @@ final class IndependentOracleTest extends TestCase
      * The child context: Lintel's c() must agree with Blade's {{ }} and
      * Twig's autoescape, byte-for-byte, for every covered value. */
     #[DataProvider('provideValues')]
-    public function testLintelChildAgreesWithBladeAndTwig(string $value): void
+    public function test_lintel_child_agrees_with_blade_and_twig(string $value): void
     {
         $lintel = $this->normalizeApostrophe($this->lintelChild($value));
         $blade = $this->normalizeApostrophe($this->bladeChild($value));
@@ -218,7 +226,7 @@ final class IndependentOracleTest extends TestCase
      * value. (Lintel emits ` name="value"`; Blade/Twig emit the same inside
      * ` title="..."`, so we extract and compare the `title="..."` form.) */
     #[DataProvider('provideValues')]
-    public function testLintelAttributeAgreesWithBladeAndTwig(string $value): void
+    public function test_lintel_attribute_agrees_with_blade_and_twig(string $value): void
     {
         $lintel = $this->normalizeApostrophe($this->lintelAttr($value));
         $blade = $this->normalizeApostrophe($this->bladeAttr($value));
@@ -236,7 +244,7 @@ final class IndependentOracleTest extends TestCase
     }
 
     /** The oracle covers at least 20 values across the child + attribute contexts (M1 contract). */
-    public function testTheOracleCoversAtLeast20Values(): void
+    public function test_the_oracle_covers_at_least20_values(): void
     {
         $count = count(self::provideValues());
         self::assertGreaterThanOrEqual(

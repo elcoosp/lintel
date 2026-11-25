@@ -11,7 +11,7 @@
     ],
     "minimum-stability": "dev",
     "require": {
-        "php": ">=8.6",
+        "php": ">=8.5",
         "lintel/runtime": "*"
     },
     "require-dev": {

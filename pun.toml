@@ -1,0 +1,41 @@
+[format]
+preset = "laravel"
+not-path = ["php/runtime/tests", "php/runtime/vendor", "php/runtime/.phpunit.cache", "php/lintel/tests", "php/lintel/vendor", "php/lintel/.phpunit.cache", "php/lintel-phpstan/tests", "php/lintel-phpstan/vendor", "php/lintel-phpstan/.phpunit.cache", "php/markup/tests", "php/markup/vendor", "php/markup/.phpunit.cache", "php/blade", "php/blade/.phpunit.cache", "php/blade/tests", "php/twig/tests", "php/twig/vendor", "php/twig/.phpunit.cache", "php/markup/tests/fixture", "php/blade/tests/fixture", "php/twig/tests/fixture", "php/lintel-phpstan/tests/fixture", "php/starter/components", "php/starter/public", "fuzz/corpus", "crates/lintel-core/tests/differential"]
+
+[lint.rules]
+"refactor/rename-phpdoc-tag" = "error"
+"functions/no-unused-closure-use" = "error"
+"style/no-alias-function" = "error"
+"statements/no-empty" = "error"
+"phpdoc/no-superfluous-tags" = { allow-mixed = true, allow-unused-params = true }
+"functions/no-unreachable-default-argument-value" = "error"
+"imports/no-unused" = "error"
+"control-flow/no-useless-return" = "error"
+"style/require-ordered-traits" = "error"
+"phpunit/require-method-casing" = { case = "snake-case" }
+"phpunit/require-protected-setup" = "error"
+"phpdoc/no-access" = "error"
+"phpdoc/no-package" = "error"
+"phpdoc/no-useless-inheritdoc" = "error"
+"classes/prefer-self-in-final" = "error"
+"complexity/no-redundant-nullsafe" = "off"
+"dead-code/no-duplicate-array-key" = "off"
+"dead-code/no-unreachable-code" = "off"
+"dead-code/no-unused-constructor-param" = "off"
+"dead-code/no-unused-expression" = "off"
+"dead-code/no-unused-private-constant" = "off"
+"dead-code/no-unused-private-method" = "off"
+
+[[lint.overrides]]
+files = ["php"]
+rules = { "complexity/no-redundant-nullsafe" = "error", "dead-code/no-duplicate-array-key" = "error", "dead-code/no-unreachable-code" = "error", "dead-code/no-unused-constructor-param" = "error", "dead-code/no-unused-expression" = "error", "dead-code/no-unused-private-constant" = "error", "dead-code/no-unused-private-method" = "error" }
+
+[[lint.overrides]]
+files = ["php/runtime/vendor", "php/runtime/.phpunit.cache", "php/runtime/tests", "php/lintel/vendor", "php/lintel/.phpunit.cache", "php/lintel/tests", "php/lintel-phpstan/vendor", "php/lintel-phpstan/.phpunit.cache", "php/lintel-phpstan/tests", "php/markup/vendor", "php/markup/.phpunit.cache", "php/markup/tests", "php/blade", "php/blade/.phpunit.cache", "php/blade/tests", "php/twig/vendor", "php/twig/.phpunit.cache", "php/twig/tests", "php/markup/tests/fixture", "php/blade/tests/fixture", "php/twig/tests/fixture", "php/lintel-phpstan/tests/fixture", "php/starter/components", "php/starter/public", "fuzz/corpus", "crates/lintel-core/tests/differential"]
+rules = { "complexity/no-redundant-nullsafe" = "off", "dead-code/no-duplicate-array-key" = "off", "dead-code/no-unreachable-code" = "off", "dead-code/no-unused-constructor-param" = "off", "dead-code/no-unused-expression" = "off", "dead-code/no-unused-private-constant" = "off", "dead-code/no-unused-private-method" = "off" }
+
+[analyse]
+preset = "phpstan/level_max"
+paths = ["php"]
+bootstrap = ["php/runtime/vendor/autoload.php", "php/blade/vendor/autoload.php", "php/twig/vendor/autoload.php"]
+exclude = ["php/runtime/vendor", "php/runtime/.phpunit.cache", "php/runtime/tests", "php/lintel/vendor", "php/lintel/.phpunit.cache", "php/lintel/tests", "php/lintel-phpstan/vendor", "php/lintel-phpstan/.phpunit.cache", "php/lintel-phpstan/tests", "php/markup/vendor", "php/markup/.phpunit.cache", "php/markup/tests", "php/blade", "php/blade/.phpunit.cache", "php/blade/tests", "php/twig/vendor", "php/twig/.phpunit.cache", "php/twig/tests", "php/markup/tests/fixture", "php/blade/tests/fixture", "php/twig/tests/fixture", "php/lintel-phpstan/tests/fixture", "php/starter/components", "php/starter/public", "fuzz/corpus", "crates/lintel-core/tests/differential"]

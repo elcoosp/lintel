@@ -26,9 +26,9 @@ final class Element implements \Stringable
 
     public function __toString(): string
     {
-        return '<' . $this->tag . self::attrs($this->attrs) . '>'
-            . self::children($this->children)
-            . '</' . $this->tag . '>';
+        return '<'.$this->tag.self::attrs($this->attrs).'>'
+            .self::children($this->children)
+            .'</'.$this->tag.'>';
     }
 
     /** @param array<string|int, mixed> $attrs */
@@ -41,7 +41,8 @@ final class Element implements \Stringable
                 continue;
             }
             if ($value === true) {
-                $o .= ' ' . $name;
+                $o .= ' '.$name;
+
                 continue;
             }
             // Class-list arrays follow the same list/map semantics as the
@@ -59,7 +60,7 @@ final class Element implements \Stringable
                 }
                 $value = \implode(' ', $parts);
             }
-            $o .= ' ' . $name . '="' . \htmlspecialchars((string) $value, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8') . '"';
+            $o .= ' '.$name.'="'.\htmlspecialchars((string) $value, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'"';
         }
 
         return $o;
@@ -81,7 +82,7 @@ final class Element implements \Stringable
             } elseif (\is_int($child) || \is_float($child)) {
                 $o .= (string) $child;
             } else {
-                throw new \InvalidArgumentException('Cannot render ' . \get_debug_type($child) . ' as an RFC child');
+                throw new \InvalidArgumentException('Cannot render '.\get_debug_type($child).' as an RFC child');
             }
         }
 

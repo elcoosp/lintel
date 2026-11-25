@@ -4,7 +4,7 @@
     "type": "project",
     "license": "MIT",
     "require": {
-        "php": ">=8.6",
+        "php": ">=8.5",
         "lintel/lintel": "*",
         "lintel/runtime": "*"
     },

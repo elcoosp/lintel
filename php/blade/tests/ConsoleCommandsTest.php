@@ -35,75 +35,75 @@ final class ConsoleCommandsTest extends TestCase
      * PHPUnit sits (no chdir — the workaround that once scattered a stray
      * `lintel.json` at the outer cwd under some invocation orderings) and
      * the manifest must still land at `$root`. */
-    public function testBuildCommandCompilesIntoCacheDir(): void
+    public function test_build_command_compiles_into_cache_dir(): void
     {
         $root = $this->workspace();
-        \mkdir($root . '/src', 0777, true);
-        \copy(__DIR__ . '/fixture/Badge.lintel.php', $root . '/src/Badge.lintel.php');
+        \mkdir($root.'/src', 0777, true);
+        \copy(__DIR__.'/fixture/Badge.lintel.php', $root.'/src/Badge.lintel.php');
 
         $runnerCwd = \getcwd() ?: '.';
-        [$rc, $text] = $this->runCommand(new BuildCommand($root . '/cache', [$root . '/src']), $root);
+        [$rc, $text] = $this->runCommand(new BuildCommand($root.'/cache', [$root.'/src']), $root);
 
         self::assertSame(0, $rc, $text);
-        self::assertFileExists($root . '/cache/Badge.php');
-        self::assertFileExists($root . '/lintel.json', 'the manifest lands at the app root');
-        $manifest = \json_decode((string) \file_get_contents($root . '/lintel.json'), true);
+        self::assertFileExists($root.'/cache/Badge.php');
+        self::assertFileExists($root.'/lintel.json', 'the manifest lands at the app root');
+        $manifest = \json_decode((string) \file_get_contents($root.'/lintel.json'), true);
         self::assertIsArray($manifest);
         self::assertArrayHasKey('prod', $manifest, 'the T-31 manifest shape');
         self::assertFileDoesNotExist(
-            $runnerCwd . '/lintel.json',
+            $runnerCwd.'/lintel.json',
             'no stray manifest at the process cwd (M0 cwd hygiene)',
         );
     }
 
     /** `lintel:check` succeeds on clean sources. */
-    public function testCheckCommandPassesOnCleanSource(): void
+    public function test_check_command_passes_on_clean_source(): void
     {
         $root = $this->workspace();
-        \mkdir($root . '/src', 0777, true);
-        \copy(__DIR__ . '/fixture/Badge.lintel.php', $root . '/src/Badge.lintel.php');
+        \mkdir($root.'/src', 0777, true);
+        \copy(__DIR__.'/fixture/Badge.lintel.php', $root.'/src/Badge.lintel.php');
 
-        [$rc, $text] = $this->runCommand(new CheckCommand($root . '/cache', [$root . '/src']), $root);
+        [$rc, $text] = $this->runCommand(new CheckCommand($root.'/cache', [$root.'/src']), $root);
 
         self::assertSame(0, $rc, $text);
     }
 
     /** `lintel:check` maps the binary's error-diagnostics exit (1) to the
      * artisan FAILURE — CI and deploy gates feel a broken component. */
-    public function testCheckCommandFailsOnBrokenSource(): void
+    public function test_check_command_fails_on_broken_source(): void
     {
         $root = $this->workspace();
-        \mkdir($root . '/src', 0777, true);
-        \file_put_contents($root . '/src/Broken.lintel.php', '<?php function Broken({a}: string) { return <div>{a}</span>; }');
+        \mkdir($root.'/src', 0777, true);
+        \file_put_contents($root.'/src/Broken.lintel.php', '<?php function Broken({a}: string) { return <div>{a}</span>; }');
 
-        [$rc, $text] = $this->runCommand(new CheckCommand($root . '/cache', [$root . '/src']), $root);
+        [$rc, $text] = $this->runCommand(new CheckCommand($root.'/cache', [$root.'/src']), $root);
 
         self::assertSame(1, $rc);
         self::assertStringContainsString('LNT0102', $text, 'the diagnostics render into the command output');
     }
 
     /** `lintel:clear` wipes the dev loader's cached compilations. */
-    public function testClearCommandWipesCache(): void
+    public function test_clear_command_wipes_cache(): void
     {
         $root = $this->workspace();
-        \mkdir($root . '/cache', 0777, true);
-        \file_put_contents($root . '/cache/abc123-1-2.php', '<?php /* cached */');
-        \file_put_contents($root . '/cache/def456-1-2.php.tmp', '<?php /* half-written */');
+        \mkdir($root.'/cache', 0777, true);
+        \file_put_contents($root.'/cache/abc123-1-2.php', '<?php /* cached */');
+        \file_put_contents($root.'/cache/def456-1-2.php.tmp', '<?php /* half-written */');
 
-        [$rc, $text] = $this->runCommand(new ClearCommand($root . '/cache'), $root);
+        [$rc, $text] = $this->runCommand(new ClearCommand($root.'/cache'), $root);
 
         self::assertSame(0, $rc, $text);
-        self::assertFileDoesNotExist($root . '/cache/abc123-1-2.php');
-        self::assertFileDoesNotExist($root . '/cache/def456-1-2.php.tmp');
+        self::assertFileDoesNotExist($root.'/cache/abc123-1-2.php');
+        self::assertFileDoesNotExist($root.'/cache/def456-1-2.php.tmp');
         self::assertStringContainsString('cleared 1 cached compilation', $text);
     }
 
     /** `lintel:clear` on a missing cache dir succeeds with a note. */
-    public function testClearCommandWithoutCacheSucceeds(): void
+    public function test_clear_command_without_cache_succeeds(): void
     {
         $root = $this->workspace();
 
-        [$rc, $text] = $this->runCommand(new ClearCommand($root . '/no-cache'), $root);
+        [$rc, $text] = $this->runCommand(new ClearCommand($root.'/no-cache'), $root);
 
         self::assertSame(0, $rc, $text);
         self::assertStringContainsString('nothing to clear', $text);
@@ -112,7 +112,7 @@ final class ConsoleCommandsTest extends TestCase
     /** A per-test workspace dir (cleaned in tearDown). */
     private function workspace(): string
     {
-        $dir = sys_get_temp_dir() . '/lintel-artisan-' . bin2hex((string) random_bytes(4));
+        $dir = sys_get_temp_dir().'/lintel-artisan-'.bin2hex((string) random_bytes(4));
         \mkdir($dir, 0777, true);
 
         return $dir;
@@ -125,7 +125,7 @@ final class ConsoleCommandsTest extends TestCase
     private function runCommand(Command $cmd, string $basePath): array
     {
         $cmd->setLaravel(new Application($basePath));
-        $out = new BufferedOutput();
+        $out = new BufferedOutput;
         $rc = $cmd->run(new ArrayInput([]), $out);
 
         return [$rc, $out->fetch()];
@@ -133,14 +133,14 @@ final class ConsoleCommandsTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (\glob(sys_get_temp_dir() . '/lintel-artisan-*') ?: [] as $dir) {
+        foreach (\glob(sys_get_temp_dir().'/lintel-artisan-*') ?: [] as $dir) {
             self::rmrf($dir);
         }
     }
 
     private static function rmrf(string $dir): void
     {
-        foreach (\glob($dir . '/*') ?: [] as $f) {
+        foreach (\glob($dir.'/*') ?: [] as $f) {
             if (\is_dir($f)) {
                 self::rmrf($f);
             } else {

@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 namespace Lintel\PhpStan;
 
+use PhpParser\Node;
+use PHPStan\Analyser\Scope;
+use PHPStan\Node\FileNode;
+use PHPStan\Rules\Rule;
+use PHPStan\Rules\RuleErrorBuilder;
+
 /**
  * The PHPStan side of the bridge (architecture doc §17.1 Q1): for every
  * file PHPStan analyses, this rule consults the metadata sidecar the
@@ -19,16 +25,16 @@ namespace Lintel\PhpStan;
  * and message: PHPStan rule errors carry no per-error severity, and the
  * LNT classification is part of the diagnostic itself.
  *
- * @implements \PHPStan\Rules\Rule<\PHPStan\Node\FileNode>
+ * @implements Rule<FileNode>
  */
-final class LintelDiagnosticsRule implements \PHPStan\Rules\Rule
+final class LintelDiagnosticsRule implements Rule
 {
     public function getNodeType(): string
     {
-        return \PHPStan\Node\FileNode::class;
+        return FileNode::class;
     }
 
-    public function processNode(\PhpParser\Node $node, \PHPStan\Analyser\Scope $scope): array
+    public function processNode(Node $node, Scope $scope): array
     {
         $metadata = Bridge::metadataFor($scope->getFile());
         if ($metadata === null) {
@@ -40,8 +46,8 @@ final class LintelDiagnosticsRule implements \PHPStan\Rules\Rule
         // (`Bridge::decodeDiagnostic`) — every field the rule reports is
         // already the compiler's own value or the documented fallback.
         foreach ($metadata['diagnostics'] as $diagnostic) {
-            $builder = \PHPStan\Rules\RuleErrorBuilder::message($diagnostic['message'])
-                ->identifier('lintel.' . $diagnostic['code'])
+            $builder = RuleErrorBuilder::message($diagnostic['message'])
+                ->identifier('lintel.'.$diagnostic['code'])
                 ->file($metadata['source'])
                 ->line(max(1, $diagnostic['line']));
             if ($diagnostic['help'] !== null && $diagnostic['help'] !== '') {

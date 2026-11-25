@@ -31,10 +31,10 @@ final class Bridge
      * @param array<string, mixed> $args spread as PHP named arguments */
     public function render(string $component, array $args = []): string
     {
-        if (!\function_exists($component)) {
+        if (! \function_exists($component)) {
             $this->load($component);
         }
-        if (!\function_exists($component)) {
+        if (! \function_exists($component)) {
             throw new BridgeException("No .lintel.php source declares component \"$component\"");
         }
 
@@ -47,13 +47,13 @@ final class Bridge
     private function load(string $component): void
     {
         foreach ($this->sourceDirs as $dir) {
-            $file = $dir . '/' . $component . '.lintel.php';
+            $file = $dir.'/'.$component.'.lintel.php';
             if (\is_file($file)) {
                 Loader::require($file, $this->cacheDir);
 
                 return;
             }
         }
-        throw new BridgeException("No .lintel.php source for component \"$component\" in [" . \implode(', ', $this->sourceDirs) . ']');
+        throw new BridgeException("No .lintel.php source for component \"$component\" in [".\implode(', ', $this->sourceDirs).']');
     }
 }

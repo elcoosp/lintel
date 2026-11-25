@@ -12,17 +12,23 @@ parameters:
         - php/twig/vendor/autoload.php
     excludePaths:
         - php/runtime/vendor
-        - php/runtime/.phpunit.cache (?)
+        - php/runtime/.phpunit.cache
+        - php/runtime/tests
         - php/lintel/vendor
-        - php/lintel/.phpunit.cache (?)
+        - php/lintel/.phpunit.cache
+        - php/lintel/tests
         - php/lintel-phpstan/vendor
-        - php/lintel-phpstan/.phpunit.cache (?)
+        - php/lintel-phpstan/.phpunit.cache
+        - php/lintel-phpstan/tests
         - php/markup/vendor
-        - php/markup/.phpunit.cache (?)
+        - php/markup/.phpunit.cache
+        - php/markup/tests
         - php/blade/vendor
-        - php/blade/.phpunit.cache (?)
+        - php/blade/.phpunit.cache
+        - php/blade/tests
         - php/twig/vendor
-        - php/twig/.phpunit.cache (?)
+        - php/twig/.phpunit.cache
+        - php/twig/tests
         # The markup package's e2e fixture is a `.lintel.php` source —
         # compiler input, not PHP (the same rule the bridge's fixtures use).
         - php/markup/tests/fixture

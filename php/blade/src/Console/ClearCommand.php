@@ -13,23 +13,24 @@ namespace Lintel\Blade\Console;
 final class ClearCommand extends Command
 {
     protected $signature = 'lintel:clear';
+
     protected $description = 'Wipe the dev loader compile cache';
 
     public function handle(): int
     {
         $dir = $this->cacheDir();
-        if (!\is_dir($dir)) {
+        if (! \is_dir($dir)) {
             $this->info("lintel cache: nothing to clear (no cache at {$dir})");
 
             return self::SUCCESS;
         }
         $cleared = 0;
-        foreach (\glob($dir . '/*.php') ?: [] as $file) {
+        foreach (\glob($dir.'/*.php') ?: [] as $file) {
             if (@\unlink($file)) {
-                ++$cleared;
+                $cleared++;
             }
         }
-        foreach (\glob($dir . '/*.tmp') ?: [] as $file) {
+        foreach (\glob($dir.'/*.tmp') ?: [] as $file) {
             @\unlink($file);
         }
         $this->info("cleared {$cleared} cached compilation(s) from {$dir}");

@@ -15,6 +15,7 @@ namespace Lintel\Blade\Console;
 final class BuildCommand extends Command
 {
     protected $signature = 'lintel:build';
+
     protected $description = 'Compile the Lintel sources (§11): artifacts into the cache dir + the lintel.json manifest';
 
     public function handle(): int

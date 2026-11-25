@@ -14,7 +14,7 @@
         }
     },
     "require": {
-        "php": ">=8.6",
+        "php": ">=8.5",
         "lintel/lintel": "*",
         "lintel/runtime": "*",
         "symfony/console": "^7.0",

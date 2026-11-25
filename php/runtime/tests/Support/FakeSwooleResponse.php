@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Lintel\Tests\Support;
 
+use Lintel\SwooleResponse;
+
 /**
  * The structural fake for the `Lintel\SwooleResponse` contract
  * (AdapterTransportTest): records the adapter's calls in order.
  */
-final class FakeSwooleResponse implements \Lintel\SwooleResponse
+final class FakeSwooleResponse implements SwooleResponse
 {
     /** @var list<string> */
     public array $calls = [];
@@ -16,19 +18,19 @@ final class FakeSwooleResponse implements \Lintel\SwooleResponse
     #[\Override]
     public function status(int $code): void
     {
-        $this->calls[] = 'status:' . $code;
+        $this->calls[] = 'status:'.$code;
     }
 
     #[\Override]
     public function header(string $key, string $value): void
     {
-        $this->calls[] = 'header:' . $key . ':' . $value;
+        $this->calls[] = 'header:'.$key.':'.$value;
     }
 
     #[\Override]
     public function write(string $chunk): void
     {
-        $this->calls[] = 'write:' . $chunk;
+        $this->calls[] = 'write:'.$chunk;
     }
 
     #[\Override]

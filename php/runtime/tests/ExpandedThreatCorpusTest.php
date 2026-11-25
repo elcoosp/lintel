@@ -31,16 +31,18 @@ final class ExpandedThreatCorpusTest extends TestCase
     /** The lintel binary (the release build; CI sets LINTEL_TEST_BIN). */
     private static function binary(): string
     {
-        $binary = getenv('LINTEL_TEST_BIN') ?: __DIR__ . '/../../../target/release/lintel';
+        $binary = getenv('LINTEL_TEST_BIN') ?: __DIR__.'/../../../target/release/lintel';
         self::assertFileExists($binary, 'the lintel binary must be built (cargo build --release -p lintel-cli)');
+
         return $binary;
     }
 
     /** A unique temp dir per test run (parallel-safe). */
     private static function workDir(): string
     {
-        $dir = sys_get_temp_dir() . '/lintel-expanded-threat-' . bin2hex((string) random_bytes(6));
+        $dir = sys_get_temp_dir().'/lintel-expanded-threat-'.bin2hex((string) random_bytes(6));
         @mkdir($dir, 0o777, true);
+
         return $dir;
     }
 
@@ -53,14 +55,14 @@ final class ExpandedThreatCorpusTest extends TestCase
      */
     private static function compile(string $binary, string $source, string $workDir): array
     {
-        $src = $workDir . '/case.lintel.php';
+        $src = $workDir.'/case.lintel.php';
         file_put_contents($src, $source);
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
-        $cmd = escapeshellarg($binary) . ' build ' . escapeshellarg($src);
+        $cmd = escapeshellarg($binary).' build '.escapeshellarg($src);
         $proc = proc_open($cmd, $descriptors, $pipes);
         self::assertIsResource($proc, 'lintel build spawns');
         fclose($pipes[0]);
@@ -75,6 +77,7 @@ final class ExpandedThreatCorpusTest extends TestCase
         if ($code !== 0) {
             return [null, $stderr];
         }
+
         return [$stdout, $stderr];
     }
 
@@ -84,9 +87,9 @@ final class ExpandedThreatCorpusTest extends TestCase
         // The compiled template defines `function T($p)` that renders the
         // payload; we call it with the payload so the dynamic value flows
         // through the escaper exactly as a real render would.
-        $runner = $workDir . '/runner.php';
-        $runtime = __DIR__ . '/../src/functions.php';
-        $compiled = $workDir . '/compiled.php';
+        $runner = $workDir.'/runner.php';
+        $runtime = __DIR__.'/../src/functions.php';
+        $compiled = $workDir.'/compiled.php';
         file_put_contents($compiled, $compiledPhp);
         // The runner loads the runtime, requires the compiled template, and
         // echoes T($payload). json_encode carries the payload safely across
@@ -103,15 +106,16 @@ require {$this->phpLiteral($compiled)};
 \$payload = json_decode({$this->phpLiteral($payloadJson)}, true);
 echo T(\$payload);
 PHP);
-        $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1';
+        $cmd = escapeshellarg(PHP_BINARY).' '.escapeshellarg($runner).' 2>&1';
         $out = (string) shell_exec($cmd);
+
         return $out;
     }
 
     /** A PHP single-quoted string literal for a path/payload. */
     private function phpLiteral(string $s): string
     {
-        return "'" . addcslashes($s, "'\\") . "'";
+        return "'".addcslashes($s, "'\\")."'";
     }
 
     /**
@@ -136,14 +140,14 @@ PHP);
         // If the payload carries the shape AND the rendered output carries
         // the RAW (unescaped) shape, the escaper was bypassed — a breakout.
         $shapes = [
-            'script-tag'     => '/<script\b/i',
-            'img-tag'         => '/<img\b/i',
-            'svg-tag'         => '/<svg\b/i',
-            'iframe-tag'      => '/<iframe\b/i',
-            'style-tag'       => '/<style\b/i',
-            'object-tag'      => '/<object\b/i',
-            'embed-tag'       => '/<embed\b/i',
-            'event-handler'   => '/\son\w+\s*=\s*["\']/i',
+            'script-tag' => '/<script\b/i',
+            'img-tag' => '/<img\b/i',
+            'svg-tag' => '/<svg\b/i',
+            'iframe-tag' => '/<iframe\b/i',
+            'style-tag' => '/<style\b/i',
+            'object-tag' => '/<object\b/i',
+            'embed-tag' => '/<embed\b/i',
+            'event-handler' => '/\son\w+\s*=\s*["\']/i',
         ];
         foreach ($shapes as $label => $shape) {
             if (preg_match($shape, $payload)) {
@@ -159,7 +163,7 @@ PHP);
                     // and no on*= handlers. So any raw match is from the payload.
                     self::fail(
                         "{$name}: {$label} breakout — the payload's shape reached the output unescaped\n"
-                        . "--- payload ---\n{$payload}\n--- rendered ---\n{$rendered}"
+                        ."--- payload ---\n{$payload}\n--- rendered ---\n{$rendered}"
                     );
                 }
             }
@@ -178,7 +182,7 @@ PHP);
     }
 
     #[DataProvider('provideVectors')]
-    public function testEveryPublishedPayloadIsInert(string $payload, string $attribution, bool $urlShaped): void
+    public function test_every_published_payload_is_inert(string $payload, string $attribution, bool $urlShaped): void
     {
         $name = $this->dataName();
         $binary = self::binary();
@@ -195,10 +199,11 @@ PHP);
                     $stderr,
                     "{$name}: compile rejection must carry an LNT code (payload: {$payload})"
                 );
+
                 return;
             }
             $rendered = $this->execute($compiled, $workDir, $payload);
-            self::assertInert($rendered, $payload, $name . ' [child lane]');
+            self::assertInert($rendered, $payload, $name.' [child lane]');
 
             // The URL lane: URL-shaped payloads also ride a dynamic href.
             if ($urlShaped) {
@@ -206,7 +211,7 @@ PHP);
                 [$compiled2, $stderr2] = $this->compile($binary, $urlSource, $workDir);
                 if ($compiled2 !== null) {
                     $rendered2 = $this->execute($compiled2, $workDir, $payload);
-                    self::assertInert($rendered2, $payload, $name . ' [url lane]');
+                    self::assertInert($rendered2, $payload, $name.' [url lane]');
                 }
             }
         } finally {
@@ -231,10 +236,10 @@ PHP);
     /** Remove the temp workdir. */
     private static function cleanup(string $dir): void
     {
-        if (!is_dir($dir)) {
+        if (! is_dir($dir)) {
             return;
         }
-        foreach (glob($dir . '/*') ?: [] as $f) {
+        foreach (glob($dir.'/*') ?: [] as $f) {
             @unlink($f);
         }
         @rmdir($dir);
@@ -255,7 +260,7 @@ PHP);
     }
 
     /** The corpus counts at least 200 REAL published vectors (M1 contract). */
-    public function testTheCorpusCarriesAtLeast200RealPublishedVectors(): void
+    public function test_the_corpus_carries_at_least200_real_published_vectors(): void
     {
         $count = count(ExpandedThreatCorpus::vectors());
         self::assertGreaterThanOrEqual(

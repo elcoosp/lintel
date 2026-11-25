@@ -1,4 +1,7 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
+
 namespace Lintel;
 
 use Spiral\RoadRunner\Http\HttpWorkerInterface;
@@ -31,8 +34,11 @@ use Spiral\RoadRunner\Http\HttpWorkerInterface;
 interface SwooleResponse
 {
     public function status(int $code): void;
+
     public function header(string $key, string $value): void;
+
     public function write(string $chunk): void;
+
     public function end(): void;
 }
 
@@ -41,7 +47,9 @@ interface ReactResponse
 {
     /** @param array<string, string> $headers */
     public function writeHead(int $status, array $headers): void;
+
     public function write(string $chunk): void;
+
     public function end(): void;
 }
 
@@ -58,27 +66,43 @@ final class SwooleFlushTransport implements FlushTransport
     public static function fromSwoole(object $response): self
     {
         foreach (['status', 'header', 'write', 'end'] as $method) {
-            if (!\method_exists($response, $method)) {
+            if (! \method_exists($response, $method)) {
                 throw new \InvalidArgumentException(
-                    'not a Swoole HTTP response: missing ' . $method . '()',
+                    'not a Swoole HTTP response: missing '.$method.'()',
                 );
             }
         }
 
-        return new self(new class($response) implements SwooleResponse {
+        return new self(new class($response) implements SwooleResponse
+        {
             public function __construct(private readonly object $response) {}
 
-            // @phpstan-ignore method.notFound (ext-swoole's response ships no autoloadable interface — the duck type is the contract, validated in fromSwoole())
-            public function status(int $code): void { $this->response->status($code); }
+            public function status(int $code): void
+            {
+                // @phpstan-ignore method.notFound (ext-swoole's response ships no autoloadable interface — the duck type is the contract, validated in fromSwoole())
+                $this->response->status($code);
+            }
 
-            // @phpstan-ignore method.notFound (see above)
-            public function header(string $key, string $value): void { $this->response->header($key, $value); }
+            // @pun-ignore analyse/undefined/method -- see above
+            public function header(string $key, string $value): void
+            {
+                // @phpstan-ignore method.notFound
+                $this->response->header($key, $value);
+            }
 
-            // @phpstan-ignore method.notFound (see above)
-            public function write(string $chunk): void { $this->response->write($chunk); }
+            // @pun-ignore analyse/undefined/method -- see above
+            public function write(string $chunk): void
+            {
+                // @phpstan-ignore method.notFound
+                $this->response->write($chunk);
+            }
 
-            // @phpstan-ignore method.notFound (see above)
-            public function end(): void { $this->response->end(); }
+            // @pun-ignore analyse/undefined/method -- see above
+            public function end(): void
+            {
+                // @phpstan-ignore method.notFound
+                $this->response->end();
+            }
         });
     }
 
@@ -120,24 +144,36 @@ final class ReactPHPFlushTransport implements FlushTransport
     public static function fromReact(object $response): self
     {
         foreach (['writeHead', 'write', 'end'] as $method) {
-            if (!\method_exists($response, $method)) {
+            if (! \method_exists($response, $method)) {
                 throw new \InvalidArgumentException(
-                    'not a ReactPHP HTTP response: missing ' . $method . '()',
+                    'not a ReactPHP HTTP response: missing '.$method.'()',
                 );
             }
         }
 
-        return new self(new class($response) implements ReactResponse {
+        return new self(new class($response) implements ReactResponse
+        {
             public function __construct(private readonly object $response) {}
 
-            // @phpstan-ignore method.notFound (React\Http\Response ships no structural interface — the duck type is the contract, validated in fromReact())
-            public function writeHead(int $status, array $headers): void { $this->response->writeHead($status, $headers); }
+            public function writeHead(int $status, array $headers): void
+            {
+                // @phpstan-ignore method.notFound (React\Http\Response ships no structural interface — the duck type is the contract, validated in fromReact())
+                $this->response->writeHead($status, $headers);
+            }
 
-            // @phpstan-ignore method.notFound (see above)
-            public function write(string $chunk): void { $this->response->write($chunk); }
+            // @pun-ignore analyse/undefined/method -- see above
+            public function write(string $chunk): void
+            {
+                // @phpstan-ignore method.notFound
+                $this->response->write($chunk);
+            }
 
-            // @phpstan-ignore method.notFound (see above)
-            public function end(): void { $this->response->end(); }
+            // @pun-ignore analyse/undefined/method -- see above
+            public function end(): void
+            {
+                // @phpstan-ignore method.notFound
+                $this->response->end();
+            }
         });
     }
 
@@ -219,6 +255,7 @@ final class RoadRunnerFlushTransport implements FlushTransport
 {
     /** @var list<string> the flush-ordered chunks */
     private array $queue = [];
+
     private bool $closed = false;
 
     /** @param array<string, list<string>> $headers */
@@ -251,7 +288,7 @@ final class RoadRunnerFlushTransport implements FlushTransport
      * included, after its resolved template). */
     public function respond(): void
     {
-        if (!$this->closed) {
+        if (! $this->closed) {
             throw new \LogicException('respond() requires a completed stream_via() run');
         }
         $this->worker->respond($this->status, $this->chunks(), $this->headers);

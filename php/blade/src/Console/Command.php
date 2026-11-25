@@ -68,7 +68,7 @@ abstract class Command extends IlluminateCommand
      * as error lines (RAW — diagnostics carry raw `<…>` markup the output
      * formatter must not eat), and translate the exit code.
      *
-     * @param list<string> $args the argument vector after the binary
+     * @param  list<string>  $args  the argument vector after the binary
      */
     protected function runLintel(array $args): int
     {
@@ -77,14 +77,14 @@ abstract class Command extends IlluminateCommand
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ], $pipes);
-        if (!\is_resource($process)) {
-            $this->error('could not start ' . Loader::binary());
+        if (! \is_resource($process)) {
+            $this->error('could not start '.Loader::binary());
 
             return self::FAILURE;
         }
         $stdout = '';
         $stderr = '';
-        while (!\feof($pipes[1]) || !\feof($pipes[2])) {
+        while (! \feof($pipes[1]) || ! \feof($pipes[2])) {
             $read = [$pipes[1], $pipes[2]];
             $write = null;
             $except = null;

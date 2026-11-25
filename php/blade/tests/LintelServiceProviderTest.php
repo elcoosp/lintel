@@ -34,12 +34,12 @@ final class LintelServiceProviderTest extends TestCase
     }
 
     /** The provider binds the bridge from config; `@lintel` renders. */
-    public function testProviderBindsBridgeAndRegistersDirective(): void
+    public function test_provider_binds_bridge_and_registers_directive(): void
     {
-        $name = 'Prv' . bin2hex((string) random_bytes(4));
-        $root = sys_get_temp_dir() . '/lintel-provider-' . bin2hex((string) random_bytes(4));
-        \mkdir($root . '/src', 0777, true);
-        \file_put_contents($root . '/src/' . $name . '.lintel.php', <<<LINTEL
+        $name = 'Prv'.bin2hex((string) random_bytes(4));
+        $root = sys_get_temp_dir().'/lintel-provider-'.bin2hex((string) random_bytes(4));
+        \mkdir($root.'/src', 0777, true);
+        \file_put_contents($root.'/src/'.$name.'.lintel.php', <<<LINTEL
         <?php
         function {$name}(string \$name = '') {
             return <b class="badge">Hello, {\$name}</b>;
@@ -49,11 +49,11 @@ final class LintelServiceProviderTest extends TestCase
         $app = new Application($root);
         $app->instance('config', new Repository([
             'lintel' => [
-                'cache_dir' => $root . '/cache',
-                'source_dirs' => [$root . '/src'],
+                'cache_dir' => $root.'/cache',
+                'source_dirs' => [$root.'/src'],
             ],
         ]));
-        $app->instance('blade.compiler', new BladeCompiler(new Filesystem(), $root . '/cache/blade'));
+        $app->instance('blade.compiler', new BladeCompiler(new Filesystem, $root.'/cache/blade'));
 
         $provider = new LintelServiceProvider($app);
         $provider->register();
@@ -67,7 +67,7 @@ final class LintelServiceProviderTest extends TestCase
         self::assertSame('<b class="badge">Hello, DI</b>', $out);
 
         // The compiled cache lives in the configured dir, not somewhere else.
-        self::assertNotEmpty(\glob($root . '/cache/*.php'), 'the dev loader compiled into the configured cache dir');
+        self::assertNotEmpty(\glob($root.'/cache/*.php'), 'the dev loader compiled into the configured cache dir');
 
         // The panel singleton resolves too (the Debugbar collector's source).
         self::assertInstanceOf(Panel::class, $app->make(Panel::class));

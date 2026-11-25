@@ -7,6 +7,7 @@ namespace Lintel\Blade\Tests;
 use Lintel\Blade\Bridge;
 use Lintel\Blade\Profiler\DebugbarCollector;
 use Lintel\Blade\Profiler\Panel;
+use Lintel\Dev\Loader;
 use Lintel\Html;
 use Lintel\Suspense;
 use PHPUnit\Framework\TestCase;
@@ -28,12 +29,12 @@ final class ProfilerPanelTest extends TestCase
      * spend), and the loader's cache-key lane serves a re-require as a
      * hit — a declaration-free source (compiles to its own comment), so
      * the second require cannot redeclare. */
-    public function testCollectorCapturesCompileMetrics(): void
+    public function test_collector_captures_compile_metrics(): void
     {
-        $name = 'Pnl' . bin2hex((string) random_bytes(4));
+        $name = 'Pnl'.bin2hex((string) random_bytes(4));
         $cacheDir = $this->workspace($name);
         $bridge = new Bridge($cacheDir, [$cacheDir]);
-        $panel = new Panel();
+        $panel = new Panel;
         $panel->reset();
 
         $bridge->render($name, ['name' => 'P']);
@@ -43,10 +44,10 @@ final class ProfilerPanelTest extends TestCase
         self::assertSame(0, $m['cache_hits']);
         self::assertGreaterThan(0.0, $m['compile_time_ms'], 'the compile spend is measured');
 
-        $notes = $cacheDir . '/Notes.lintel.php';
+        $notes = $cacheDir.'/Notes.lintel.php';
         \file_put_contents($notes, '<?php // comment-only source, no declarations');
-        \Lintel\Dev\Loader::require($notes, $cacheDir);
-        \Lintel\Dev\Loader::require($notes, $cacheDir);
+        Loader::require($notes, $cacheDir);
+        Loader::require($notes, $cacheDir);
         $m = $panel->metrics();
         self::assertSame(3, $m['files']);
         self::assertSame(2, $m['cache_misses'], 'the notes source compiled once');
@@ -54,9 +55,9 @@ final class ProfilerPanelTest extends TestCase
     }
 
     /** A real streamed render with a boundary increments the counter. */
-    public function testCollectorCountsSuspenseBoundariesFlushed(): void
+    public function test_collector_counts_suspense_boundaries_flushed(): void
     {
-        $panel = new Panel();
+        $panel = new Panel;
         $panel->reset();
 
         $tree = [
@@ -72,14 +73,14 @@ final class ProfilerPanelTest extends TestCase
     }
 
     /** reset() zeroes the counters so a window measures exactly itself. */
-    public function testResetZeroesCounters(): void
+    public function test_reset_zeroes_counters(): void
     {
-        $name = 'Pnl' . bin2hex((string) random_bytes(4));
+        $name = 'Pnl'.bin2hex((string) random_bytes(4));
         $cacheDir = $this->workspace($name);
         (new Bridge($cacheDir, [$cacheDir]))->render($name);
-        self::assertGreaterThan(0, (new Panel())->metrics()['files']);
+        self::assertGreaterThan(0, (new Panel)->metrics()['files']);
 
-        $panel = new Panel();
+        $panel = new Panel;
         $panel->reset();
         $m = $panel->metrics();
         self::assertSame(0, $m['files']);
@@ -90,11 +91,11 @@ final class ProfilerPanelTest extends TestCase
     }
 
     /** The Debugbar adapter: name, widget spec, and the metric snapshot. */
-    public function testDebugbarCollectorExposesThePanel(): void
+    public function test_debugbar_collector_exposes_the_panel(): void
     {
-        $name = 'Pnl' . bin2hex((string) random_bytes(4));
+        $name = 'Pnl'.bin2hex((string) random_bytes(4));
         $cacheDir = $this->workspace($name);
-        $panel = new Panel();
+        $panel = new Panel;
         $panel->reset();
         (new Bridge($cacheDir, [$cacheDir]))->render($name, ['name' => 'D']);
 
@@ -116,9 +117,9 @@ final class ProfilerPanelTest extends TestCase
     /** A workspace with one `<Name>.lintel.php` component, compiled fresh. */
     private function workspace(string $name): string
     {
-        $dir = sys_get_temp_dir() . '/lintel-panel-' . bin2hex((string) random_bytes(4));
+        $dir = sys_get_temp_dir().'/lintel-panel-'.bin2hex((string) random_bytes(4));
         \mkdir($dir, 0777, true);
-        \file_put_contents($dir . '/' . $name . '.lintel.php', <<<LINTEL
+        \file_put_contents($dir.'/'.$name.'.lintel.php', <<<LINTEL
         <?php
         function {$name}(string \$name = '') {
             return <b class="badge">Hello, {\$name}</b>;

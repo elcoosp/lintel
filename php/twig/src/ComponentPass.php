@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Lintel\Twig;
 
+use Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 /**
@@ -16,7 +17,7 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
  * placeholder or a not-yet-loadable string are left alone (a later pass
  * or runtime resolution sees them).
  */
-final class ComponentPass implements \Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface
+final class ComponentPass implements CompilerPassInterface
 {
     /** The tag the bridge resolves component names against. */
     public const TAG = 'lintel.component';
@@ -31,7 +32,7 @@ final class ComponentPass implements \Symfony\Component\DependencyInjection\Comp
             // from the service id (ResolveClassPass's semantics) — honor
             // that here, before compile() has run in the tests.
             $class = $definition->getClass() ?? (\str_contains($id, '\\') ? $id : null);
-            if ($class === null || !\class_exists($class)) {
+            if ($class === null || ! \class_exists($class)) {
                 continue;
             }
             $attribute = null;
@@ -44,7 +45,7 @@ final class ComponentPass implements \Symfony\Component\DependencyInjection\Comp
             }
             $definition->addTag(self::TAG, ['name' => $attribute->name]);
             $definition->setPublic(true);
-            $container->setAlias(self::ALIAS_PREFIX . $attribute->name, $id)->setPublic(true);
+            $container->setAlias(self::ALIAS_PREFIX.$attribute->name, $id)->setPublic(true);
         }
     }
 }

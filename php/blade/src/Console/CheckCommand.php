@@ -13,6 +13,7 @@ namespace Lintel\Blade\Console;
 final class CheckCommand extends Command
 {
     protected $signature = 'lintel:check';
+
     protected $description = 'Compile the Lintel sources diagnostics-only; exits non-zero on errors';
 
     public function handle(): int

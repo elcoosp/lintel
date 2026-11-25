@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+use Lintel\Dev\Loader;
 
 /**
  * The starter's entrypoint. `composer create-project lintel/starter my-app`
@@ -18,9 +19,9 @@ declare(strict_types=1);
  * the cached PHP. `lintel build` (the `composer build` script) pre-builds
  * for prod (the T-31 manifest lane — no dev loader, no manual require).
  */
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__.'/../vendor/autoload.php';
 
-\Lintel\Dev\Loader::boot(__DIR__ . '/../cache', projectRoot: dirname(__DIR__));
+Loader::boot(__DIR__.'/../cache', projectRoot: dirname(__DIR__));
 
 echo \App\Page('Hello from the Lintel starter', [
     ['title' => 'The Lintel docs', 'url' => 'https://elcoosp.github.io/lintel/'],

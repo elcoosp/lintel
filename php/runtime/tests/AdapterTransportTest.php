@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace Lintel\Tests;
 
 use Lintel\FrankenPHPFlushTransport;
+use Lintel\Html;
 use Lintel\ReactPHPFlushTransport;
 use Lintel\RoadRunnerFlushTransport;
-use Lintel\SwooleFlushTransport;
 use Lintel\Suspense;
-use Lintel\Tests\Support\FakeRoadRunnerHttpWorker;
+use Lintel\SwooleFlushTransport;
 use Lintel\Tests\Support\FakeReactResponse;
+use Lintel\Tests\Support\FakeRoadRunnerHttpWorker;
 use Lintel\Tests\Support\FakeSwooleResponse;
 use Lintel\Tests\Support\StreamingPage;
 use PHPUnit\Framework\TestCase;
@@ -31,9 +32,9 @@ use function Lintel\stream_via;
 final class AdapterTransportTest extends TestCase
 {
     /** Swoole: begin() sends status + headers once, write() per chunk, end() last. */
-    public function testSwooleAdapterStreamsStatusHeadersChunksEnd(): void
+    public function test_swoole_adapter_streams_status_headers_chunks_end(): void
     {
-        $swoole = new FakeSwooleResponse();
+        $swoole = new FakeSwooleResponse;
         stream_via(StreamingPage::shell(), new SwooleFlushTransport($swoole));
 
         self::assertSame(
@@ -44,16 +45,32 @@ final class AdapterTransportTest extends TestCase
     }
 
     /** The fromSwoole factory adapts the raw ext-swoole response object. */
-    public function testSwooleFactoryWrapsTheExtensionResponse(): void
+    public function test_swoole_factory_wraps_the_extension_response(): void
     {
-        $swoole = new class {
+        $swoole = new class
+        {
             /** @var list<string> */
             public array $calls = [];
 
-            public function status(int $code): void { $this->calls[] = 'status:' . $code; }
-            public function header(string $k, string $v): void { $this->calls[] = 'header:' . $k . ':' . $v; }
-            public function write(string $d): void { $this->calls[] = 'write:' . $d; }
-            public function end(): void { $this->calls[] = 'end'; }
+            public function status(int $code): void
+            {
+                $this->calls[] = 'status:'.$code;
+            }
+
+            public function header(string $k, string $v): void
+            {
+                $this->calls[] = 'header:'.$k.':'.$v;
+            }
+
+            public function write(string $d): void
+            {
+                $this->calls[] = 'write:'.$d;
+            }
+
+            public function end(): void
+            {
+                $this->calls[] = 'end';
+            }
         };
 
         stream_via(StreamingPage::shell(), SwooleFlushTransport::fromSwoole($swoole));
@@ -66,9 +83,9 @@ final class AdapterTransportTest extends TestCase
     }
 
     /** ReactPHP: writeHead on begin, one write per chunk, end last. */
-    public function testReactAdapterStreamsWriteHeadChunksEnd(): void
+    public function test_react_adapter_streams_write_head_chunks_end(): void
     {
-        $react = new FakeReactResponse();
+        $react = new FakeReactResponse;
         stream_via(StreamingPage::shell(), new ReactPHPFlushTransport($react));
 
         self::assertSame(
@@ -79,9 +96,10 @@ final class AdapterTransportTest extends TestCase
     }
 
     /** The fromReact factory adapts a raw React\Http\Response-style object. */
-    public function testReactFactoryWrapsTheLibraryResponse(): void
+    public function test_react_factory_wraps_the_library_response(): void
     {
-        $react = new class {
+        $react = new class
+        {
             /** @var list<string> */
             public array $calls = [];
 
@@ -90,13 +108,20 @@ final class AdapterTransportTest extends TestCase
             {
                 $flat = [];
                 foreach ($headers as $k => $v) {
-                    $flat[] = $k . '=' . $v;
+                    $flat[] = $k.'='.$v;
                 }
-                $this->calls[] = 'writeHead:' . $status . ':' . implode('|', $flat);
+                $this->calls[] = 'writeHead:'.$status.':'.implode('|', $flat);
             }
 
-            public function write(string $d): void { $this->calls[] = 'write:' . $d; }
-            public function end(): void { $this->calls[] = 'end'; }
+            public function write(string $d): void
+            {
+                $this->calls[] = 'write:'.$d;
+            }
+
+            public function end(): void
+            {
+                $this->calls[] = 'end';
+            }
         };
 
         stream_via(StreamingPage::shell(), ReactPHPFlushTransport::fromReact($react));
@@ -111,7 +136,7 @@ final class AdapterTransportTest extends TestCase
     /** FrankenPHP (echo + flush shape): the chunks reach the client in
      * order. Run in a subprocess — the adapter's begin() tears down every
      * output buffer, which is PHPUnit's own capture buffer here. */
-    public function testFrankenPHPAdapterEchoesChunksFlushed(): void
+    public function test_franken_php_adapter_echoes_chunks_flushed(): void
     {
         $script = <<<'PHP'
 <?php declare(strict_types=1);
@@ -124,11 +149,11 @@ $t->write('<p>b</p>');
 $t->write('<p>c</p>');
 $t->end();
 PHP;
-        $script = str_replace('{RUNTIME}', var_export(\dirname(__DIR__) . '/src/functions.php', true), $script);
-        $path = sys_get_temp_dir() . '/lintel-frankenphp-' . bin2hex((string) random_bytes(4)) . '.php';
+        $script = str_replace('{RUNTIME}', var_export(\dirname(__DIR__).'/src/functions.php', true), $script);
+        $path = sys_get_temp_dir().'/lintel-frankenphp-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($path, $script);
         try {
-            $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($path) . ' 2>&1');
+            $out = shell_exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($path).' 2>&1');
             self::assertSame('<p>a</p><p>b</p><p>c</p>', $out);
         } finally {
             @unlink($path);
@@ -137,7 +162,7 @@ PHP;
 
     /** FrankenPHP over a real HTTP server: §10 headers + the suspense
      * protocol (placeholder first, escaped late payload, swap in place). */
-    public function testFrankenPHPAdapterOverHttpServer(): void
+    public function test_franken_php_adapter_over_http_server(): void
     {
         $this->assertStreamedPageOverHttpServer(
             'stream_via($page, new \\Lintel\\FrankenPHPFlushTransport());',
@@ -148,13 +173,13 @@ PHP;
     /** RoadRunner: respond() maps each queued chunk to one stream chunk of
      * the worker response, headers ride on the response, the swap script
      * is its own chunk after the resolved template's close tag. */
-    public function testRoadRunnerAdapterRespondsPerChunkWithHeaders(): void
+    public function test_road_runner_adapter_responds_per_chunk_with_headers(): void
     {
-        $worker = new FakeRoadRunnerHttpWorker();
+        $worker = new FakeRoadRunnerHttpWorker;
         $transport = new RoadRunnerFlushTransport($worker, 200, ['Content-Type' => ['text/html; charset=utf-8']]);
         stream_via((static function (): \Generator {
             yield '<main>';
-            yield new Suspense('wait…', static fn(): \Lintel\Html => \Lintel\Html::unsafeRaw('<p>done</p>'));
+            yield new Suspense('wait…', static fn (): Html => Html::unsafeRaw('<p>done</p>'));
             yield '</main>';
         })(), $transport);
         $transport->respond();
@@ -175,11 +200,11 @@ PHP;
      * the §10 suspense page streams through the worker response with the
      * swap script and an escaped late payload. Skipped when the rr binary
      * is not on PATH — CI runs it in the php job's `adapters` step. */
-    public function testRoadRunnerAdapterEndToEndOverRRServer(): void
+    public function test_road_runner_adapter_end_to_end_over_rr_server(): void
     {
         if (getenv('LINTEL_E2E_RR') !== '1' || trim((string) shell_exec('command -v rr 2>/dev/null')) === '') {
             self::markTestSkipped('the live RoadRunner lane needs the rr binary + LINTEL_E2E_RR=1 '
-                . '(CI: the php job `adapters` step installs both)');
+                .'(CI: the php job `adapters` step installs both)');
         }
         $this->assertStreamedPageOverHttpServer(<<<'PHP'
 $rr = new \Spiral\RoadRunner\Http\HttpWorker(\Spiral\RoadRunner\Worker::create());
@@ -197,7 +222,7 @@ PHP, 'RoadRunner adapter', true);
     /** Environment probes: the RR lane is detected via the RR_MODE worker
      * env, Swoole via the extension (absent in the sandbox), FrankenPHP
      * via its worker env marker. */
-    public function testAdapterEnvironmentProbes(): void
+    public function test_adapter_environment_probes(): void
     {
         self::assertSame(
             \extension_loaded('swoole') || \class_exists('Swoole\\Http\\Response'),
@@ -209,7 +234,7 @@ PHP, 'RoadRunner adapter', true);
         try {
             self::assertTrue(RoadRunnerFlushTransport::isAvailable());
         } finally {
-            putenv($had === false ? 'RR_MODE' : 'RR_MODE=' . $had);
+            putenv($had === false ? 'RR_MODE' : 'RR_MODE='.$had);
         }
         self::assertFalse(RoadRunnerFlushTransport::isAvailable());
         self::assertFalse(FrankenPHPFlushTransport::isAvailable());
@@ -230,9 +255,9 @@ PHP, 'RoadRunner adapter', true);
      */
     private function assertStreamedPageOverHttpServer(string $drivePhp, string $label, bool $viaRR = false): void
     {
-        $docroot = sys_get_temp_dir() . '/lintel-adapter-' . bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintel-adapter-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
-        $autoload = \dirname(__DIR__) . '/vendor/autoload.php';
+        $autoload = \dirname(__DIR__).'/vendor/autoload.php';
         $body = false;
         $headers = [];
 
@@ -261,7 +286,7 @@ PHP;
             $worker = str_replace(['{AUTOLOAD}', '{LABEL}', '{DRIVE}'], [
                 var_export($autoload, true), $label, $drivePhp,
             ], $worker);
-            $path = $docroot . '/worker.php';
+            $path = $docroot.'/worker.php';
             file_put_contents($path, $worker);
 
             $proc = $viaRR ? $this->startRRServer($docroot, $port, $path) : $this->startPhpServer($docroot, $port);
@@ -272,8 +297,8 @@ PHP;
             while (microtime(true) < $deadline) {
                 usleep(300_000);
                 $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
-                $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/worker.php', false, $context);
-                if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
+                $fetched = @file_get_contents('http://127.0.0.1:'.$port.'/worker.php', false, $context);
+                if ($fetched !== false && str_contains($fetched, '<h1>'.$label.'</h1>')) {
                     $body = $fetched;
                     $headers = http_get_last_response_headers() ?? [];
                     break;
@@ -292,10 +317,10 @@ PHP;
             self::assertNotFalse($body, "the {$label} fixture server never served the page");
             self::assertStreamedPageResponse((string) $body, $headers, $label);
         } finally {
-            @unlink($docroot . '/worker.php');
-            @unlink($docroot . '/.rr.yaml');
-            @unlink($docroot . '/rr.log');
-            @unlink($docroot . '/rr.err');
+            @unlink($docroot.'/worker.php');
+            @unlink($docroot.'/.rr.yaml');
+            @unlink($docroot.'/rr.log');
+            @unlink($docroot.'/rr.err');
             @rmdir($docroot);
         }
     }
@@ -305,11 +330,11 @@ PHP;
      * placeholder before its resolved template, the late chunk escaped,
      * and `X-Accel-Buffering: no` + the content type on the wire.
      *
-     * @param list<string> $headers the last response headers from the fetch
+     * @param  list<string>  $headers  the last response headers from the fetch
      */
     private function assertStreamedPageResponse(string $body, array $headers, string $label): void
     {
-        self::assertStringContainsString('<h1>' . $label . '</h1>', $body);
+        self::assertStringContainsString('<h1>'.$label.'</h1>', $body);
         self::assertStringContainsString('<div id="lt-1">', $body);
         self::assertStringContainsString('<template id="lt-1-r">', $body);
         self::assertTrue(
@@ -333,17 +358,17 @@ PHP;
      * the §10 wire contract must hold on the bytes it serves. Skipped
      * unless LINTEL_E2E_FRANKENPHP=1 AND the binary is on PATH
      * (CI: the adapters-live job downloads the v1.14.0 static build). */
-    public function testFrankenPHPAdapterEndToEndOverTheRealBinary(): void
+    public function test_franken_php_adapter_end_to_end_over_the_real_binary(): void
     {
         if (getenv('LINTEL_E2E_FRANKENPHP') !== '1' || trim((string) shell_exec('command -v frankenphp 2>/dev/null')) === '') {
             self::markTestSkipped('the live FrankenPHP lane needs the frankenphp binary + LINTEL_E2E_FRANKENPHP=1 '
-                . '(CI: the adapters-live job downloads the static v1.14.0 build)');
+                .'(CI: the adapters-live job downloads the static v1.14.0 build)');
         }
         $label = 'FrankenPHP binary adapter';
-        $docroot = sys_get_temp_dir() . '/lintel-frankenphp-' . bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintel-frankenphp-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
-            var_export(\dirname(__DIR__) . '/vendor/autoload.php', true),
+            var_export(\dirname(__DIR__).'/vendor/autoload.php', true),
             $label,
         ], <<<'PHP'
 <?php declare(strict_types=1);
@@ -365,7 +390,7 @@ $page = (static function () use ($payload): \Generator {
 })();
 stream_via($page, new \Lintel\FrankenPHPFlushTransport());
 PHP);
-        file_put_contents($docroot . '/index.php', $worker);
+        file_put_contents($docroot.'/index.php', $worker);
 
         $proc = null;
         $body = false;
@@ -374,19 +399,19 @@ PHP);
             for ($attempt = 0; $attempt < 10; $attempt++) {
                 $port = 23300 + $attempt;
                 $proc = @proc_open(
-                    ['frankenphp', 'php-server', '--root', $docroot, '--listen', '127.0.0.1:' . (string) $port],
-                    [1 => ['file', $docroot . '/fp.log', 'w'], 2 => ['file', $docroot . '/fp.err', 'w']],
+                    ['frankenphp', 'php-server', '--root', $docroot, '--listen', '127.0.0.1:'.(string) $port],
+                    [1 => ['file', $docroot.'/fp.log', 'w'], 2 => ['file', $docroot.'/fp.err', 'w']],
                     $pipes,
                 );
-                if (!is_resource($proc)) {
+                if (! is_resource($proc)) {
                     continue;
                 }
                 $deadline = microtime(true) + 8;
                 while (microtime(true) < $deadline) {
                     \usleep(300_000);
                     $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
-                    $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/index.php', false, $context);
-                    if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
+                    $fetched = @file_get_contents('http://127.0.0.1:'.$port.'/index.php', false, $context);
+                    if ($fetched !== false && str_contains($fetched, '<h1>'.$label.'</h1>')) {
                         $body = $fetched;
                         $headers = http_get_last_response_headers() ?? [];
                         break;
@@ -407,7 +432,7 @@ PHP);
                 proc_close($proc);
             }
             foreach (['/index.php', '/fp.log', '/fp.err'] as $file) {
-                @unlink($docroot . $file);
+                @unlink($docroot.$file);
             }
             @rmdir($docroot);
         }
@@ -419,17 +444,17 @@ PHP);
      * (X-Accel-Buffering: no included), per-chunk writes and end(). Skipped
      * when the extension is absent (CI: the adapters-live job installs it
      * via setup-php). */
-    public function testSwooleAdapterEndToEndOverTheExtensionServer(): void
+    public function test_swoole_adapter_end_to_end_over_the_extension_server(): void
     {
-        if (!SwooleFlushTransport::isAvailable()) {
+        if (! SwooleFlushTransport::isAvailable()) {
             self::markTestSkipped('the live Swoole lane needs ext-swoole '
-                . '(CI: the adapters-live job installs it via setup-php)');
+                .'(CI: the adapters-live job installs it via setup-php)');
         }
         $label = 'Swoole adapter';
-        $docroot = sys_get_temp_dir() . '/lintel-swoole-' . bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintel-swoole-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
-            var_export(\dirname(__DIR__) . '/vendor/autoload.php', true),
+            var_export(\dirname(__DIR__).'/vendor/autoload.php', true),
             $label,
         ], <<<'PHP'
 <?php declare(strict_types=1);
@@ -457,21 +482,21 @@ PHP);
         try {
             for ($attempt = 0; $attempt < 10; $attempt++) {
                 $port = 23400 + $attempt;
-                $path = $docroot . '/worker.php';
+                $path = $docroot.'/worker.php';
                 file_put_contents($path, str_replace('{PORT}', (string) $port, $worker));
                 $proc = @proc_open([PHP_BINARY, $path], [
-                    1 => ['file', $docroot . '/sw.log', 'w'],
-                    2 => ['file', $docroot . '/sw.err', 'w'],
+                    1 => ['file', $docroot.'/sw.log', 'w'],
+                    2 => ['file', $docroot.'/sw.err', 'w'],
                 ], $pipes);
-                if (!is_resource($proc)) {
+                if (! is_resource($proc)) {
                     continue;
                 }
                 $deadline = microtime(true) + 8;
                 while (microtime(true) < $deadline) {
                     \usleep(300_000);
                     $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 5]]);
-                    $fetched = @file_get_contents('http://127.0.0.1:' . $port . '/', false, $context);
-                    if ($fetched !== false && str_contains($fetched, '<h1>' . $label . '</h1>')) {
+                    $fetched = @file_get_contents('http://127.0.0.1:'.$port.'/', false, $context);
+                    if ($fetched !== false && str_contains($fetched, '<h1>'.$label.'</h1>')) {
                         $body = $fetched;
                         $headers = http_get_last_response_headers() ?? [];
                         break;
@@ -492,7 +517,7 @@ PHP);
                 proc_close($proc);
             }
             foreach (['/worker.php', '/sw.log', '/sw.err'] as $file) {
-                @unlink($docroot . $file);
+                @unlink($docroot.$file);
             }
             @rmdir($docroot);
         }
@@ -502,7 +527,7 @@ PHP);
     private function startPhpServer(string $docroot, int $port)
     {
         $proc = @proc_open(
-            [PHP_BINARY, '-S', '127.0.0.1:' . $port, '-t', $docroot],
+            [PHP_BINARY, '-S', '127.0.0.1:'.$port, '-t', $docroot],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );
@@ -531,13 +556,13 @@ http:
   address: 127.0.0.1:{$port}
 YAML;
         $config = str_replace(['{PHP}', '{WORKER}'], [PHP_BINARY, $workerPath], $config);
-        $cfgPath = $docroot . '/.rr.yaml';
+        $cfgPath = $docroot.'/.rr.yaml';
         file_put_contents($cfgPath, $config);
         // rr's own lifecycle logs go to files: a closed pipe on stdout/stderr
         // destabilizes the server (it writes its startup banner eagerly).
         $proc = @proc_open(['rr', 'serve', '-c', $cfgPath], [
-            1 => ['file', $docroot . '/rr.log', 'w'],
-            2 => ['file', $docroot . '/rr.err', 'w'],
+            1 => ['file', $docroot.'/rr.log', 'w'],
+            2 => ['file', $docroot.'/rr.err', 'w'],
         ], $pipes);
 
         return $proc === false ? null : $proc;

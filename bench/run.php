@@ -21,12 +21,13 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/vendor/autoload.php';
+require __DIR__.'/vendor/autoload.php';
 
 use Lintel\Bench\Engines;
 use Lintel\Bench\Metrics;
 use Lintel\Bench\ProgressiveTiming;
 use Lintel\Bench\Scenarios;
+use Markup\Element;
 
 const RUNS = 30;
 const WARMUP = 3;
@@ -38,7 +39,7 @@ function lintel_bin(): ?string
     if (\is_string($env) && $env !== '') {
         return \is_file($env) ? $env : null;
     }
-    $candidate = \dirname(__DIR__) . '/target/release/lintel';
+    $candidate = \dirname(__DIR__).'/target/release/lintel';
 
     return \is_file($candidate) ? $candidate : null;
 }
@@ -51,8 +52,8 @@ function compile_scenario(string $bin, string $outDir, string $id, string $sourc
     \file_put_contents($src, $source);
     $cmd = [$bin, 'build', "--target=$target", '--out', "$outDir/$target", $src];
     $process = \proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-    if (!\is_resource($process)) {
-        throw new \RuntimeException("could not run the lintel binary: $bin");
+    if (! \is_resource($process)) {
+        throw new RuntimeException("could not run the lintel binary: $bin");
     }
     $out = (string) \stream_get_contents($pipes[1]);
     $err = (string) \stream_get_contents($pipes[2]);
@@ -63,8 +64,8 @@ function compile_scenario(string $bin, string $outDir, string $id, string $sourc
         throw new RuntimeException("lintel build --target=$target failed for $id (exit $exit): $err");
     }
     $path = "$outDir/$target/$id.php";
-    if (!\is_file($path)) {
-        throw new \RuntimeException("lintel build did not write $path");
+    if (! \is_file($path)) {
+        throw new RuntimeException("lintel build did not write $path");
     }
 
     return $path;
@@ -78,15 +79,15 @@ function compile_scenario(string $bin, string $outDir, string $id, string $sourc
  * rfc-alignment.md: components return the runtime value; docs/
  * stream-alignment.md: "components that stream declare : \Generator").
  *
- * @param array<int, string> $names
+ * @param  array<int, string>  $names
  */
 function variant_source(string $source, array $names, string $suffix, string $returnType): string
 {
     foreach ($names as $name) {
-        $source = str_replace($name, $name . $suffix, $source);
+        $source = str_replace($name, $name.$suffix, $source);
     }
 
-    return str_replace(': Html', ': ' . $returnType, $source);
+    return str_replace(': Html', ': '.$returnType, $source);
 }
 
 /** @return array<string, array<int, string>> the function names each scenario source declares */
@@ -131,7 +132,7 @@ function run_worker(string $setting, string $compiledDir): array
         'S4' => Scenarios::s4Data(),
         'S5' => Scenarios::s5Data(),
     ];
-    $views = "$compiledDir/views-" . \preg_replace('/[^a-z0-9-]/i', '-', $setting);
+    $views = "$compiledDir/views-".\preg_replace('/[^a-z0-9-]/i', '-', $setting);
     \is_dir($views) || \mkdir($views, 0777, true);
     $engines = [
         'blade' => Engines::blade($views, "$views/blade-cache"),
@@ -152,18 +153,18 @@ function run_worker(string $setting, string $compiledDir): array
         // so every lowering can be required side by side in one process.
         if ($bin !== null) {
             $stringPath = compile_scenario($bin, $compiledDir, $id, $scenario['source'], 'string');
-            $fnName = 'Lintel\\Bench\\Gen\\' . scenario_fns()[$id][0];
+            $fnName = 'Lintel\\Bench\\Gen\\'.scenario_fns()[$id][0];
             require $stringPath;
             $results[$id]['lintel'] = bench_one(static fn (): string => (string) $fnName($data[$id]), $runs);
 
             if ($id !== 'S5') {
                 // S5's lanes are the streaming ones (§9.2): a string render
                 // of the rfc tree carries no TTFB semantics there.
-                if (!\class_exists(\Markup\Element::class, false)) {
-                    require __DIR__ . '/lib/rfc_reference.php';
+                if (! \class_exists(Element::class, false)) {
+                    require __DIR__.'/lib/rfc_reference.php';
                 }
                 $rfcPath = compile_scenario($bin, $compiledDir, $id, variant_source($scenario['source'], scenario_fns()[$id], 'Rfc', '\\Markup\\Element'), 'rfc');
-                $rfcFnName = 'Lintel\\Bench\\Gen\\' . scenario_fns()[$id][0] . 'Rfc';
+                $rfcFnName = 'Lintel\\Bench\\Gen\\'.scenario_fns()[$id][0].'Rfc';
                 require $rfcPath;
                 $results[$id]['rfc'] = bench_one(static fn (): string => (string) $rfcFnName($data[$id]), $runs);
             }
@@ -197,11 +198,11 @@ function run_worker(string $setting, string $compiledDir): array
                     $runs,
                 );
             }
-            $results[$id]['echo-stream'] = bench_stream(static function () use ($data): \Generator {
-                yield '<main class="s5"><h1>' . \htmlspecialchars($data['S5']['title'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8') . '</h1>';
+            $results[$id]['echo-stream'] = bench_stream(static function () use ($data): Generator {
+                yield '<main class="s5"><h1>'.\htmlspecialchars($data['S5']['title'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'</h1>';
                 foreach (['one', 'two', 'three'] as $label) {
                     \usleep($data['S5']['ms'] * 1000);
-                    yield '<div class="boundary">' . $label . ' resolved</div>';
+                    yield '<div class="boundary">'.$label.' resolved</div>';
                 }
                 yield '</main>';
             }, $runs);
@@ -211,6 +212,7 @@ function run_worker(string $setting, string $compiledDir): array
         foreach ($scenario['competitors'] as $name => $render) {
             if ($name === 'echo') {
                 $results[$id]['echo'] = bench_one($render, $runs);
+
                 continue;
             }
             $results[$id][$name] = bench_one(static fn (): string => $render($engines[$name]), $runs);
@@ -283,8 +285,8 @@ function compile_throughput(string $bin, string $workDir): array
     $measure = static function () use ($bin, $files, $workDir, $count): float {
         $t0 = \hrtime(true);
         $process = \proc_open([$bin, 'build', '--out', "$workDir/out", ...$files], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!\is_resource($process)) {
-            throw new \RuntimeException('compile-throughput: could not run the lintel binary');
+        if (! \is_resource($process)) {
+            throw new RuntimeException('compile-throughput: could not run the lintel binary');
         }
         \stream_get_contents($pipes[1]);
         $err = (string) \stream_get_contents($pipes[2]);
@@ -293,7 +295,7 @@ function compile_throughput(string $bin, string $workDir): array
         $exit = \proc_close($process);
         $elapsed = \hrtime(true) - $t0;
         if ($exit !== 0) {
-            throw new \RuntimeException("compile-throughput build failed (exit $exit): $err");
+            throw new RuntimeException("compile-throughput build failed (exit $exit): $err");
         }
 
         return $elapsed > 0 ? $count / ($elapsed / 1e9) : 0.0;
@@ -319,11 +321,12 @@ function opcode_counts(array $compiled): array
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );
-        if (!\is_resource($process)) {
+        if (! \is_resource($process)) {
             $out[$id] = null;
+
             continue;
         }
-        $dump = (string) \stream_get_contents($pipes[1]) . (string) \stream_get_contents($pipes[2]);
+        $dump = (string) \stream_get_contents($pipes[1]).(string) \stream_get_contents($pipes[2]);
         \fclose($pipes[1]);
         \fclose($pipes[2]);
         \proc_close($process);
@@ -341,11 +344,11 @@ $mode = $argv0[1] ?? 'orchestrator';
 
 if ($mode === 'worker') {
     $setting = (string) (\getenv('SETTING') ?: 'opcache-on');
-    $workRoot = \sys_get_temp_dir() . '/lintel-bench-' . \getmypid();
+    $workRoot = \sys_get_temp_dir().'/lintel-bench-'.\getmypid();
     $compiled = "$workRoot/compiled";
     $worker = run_worker($setting, $compiled);
     // S5 note: the compiled S5 stream lane lives with the worker; drop scratch.
-    \fwrite(STDOUT, \json_encode($worker, \JSON_THROW_ON_ERROR) . "\n");
+    \fwrite(STDOUT, \json_encode($worker, \JSON_THROW_ON_ERROR)."\n");
 
     exit(0);
 }
@@ -363,7 +366,7 @@ $settings = [
     'opcache-jit' => ['-d', 'opcache.enable_cli=1', '-d', 'opcache.jit=tracing', '-d', 'opcache.jit_buffer_size=32M'],
 ];
 $modeName = \getenv('BENCH_MODE') ?: 'native';
-$resultsDir = __DIR__ . '/results';
+$resultsDir = __DIR__.'/results';
 \is_dir($resultsDir) || \mkdir($resultsDir, 0777, true);
 
 $all = [];
@@ -372,8 +375,8 @@ foreach ($settings as $name => $flags) {
     \putenv("SETTING=$name");
     $cmd = [PHP_BINARY, ...$flags, __FILE__, 'worker'];
     $process = \proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-    if (!\is_resource($process)) {
-        throw new \RuntimeException("could not start worker for $name");
+    if (! \is_resource($process)) {
+        throw new RuntimeException("could not start worker for $name");
     }
     $json = (string) \stream_get_contents($pipes[1]);
     $err = (string) \stream_get_contents($pipes[2]);
@@ -389,10 +392,10 @@ foreach ($settings as $name => $flags) {
 }
 
 // Compile throughput + opcode probe run outside the settings matrix.
-$throughput = compile_throughput($bin, \sys_get_temp_dir() . '/lintel-bench-throughput');
+$throughput = compile_throughput($bin, \sys_get_temp_dir().'/lintel-bench-throughput');
 $compiledForProbe = [];
 foreach (['S1', 'S2', 'S3', 'S4', 'S5'] as $id) {
-    $probeDir = \sys_get_temp_dir() . '/lintel-bench-probe';
+    $probeDir = \sys_get_temp_dir().'/lintel-bench-probe';
     $compiledForProbe[$id] = compile_scenario($bin, $probeDir, $id, Scenarios::all($probeDir)[$id]['source'], 'string');
 }
 $opcodes = opcode_counts($compiledForProbe);
@@ -403,7 +406,7 @@ $opcodes = opcode_counts($compiledForProbe);
 // before resolved N-1) INSIDE the harness — a broken flusher fails the
 // bench run instead of producing numbers.
 $progressive = ProgressiveTiming::run();
-\file_put_contents("$resultsDir/progressive-timing.json", \json_encode($progressive, \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR) . "\n");
+\file_put_contents("$resultsDir/progressive-timing.json", \json_encode($progressive, \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR)."\n");
 
 $version = \PHP_VERSION;
 $date = \date('Y-m-d');
@@ -412,10 +415,10 @@ $provenance = [
     'mode' => $modeName,
     'php' => $version,
     'php_binary' => PHP_BINARY,
-    'os' => \php_uname('s') . ' ' . \php_uname('r') . ' ' . \php_uname('m'),
+    'os' => \php_uname('s').' '.\php_uname('r').' '.\php_uname('m'),
     'hostname' => \php_uname('n'),
     'lintel_bin' => $bin,
-    'lintel_version' => \trim((string) \shell_exec(\escapeshellarg($bin) . ' --version 2>&1')),
+    'lintel_version' => \trim((string) \shell_exec(\escapeshellarg($bin).' --version 2>&1')),
     'settings' => $settingsUsed,
     'runs' => RUNS,
     'warmup' => WARMUP,
@@ -429,12 +432,12 @@ $jsonPath = "$resultsDir/results-$slug.json";
     'compile_throughput' => $throughput,
     'opcode_counts' => $opcodes,
     'settings' => $all,
-], \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR) . "\n");
+], \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR)."\n");
 
 // ---- markdown + svg artifacts ---------------------------------------------
 
 $md = "# Bench results ($modeName) — PHP $version, $date\n\n";
-$md .= 'Hardware/OS: `' . $provenance['os'] . '`, host `' . $provenance['hostname'] . "`; lintel `" . $provenance['lintel_version'] . "`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep " . Scenarios::s5Data()['ms'] . " ms each. Raw JSON: `" . \basename($jsonPath) . "`.\n\n";
+$md .= 'Hardware/OS: `'.$provenance['os'].'`, host `'.$provenance['hostname'].'`; lintel `'.$provenance['lintel_version'].'`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep '.Scenarios::s5Data()['ms'].' ms each. Raw JSON: `'.\basename($jsonPath)."`.\n\n";
 $md .= "> Publishing rule (§9.2): no number appears in README/launch posts unless `make bench` reproduces it and the methodology page links this raw JSON.\n\n";
 $titles = [
     'S1' => 'S1 static-heavy page — ns/render',
@@ -448,7 +451,7 @@ foreach ($titles as $id => $title) {
         $mediansBySetting[$setting] = \array_map(static fn (array $r) => $r['median_ns'], $payload['results'][$id]);
     }
     $md .= Metrics::summaryTable($titles[$id], $mediansBySetting, 'ns/render');
-    $chart = Metrics::barSvg($title . ' (' . $settingsUsed[1] . ')', $mediansBySetting[$settingsUsed[1]] ?? [], 'ns/render');
+    $chart = Metrics::barSvg($title.' ('.$settingsUsed[1].')', $mediansBySetting[$settingsUsed[1]] ?? [], 'ns/render');
     \file_put_contents("$resultsDir/chart-$id.svg", $chart);
 }
 
@@ -462,30 +465,30 @@ foreach ($all as $setting => $payload) {
 }
 $md .= Metrics::summaryTable('S5 streaming TTFB (time to first chunk)', $s5bySettingTtfb, 'TTFB');
 $md .= Metrics::summaryTable('S5 total render time', $s5bySettingTotal, 'total');
-\file_put_contents("$resultsDir/chart-S5.svg", Metrics::barSvg('S5 TTFB (' . $settingsUsed[1] . ')', $s5bySettingTtfb[$settingsUsed[1]] ?? [], 'TTFB'));
+\file_put_contents("$resultsDir/chart-S5.svg", Metrics::barSvg('S5 TTFB ('.$settingsUsed[1].')', $s5bySettingTtfb[$settingsUsed[1]] ?? [], 'TTFB'));
 
 $md .= "### Compile throughput (lintel build, 100 sources)\n\n| metric | value |\n| --- | --- |\n";
-$md .= '| cold files/s | ' . \sprintf('%.0f', $throughput['cold_files_per_s']) . " |\n";
-$md .= '| warm files/s | ' . \sprintf('%.0f', $throughput['warm_files_per_s']) . " |\n\n";
+$md .= '| cold files/s | '.\sprintf('%.0f', $throughput['cold_files_per_s'])." |\n";
+$md .= '| warm files/s | '.\sprintf('%.0f', $throughput['warm_files_per_s'])." |\n\n";
 
 $md .= "### Opcode counts (opcache.opt_debug_level=0x20000)\n\n";
 $anyOpcode = false;
 foreach ($opcodes as $id => $count) {
-    $md .= "- $id: " . ($count === null ? 'not measurable on this runtime (instrumentation unavailable) — see bench/README.md' : $count . ' opcodes') . "\n";
+    $md .= "- $id: ".($count === null ? 'not measurable on this runtime (instrumentation unavailable) — see bench/README.md' : $count.' opcodes')."\n";
     $anyOpcode = $anyOpcode || $count !== null;
 }
-if (!$anyOpcode) {
+if (! $anyOpcode) {
     $md .= "\nThe runtime in use does not expose the opcode dump; the metric stays null here and is attempted again by the CI bench job on the pinned image.\n";
 }
 $md .= "### S6 RoadRunner progressive per-boundary timing (the Phase 11 lane)\n\n";
 $md .= "| metric | value |\n| --- | --- |\n";
-$md .= '| boundaries | ' . $progressive['boundaries'] . " |\n";
-$md .= '| TTFB — first placeholder | ' . \sprintf('%.1f', $progressive['ttfb_placeholder_ns'] / 1000) . " µs |\n";
-$md .= '| TTFB — first resolved chunk | ' . \sprintf('%.1f', $progressive['ttfb_resolved_ns'] / 1e6) . " ms |\n";
-$md .= '| total — fully resolved page | ' . \sprintf('%.1f', $progressive['total_ns'] / 1e6) . " ms |\n";
-$md .= '| chunks (wire = flush order) | ' . $progressive['chunks'] . " |\n";
+$md .= '| boundaries | '.$progressive['boundaries']." |\n";
+$md .= '| TTFB — first placeholder | '.\sprintf('%.1f', $progressive['ttfb_placeholder_ns'] / 1000)." µs |\n";
+$md .= '| TTFB — first resolved chunk | '.\sprintf('%.1f', $progressive['ttfb_resolved_ns'] / 1e6)." ms |\n";
+$md .= '| total — fully resolved page | '.\sprintf('%.1f', $progressive['total_ns'] / 1e6)." ms |\n";
+$md .= '| chunks (wire = flush order) | '.$progressive['chunks']." |\n";
 $md .= '\nProgressive invariant: placeholder N flushed before resolved N-1 — asserted by the lane itself ('
-    . \json_encode($progressive['invariants']) . '); raw facts: `progressive-timing.json`.\n\n';
+    .\json_encode($progressive['invariants']).'); raw facts: `progressive-timing.json`.\n\n';
 
 foreach ($all as $setting => $payload) {
     foreach ($payload['notes'] as $note) {
@@ -496,4 +499,4 @@ foreach ($all as $setting => $payload) {
 $mdPath = "$resultsDir/summary-$slug.md";
 \file_put_contents($mdPath, $md);
 
-\fwrite(STDOUT, "bench: wrote " . \basename($jsonPath) . ", " . \basename($mdPath) . " and chart SVGs to bench/results/\n");
+\fwrite(STDOUT, 'bench: wrote '.\basename($jsonPath).', '.\basename($mdPath)." and chart SVGs to bench/results/\n");

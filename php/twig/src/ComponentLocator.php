@@ -24,12 +24,12 @@ final class ComponentLocator
     /** The service component for `name`, or `null` when none is tagged.
      *
      * @throws ServiceNotFoundException when the alias exists but the
-     * service cannot be built (a miswired definition — surfaced, not
+     *                                  service cannot be built (a miswired definition — surfaced, not
      * swallowed, so a broken component fails loudly like the file lane) */
     public function get(string $name): ?object
     {
-        $id = ComponentPass::ALIAS_PREFIX . $name;
-        if (!$this->container->has($id)) {
+        $id = ComponentPass::ALIAS_PREFIX.$name;
+        if (! $this->container->has($id)) {
             return null;
         }
 

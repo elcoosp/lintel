@@ -42,7 +42,7 @@ final class Metrics
     /**
      * Horizontal-bar SVG for one scenario: median ns/render per competitor.
      *
-     * @param array<string, float> $medians
+     * @param  array<string, float>  $medians
      */
     public static function barSvg(string $title, array $medians, string $unit): string
     {
@@ -55,18 +55,18 @@ final class Metrics
         $barMax = 560;
         $width = $labelW + $barMax + $valueW + 40;
         $height = \count($medians) * ($barH + $gap) + 70;
-        $svg = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
-        $svg .= '<svg xmlns="http://www.w3.org/2000/svg" width="' . $width . '" height="' . $height . '" viewBox="0 0 ' . $width . ' ' . $height . '" font-family="monospace" font-size="13">';
-        $svg .= '<text x="20" y="26" font-size="15" font-weight="bold">' . \htmlspecialchars($title, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8') . '</text>';
+        $svg = '<?xml version="1.0" encoding="UTF-8"?>'."\n";
+        $svg .= '<svg xmlns="http://www.w3.org/2000/svg" width="'.$width.'" height="'.$height.'" viewBox="0 0 '.$width.' '.$height.'" font-family="monospace" font-size="13">';
+        $svg .= '<text x="20" y="26" font-size="15" font-weight="bold">'.\htmlspecialchars($title, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'</text>';
         $y = 50;
         foreach ($medians as $name => $v) {
             $w = (int) \max(2, \round($v / $max * $barMax));
-            $svg .= '<text x="20" y="' . ($y + $barH / 2 + 4) . '" text-anchor="start">' . \htmlspecialchars($name, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8') . '</text>';
-            $svg .= '<rect x="' . ($labelW + 10) . '" y="' . $y . '" width="' . $w . '" height="' . ($barH - 6) . '" fill="#3a6ea5" rx="3"/>';
-            $svg .= '<text x="' . ($labelW + 10 + $w + 8) . '" y="' . ($y + $barH / 2 + 4) . '">' . self::fmtNs($v) . ' ' . $unit . '</text>';
+            $svg .= '<text x="20" y="'.($y + $barH / 2 + 4).'" text-anchor="start">'.\htmlspecialchars($name, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'</text>';
+            $svg .= '<rect x="'.($labelW + 10).'" y="'.$y.'" width="'.$w.'" height="'.($barH - 6).'" fill="#3a6ea5" rx="3"/>';
+            $svg .= '<text x="'.($labelW + 10 + $w + 8).'" y="'.($y + $barH / 2 + 4).'">'.self::fmtNs($v).' '.$unit.'</text>';
             $y += $barH + $gap;
         }
-        $svg .= '</svg>' . "\n";
+        $svg .= '</svg>'."\n";
 
         return $svg;
     }
@@ -86,13 +86,13 @@ final class Metrics
         $out = "### $title\n\n";
         $settings = \array_keys($mediansBySetting);
         $competitors = \array_keys($mediansBySetting[$settings[0]] ?? []);
-        $out .= '| ' . $unit . ' (median) | ' . \implode(' | ', $settings) . " |\n";
-        $out .= '|' . \str_repeat(' --- |', \count($settings) + 1) . "\n";
+        $out .= '| '.$unit.' (median) | '.\implode(' | ', $settings)." |\n";
+        $out .= '|'.\str_repeat(' --- |', \count($settings) + 1)."\n";
         foreach ($competitors as $c) {
             $row = \array_map(static fn (string $s) => self::fmtNs($mediansBySetting[$s][$c] ?? 0.0), $settings);
-            $out .= "| $c | " . \implode(' | ', $row) . " |\n";
+            $out .= "| $c | ".\implode(' | ', $row)." |\n";
         }
 
-        return $out . "\n";
+        return $out."\n";
     }
 }

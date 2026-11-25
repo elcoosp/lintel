@@ -39,8 +39,13 @@ declare(strict_types=1);
 namespace Lintel\Bench;
 
 use Lintel\FlushTransport;
+use Lintel\Html;
 use Lintel\RoadRunnerFlushTransport;
 use Lintel\Suspense;
+use Spiral\RoadRunner\Http\HttpWorkerInterface;
+use Spiral\RoadRunner\Http\Request;
+use Spiral\RoadRunner\WorkerInterface;
+
 use function Lintel\stream_via;
 
 /**
@@ -91,17 +96,17 @@ final class TimedRoadRunnerFlushTransport implements FlushTransport
 }
 
 /** The RR-shaped recording worker: one recorded frame per yielded chunk. */
-final class RecordingHttpWorker implements \Spiral\RoadRunner\Http\HttpWorkerInterface
+final class RecordingHttpWorker implements HttpWorkerInterface
 {
     /** @var list<string> the yielded stream chunks, in pull order */
     public array $frames = [];
 
-    public function waitRequest(): ?\Spiral\RoadRunner\Http\Request
+    public function waitRequest(): ?Request
     {
         return null;
     }
 
-    public function getWorker(): \Spiral\RoadRunner\WorkerInterface
+    public function getWorker(): WorkerInterface
     {
         throw new \LogicException('the recording bench worker is never driver-aware');
     }
@@ -110,6 +115,7 @@ final class RecordingHttpWorker implements \Spiral\RoadRunner\Http\HttpWorkerInt
     {
         if (\is_string($body)) {
             $this->frames = [$body];
+
             return;
         }
         foreach ($body as $chunk) {
@@ -122,6 +128,7 @@ final class ProgressiveTiming
 {
     /** The boundary works' slice count per boundary (deterministic latencies). */
     private const SLICES = [3, 6, 9];
+
     private const SLICE_US = 4000;
 
     /**
@@ -134,11 +141,11 @@ final class ProgressiveTiming
     public static function run(): array
     {
         $page = self::page();
-        $worker = new RecordingHttpWorker();
+        $worker = new RecordingHttpWorker;
         $start = \hrtime(true);
         $transport = new TimedRoadRunnerFlushTransport(
             new RoadRunnerFlushTransport($worker, 200, ['Content-Type' => ['text/html; charset=utf-8']]),
-            static fn(): int => \hrtime(true),
+            static fn (): int => \hrtime(true),
         );
         stream_via($page, $transport);
         $transport->respond();
@@ -159,12 +166,13 @@ final class ProgressiveTiming
             yield '<section>';
             yield new Suspense(
                 "Loading {$i}…",
-                static function () use ($i, $slices): \Lintel\Html {
-                    for ($slice = 0; $slice < $slices; ++$slice) {
+                static function () use ($i, $slices): Html {
+                    for ($slice = 0; $slice < $slices; $slice++) {
                         \usleep(self::SLICE_US);
                         \Fiber::suspend();
                     }
-                    return \Lintel\Html::unsafeRaw("<p>resolved {$i}</p>");
+
+                    return Html::unsafeRaw("<p>resolved {$i}</p>");
                 },
             );
             yield '</section>';
@@ -176,8 +184,8 @@ final class ProgressiveTiming
      * Reduce the marks + wire frames into the facts, asserting the
      * progressive invariant.
      *
-     * @param list<array{0: int, 1: string}> $marks
-     * @param list<string> $frames
+     * @param  list<array{0: int, 1: string}>  $marks
+     * @param  list<string>  $frames
      * @return array<string, mixed>
      */
     private static function facts(array $marks, array $frames, int $totalNs): array
@@ -196,11 +204,11 @@ final class ProgressiveTiming
             $firstNs = \min($firstNs, $time);
             $lastNs = \max($lastNs, $time);
             foreach (\range(1, $count) as $n) {
-                if (\str_contains($chunk, '<div id="lt-' . $n . '">')) {
+                if (\str_contains($chunk, '<div id="lt-'.$n.'">')) {
                     $placeholderAt[$n] ??= $index;
                     $placeholderTime[$n] ??= $time;
                 }
-                if (\str_contains($chunk, '<template id="lt-' . $n . '-r">')) {
+                if (\str_contains($chunk, '<template id="lt-'.$n.'-r">')) {
                     $resolvedAt[$n] ??= $index;
                     $resolvedTime[$n] ??= $time;
                 }
@@ -210,7 +218,7 @@ final class ProgressiveTiming
         // Every boundary flushed exactly one placeholder and exactly one
         // resolved template — the §10 protocol, per boundary.
         foreach (\range(1, $count) as $n) {
-            if (!isset($placeholderAt[$n], $resolvedAt[$n])) {
+            if (! isset($placeholderAt[$n], $resolvedAt[$n])) {
                 throw new \LogicException("boundary lt-$n did not flush its placeholder + resolved pair");
             }
         }
@@ -219,21 +227,21 @@ final class ProgressiveTiming
         // resolved content for boundary N-1 (every placeholder flushes in
         // §10 step 1, before any fiber pumps).
         $progressive = [];
-        for ($n = 2; $n <= $count; ++$n) {
+        for ($n = 2; $n <= $count; $n++) {
             $ok = $placeholderAt[$n] < $resolvedAt[$n - 1];
             $progressive[] = ['boundary' => $n, 'before_resolved_of' => $n - 1, 'ok' => $ok];
-            if (!$ok) {
+            if (! $ok) {
                 throw new \LogicException(
                     "the progressive invariant failed: placeholder lt-$n flushed at "
-                    . $placeholderAt[$n] . ' but resolved lt-' . ($n - 1) . ' flushed at ' . $resolvedAt[$n - 1]
+                    .$placeholderAt[$n].' but resolved lt-'.($n - 1).' flushed at '.$resolvedAt[$n - 1]
                 );
             }
         }
 
         // Deterministic latencies resolve in document order.
-        for ($n = 2; $n <= $count; ++$n) {
+        for ($n = 2; $n <= $count; $n++) {
             if ($resolvedAt[$n] < $resolvedAt[$n - 1]) {
-                throw new \LogicException("lt-$n resolved before lt-" . ($n - 1) . ' under ordered latencies');
+                throw new \LogicException("lt-$n resolved before lt-".($n - 1).' under ordered latencies');
             }
         }
 
@@ -243,12 +251,12 @@ final class ProgressiveTiming
         $flushTotal = $lastNs - $firstNs;
         if ($ttfbPlaceholder > $ttfbResolved || $ttfbResolved > $flushTotal) {
             throw new \LogicException('the timing facts are out of order: '
-                . "placeholder $ttfbPlaceholder ns, resolved $ttfbResolved ns, total $flushTotal ns");
+                ."placeholder $ttfbPlaceholder ns, resolved $ttfbResolved ns, total $flushTotal ns");
         }
 
         // The RR wire order equals the flush order: the queued chunks the
         // transport writes are the frames the worker pulls, one per chunk.
-        $flushChunks = \array_map(static fn(array $mark): string => $mark[1], $marks);
+        $flushChunks = \array_map(static fn (array $mark): string => $mark[1], $marks);
         if ($flushChunks !== $frames) {
             throw new \LogicException('the RR wire order diverged from the flush order');
         }

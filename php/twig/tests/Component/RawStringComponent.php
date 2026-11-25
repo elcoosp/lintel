@@ -13,6 +13,6 @@ final class RawStringComponent
 {
     public function __invoke(string $name = '<script>pwned</script>'): string
     {
-        return '<em>' . $name . '</em>';
+        return '<em>'.$name.'</em>';
     }
 }

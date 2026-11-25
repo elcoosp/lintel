@@ -4,6 +4,15 @@ declare(strict_types=1);
 
 namespace Lintel\PhpStan;
 
+use PhpParser\Node;
+use PhpParser\Node\Expr\CallLike;
+use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Name;
+use PHPStan\Analyser\Scope;
+use PHPStan\Rules\Rule;
+use PHPStan\Rules\RuleErrorBuilder;
+use PHPStan\Type\Type;
+
 /**
  * The PHPStan side of the §7.3-Y2 analyze pass (architecture doc §7.3-Y2,
  * `docs/type-elision.md`): for every `\Lintel\c()` call in an analysed
@@ -26,9 +35,9 @@ namespace Lintel\PhpStan;
  * `extension.neon` — so a consumer's own PHPStan run sees no type-report
  * errors.
  *
- * @implements \PHPStan\Rules\Rule<\PhpParser\Node\Expr\CallLike>
+ * @implements Rule<CallLike>
  */
-final class LintelTypesCollector implements \PHPStan\Rules\Rule
+final class LintelTypesCollector implements Rule
 {
     /** Artifact contents per path — the argument text is sliced from them. */
     /** @var array<string, string> */
@@ -36,17 +45,17 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
 
     public function getNodeType(): string
     {
-        return \PhpParser\Node\Expr\CallLike::class;
+        return CallLike::class;
     }
 
-    public function processNode(\PhpParser\Node $node, \PHPStan\Analyser\Scope $scope): array
+    public function processNode(Node $node, Scope $scope): array
     {
-        if (! $node instanceof \PhpParser\Node\Expr\FuncCall) {
+        if (! $node instanceof FuncCall) {
             // The template already binds this rule to `CallLike` nodes;
             // this narrows the call-like family to plain function calls.
             return [];
         }
-        if ($node->isFirstClassCallable() || ! $node->name instanceof \PhpParser\Node\Name) {
+        if ($node->isFirstClassCallable() || ! $node->name instanceof Name) {
             return [];
         }
 
@@ -84,7 +93,7 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
         }
 
         return [
-            \PHPStan\Rules\RuleErrorBuilder::message((string) json_encode($payload, JSON_THROW_ON_ERROR))
+            RuleErrorBuilder::message((string) json_encode($payload, JSON_THROW_ON_ERROR))
                 ->identifier('lintel.types')
                 ->build(),
         ];
@@ -101,7 +110,7 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
      *
      * @return array{type: string, value?: string}
      */
-    private static function kind(\PHPStan\Type\Type $type): array
+    private static function kind(Type $type): array
     {
         if ($type->isInteger()->yes()) {
             return ['type' => 'int'];
@@ -120,6 +129,7 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
             if (count($values) === 1 && is_string($values[0]) && preg_match('//u', $values[0]) === 1) {
                 return ['type' => 'literal', 'value' => $values[0]];
             }
+
             return ['type' => 'string'];
         }
         if ($type->isNumericString()->yes()) {
@@ -128,6 +138,7 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
         if ($type->isString()->yes()) {
             return ['type' => 'string'];
         }
+
         // Every other resolved shape (mixed, arrays, objects, unknown
         // unions) reports under its conservative bucket: the report is a
         // real type surface, and the compiler keeps the helper for all of
@@ -140,6 +151,7 @@ final class LintelTypesCollector implements \PHPStan\Rules\Rule
         if (! array_key_exists($path, self::$contents)) {
             self::$contents[$path] = is_file($path) ? (string) file_get_contents($path) : '';
         }
+
         return self::$contents[$path];
     }
 }

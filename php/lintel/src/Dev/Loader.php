@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Lintel\Dev;
 
 use Composer\Autoload\ClassLoader;
+use Composer\InstalledVersions;
 
 /**
  * Dev-only loader (architecture doc §6.10). In prod, `lintel build` output
@@ -29,8 +30,11 @@ final class Loader
 
     /** Process-global §11 metric counters — `LoaderMetrics` snapshots them. */
     private static int $metricFiles = 0;
+
     private static int $metricHits = 0;
+
     private static int $metricMisses = 0;
+
     private static float $metricCompileMs = 0.0;
 
     /** The counters so far (the §11 profiler panels' data source). */
@@ -83,12 +87,12 @@ final class Loader
         \spl_autoload_register(static function (string $class) use ($cacheDir): void {
             foreach (ClassLoader::getRegisteredLoaders() as $loader) {
                 foreach ($loader->getPrefixesPsr4() as $prefix => $dirs) {
-                    if (!\str_starts_with($class, $prefix)) {
+                    if (! \str_starts_with($class, $prefix)) {
                         continue;
                     }
-                    $rel = \str_replace('\\', '/', \substr($class, \strlen($prefix))) . '.lintel.php';
+                    $rel = \str_replace('\\', '/', \substr($class, \strlen($prefix))).'.lintel.php';
                     foreach ($dirs as $d) {
-                        if (\is_file($f = $d . '/' . $rel)) {
+                        if (\is_file($f = $d.'/'.$rel)) {
                             self::require($f, $cacheDir);
 
                             return;
@@ -114,20 +118,20 @@ final class Loader
         if ($mtime === false || $size === false) {
             throw new \RuntimeException("cannot stat {$file}");
         }
-        $key = $cacheDir . '/' . \hash('xxh3', $file) . '-' . $mtime . '-' . $size . '.php';
-        ++self::$metricFiles;
-        if (!\is_file($key)) {
-            ++self::$metricMisses;
-            if (!\is_dir($cacheDir)) {
+        $key = $cacheDir.'/'.\hash('xxh3', $file).'-'.$mtime.'-'.$size.'.php';
+        self::$metricFiles++;
+        if (! \is_file($key)) {
+            self::$metricMisses++;
+            if (! \is_dir($cacheDir)) {
                 @\mkdir($cacheDir, 0777, true);
             }
             $started = \hrtime(true);
             $php = self::compile($file);
             self::$metricCompileMs += (\hrtime(true) - $started) / 1e6;
-            \file_put_contents($key . '.tmp', $php);
-            \rename($key . '.tmp', $key);
+            \file_put_contents($key.'.tmp', $php);
+            \rename($key.'.tmp', $key);
         } else {
-            ++self::$metricHits;
+            self::$metricHits++;
         }
 
         return require $key;
@@ -157,8 +161,8 @@ final class Loader
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ], $pipes);
-        if (!\is_resource($process)) {
-            throw new \RuntimeException("lintel build failed for {$file}: could not start " . self::binary());
+        if (! \is_resource($process)) {
+            throw new \RuntimeException("lintel build failed for {$file}: could not start ".self::binary());
         }
         $stdout = (string) \stream_get_contents($pipes[1]);
         $stderr = (string) \stream_get_contents($pipes[2]);
@@ -166,7 +170,7 @@ final class Loader
         \fclose($pipes[2]);
         $exit = \proc_close($process);
         if ($exit !== 0 || $stdout === '') {
-            throw new \RuntimeException("lintel build failed for {$file} (exit {$exit}): " . $stderr);
+            throw new \RuntimeException("lintel build failed for {$file} (exit {$exit}): ".$stderr);
         }
 
         return $stdout;
@@ -191,7 +195,7 @@ final class Loader
         if ($request === false) {
             return null;
         }
-        $frame = \sprintf('%010d', \strlen($request)) . "\n" . $request;
+        $frame = \sprintf('%010d', \strlen($request))."\n".$request;
         // The reconnection window: one retry after 100 ms covers a daemon
         // that is restarting; the proc_open fallback covers anything else.
         for ($attempt = 0; $attempt < 2; $attempt++) {
@@ -203,7 +207,7 @@ final class Loader
                 continue; // transport failure: retry, then fall back
             }
             $value = \json_decode($answer, true);
-            if (!\is_array($value) || !\array_key_exists('ok', $value)) {
+            if (! \is_array($value) || ! \array_key_exists('ok', $value)) {
                 return null;
             }
             if ($value['ok'] !== true) {
@@ -211,7 +215,7 @@ final class Loader
                 $rendered = \is_array($diag) ? \implode("\n", \array_filter($diag, 'is_string')) : '';
                 // A compile failure the daemon already rendered — surface
                 // it like the proc_open fallback surfaces a non-zero exit.
-                throw new \RuntimeException("lintel build failed for {$file}: " . $rendered);
+                throw new \RuntimeException("lintel build failed for {$file}: ".$rendered);
             }
 
             return \is_string($value['php'] ?? null) ? $value['php'] : null;
@@ -230,7 +234,7 @@ final class Loader
      */
     private static function daemonRequest(string $frame)
     {
-        $stream = @\stream_socket_client('unix://' . self::$sock, $errno, $errstr, 5.0);
+        $stream = @\stream_socket_client('unix://'.self::$sock, $errno, $errstr, 5.0);
         if ($stream === false) {
             return false;
         }
@@ -250,7 +254,7 @@ final class Loader
             }
             $prefix .= $chunk;
         }
-        if (!\ctype_digit($prefix)) {
+        if (! \ctype_digit($prefix)) {
             \fclose($stream);
 
             return false;
@@ -264,7 +268,7 @@ final class Loader
         }
         $length = (int) $prefix;
         $payload = '';
-        while (\strlen($payload) < $length && !\feof($stream)) {
+        while (\strlen($payload) < $length && ! \feof($stream)) {
             $chunk = @\fread($stream, (int) \max(1, $length - \strlen($payload)));
             if ($chunk === false || $chunk === '') {
                 break;
@@ -292,12 +296,12 @@ final class Loader
             return $override;
         }
         try {
-            $package = \Composer\InstalledVersions::getInstallPath('lintel/lintel');
+            $package = InstalledVersions::getInstallPath('lintel/lintel');
         } catch (\Throwable) {
             $package = null;
         }
         if (\is_string($package) && $package !== '') {
-            $vendorBin = \dirname($package, 2) . '/bin/lintel';
+            $vendorBin = \dirname($package, 2).'/bin/lintel';
             if (\is_file($vendorBin)) {
                 return $vendorBin;
             }
@@ -319,12 +323,12 @@ final class Loader
      */
     private static function loadFunctionComponents(string $cacheDir, string $root): void
     {
-        $manifest = $root . '/lintel.json';
-        if (!\is_file($manifest)) {
+        $manifest = $root.'/lintel.json';
+        if (! \is_file($manifest)) {
             return;
         }
         $decoded = \json_decode((string) \file_get_contents($manifest), true);
-        if (!\is_array($decoded)) {
+        if (! \is_array($decoded)) {
             throw new \RuntimeException("lintel.json at {$root} is not a valid JSON object");
         }
         $globs = $decoded['functions'] ?? null;
@@ -334,20 +338,20 @@ final class Loader
         if (\is_string($globs)) {
             $globs = [$globs];
         }
-        if (!\is_array($globs)) {
+        if (! \is_array($globs)) {
             throw new \RuntimeException("lintel.json at {$root}: \"functions\" must be a string or a list of globs");
         }
         // The T-31 prod shim records the sources it required; a source it
         // loaded already defined this process's functions — skip it.
         $shimLoaded = $GLOBALS['lintelFromSource'] ?? null;
         foreach ($globs as $glob) {
-            if (!\is_string($glob) || $glob === '') {
+            if (! \is_string($glob) || $glob === '') {
                 throw new \RuntimeException("lintel.json at {$root}: \"functions\" entries must be non-empty strings");
             }
-            $matches = \glob($root . '/' . $glob) ?: [];
+            $matches = \glob($root.'/'.$glob) ?: [];
             \sort($matches);
             foreach ($matches as $match) {
-                if (!\is_file($match)) {
+                if (! \is_file($match)) {
                     continue;
                 }
                 if (\is_array($shimLoaded)
@@ -368,7 +372,7 @@ final class Loader
         $normalize = static fn (string $path): string => \str_replace('\\', '/', $path);
         $file = $normalize($file);
         $root = \rtrim($normalize($root), '/');
-        if ($root !== '' && \str_starts_with($file, $root . '/')) {
+        if ($root !== '' && \str_starts_with($file, $root.'/')) {
             return \substr($file, \strlen($root) + 1);
         }
 

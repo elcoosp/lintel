@@ -19,8 +19,8 @@ use function preg_match_all;
 use function proc_close;
 use function proc_open;
 use function sprintf;
-use function stream_get_contents;
 use function str_starts_with;
+use function stream_get_contents;
 use function strtoupper;
 use function sys_get_temp_dir;
 use function uniqid;
@@ -87,15 +87,15 @@ final class ComponentTester
     public function __construct(?string $binary = null)
     {
         $this->binary = $binary ?? Loader::binary();
-        $this->scratch = sys_get_temp_dir() . '/lintel-component-tester-' . uniqid();
-        if (!mkdir($this->scratch, 0777, true) && !is_dir($this->scratch)) {
+        $this->scratch = sys_get_temp_dir().'/lintel-component-tester-'.uniqid();
+        if (! mkdir($this->scratch, 0777, true) && ! is_dir($this->scratch)) {
             throw new \RuntimeException("cannot create the tester scratch dir {$this->scratch}");
         }
     }
 
     public function __destruct()
     {
-        foreach (glob($this->scratch . '/*') ?: [] as $file) {
+        foreach (glob($this->scratch.'/*') ?: [] as $file) {
             @unlink($file);
         }
         @rmdir($this->scratch);
@@ -106,16 +106,16 @@ final class ComponentTester
      * named arguments, and render the result through `\Lintel\c()` — the
      * exact string the compiled component contributes to a page.
      *
-     * @param array<string, mixed> $props named arguments for the component
+     * @param  array<string, mixed>  $props  named arguments for the component
      *
      * @throws \RuntimeException when the source declares no component, a
-     * component name is already declared in this process, the compile
-     * fails, or the artifact does not declare the scanned component
+     *                           component name is already declared in this process, the compile
+     *                           fails, or the artifact does not declare the scanned component
      */
     public function render(string $jsx, array $props = []): string
     {
         $component = $this->component($jsx);
-        if (!\is_callable($component)) {
+        if (! \is_callable($component)) {
             throw new \RuntimeException("the component {$component} is not callable");
         }
         $value = $component(...$props);
@@ -135,14 +135,14 @@ final class ComponentTester
      * name) — the guard throws before the fatal; parity fixtures rename
      * the component instead.
      *
-     * @param array<string, mixed> $props named arguments for the component
+     * @param  array<string, mixed>  $props  named arguments for the component
      *
      * @throws \RuntimeException (see {@see render()})
      */
     public function renderStreaming(string $jsx, array $props = []): string
     {
         $component = $this->component($jsx, 'stream');
-        if (!\is_callable($component)) {
+        if (! \is_callable($component)) {
             throw new \RuntimeException("the component {$component} is not callable");
         }
         $value = $component(...$props);
@@ -154,7 +154,7 @@ final class ComponentTester
      * The rendered markup equals `$expectedHtml` byte for byte — the
      * assertion a component's golden-HTML test reads.
      *
-     * @param array<string, mixed> $props named arguments for the component
+     * @param  array<string, mixed>  $props  named arguments for the component
      */
     public function assertRenders(string $expectedHtml, string $jsx, array $props = []): void
     {
@@ -170,7 +170,7 @@ final class ComponentTester
      * that pin one decisive fragment (an escaped payload, one attribute)
      * without pinning the whole element.
      *
-     * @param array<string, mixed> $props named arguments for the component
+     * @param  array<string, mixed>  $props  named arguments for the component
      */
     public function assertRendersContaining(string $needle, string $jsx, array $props = []): void
     {
@@ -192,32 +192,32 @@ final class ComponentTester
      */
     private function component(string $jsx, string $target = 'string'): string
     {
-        $hash = hash('xxh3', $target . "\0" . $jsx);
+        $hash = hash('xxh3', $target."\0".$jsx);
         if (array_key_exists($hash, $this->loaded)) {
             return $this->loaded[$hash];
         }
         $name = self::componentName($jsx);
-        $fqn = self::namespaceOf($jsx) . $name;
+        $fqn = self::namespaceOf($jsx).$name;
         if (function_exists($fqn)) {
             throw new \RuntimeException(sprintf(
                 'component %s is already declared in this PHP process: a test source'
-                . ' may declare each component name once — and under one compile'
-                . ' target (the stream artifact declares the same function name as'
-                . ' the string artifact, so render() and renderStreaming() cannot'
-                . ' share one source) — rename the component (function %s) in one'
-                . ' of the sources',
+                .' may declare each component name once — and under one compile'
+                .' target (the stream artifact declares the same function name as'
+                .' the string artifact, so render() and renderStreaming() cannot'
+                .' share one source) — rename the component (function %s) in one'
+                .' of the sources',
                 $fqn,
                 $name,
             ));
         }
-        $artifact = $this->scratch . '/' . $hash . '.php';
+        $artifact = $this->scratch.'/'.$hash.'.php';
         file_put_contents($artifact, $this->compile($jsx, $target));
         require $artifact;
-        if (!function_exists($fqn)) {
+        if (! function_exists($fqn)) {
             throw new \RuntimeException(sprintf(
                 'the compiled artifact does not declare %s — the source must declare'
-                . ' the component as a plain function (the compiler only rewrites JSX,'
-                . ' it never renames declarations)',
+                .' the component as a plain function (the compiler only rewrites JSX,'
+                .' it never renames declarations)',
                 $fqn,
             ));
         }
@@ -237,14 +237,14 @@ final class ComponentTester
      */
     private function compile(string $jsx, string $target = 'string'): string
     {
-        ++$this->sources;
-        $source = $this->scratch . '/s' . $this->sources . '.lintel.php';
+        $this->sources++;
+        $source = $this->scratch.'/s'.$this->sources.'.lintel.php';
         // The compiler treats an open-tag-less file as a pure HTML
         // template and passes it through untouched (§21.3): a JSX snippet
         // is compiler INPUT, so the `<?php` prologue rides along when the
         // snippet omits it.
-        if (!str_starts_with($jsx, '<?php')) {
-            $jsx = "<?php\n" . $jsx;
+        if (! str_starts_with($jsx, '<?php')) {
+            $jsx = "<?php\n".$jsx;
         }
         file_put_contents($source, $jsx);
         $process = @proc_open(
@@ -252,7 +252,7 @@ final class ComponentTester
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );
-        if (!is_resource($process)) {
+        if (! is_resource($process)) {
             throw new \RuntimeException("cannot start the lintel binary at {$this->binary}");
         }
         $stdout = (string) stream_get_contents($pipes[1]);
@@ -292,7 +292,7 @@ final class ComponentTester
 
         throw new \RuntimeException(
             'the given source declares no component — testing helpers expect'
-            . ' `function Name(...): Html` with a capitalized name (§4.7)',
+            .' `function Name(...): Html` with a capitalized name (§4.7)',
         );
     }
 
@@ -306,6 +306,6 @@ final class ComponentTester
             return '';
         }
 
-        return $m[1] . '\\';
+        return $m[1].'\\';
     }
 }

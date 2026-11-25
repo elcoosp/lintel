@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Markup;
 
-use function Markup\render;
-
 /**
  * The RFC's fragment value (docs/rfc-alignment.md: "Fragments `<>…</>`
  * exist in the RFC syntax"). The compiler flattens nested fragments and
@@ -13,7 +11,7 @@ use function Markup\render;
  * both render through the same walk, so this class completes the RFC's
  * value model for hand-authored trees and component authors.
  *
- * @param list<mixed> $children
+ * @param  list<mixed>  $children
  */
 final class Fragment implements \Stringable
 {

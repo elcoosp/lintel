@@ -15,6 +15,6 @@ final class BadgeComponent
 {
     public function __invoke(string $name = ''): Html
     {
-        return Html::unsafeRaw('<b class="badge">Hello, ' . e($name) . '</b>');
+        return Html::unsafeRaw('<b class="badge">Hello, '.e($name).'</b>');
     }
 }

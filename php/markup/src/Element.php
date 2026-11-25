@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Markup;
 
-use function Markup\render;
-
 /**
  * The RFC's element value (`docs/rfc-alignment.md`: markup lowers to
  * `new \Markup\Element('button', ['class' => 'btn'], ['Sign in'])`).
@@ -30,8 +28,8 @@ final class Element implements \Stringable
     ];
 
     /**
-     * @param array<string|int, mixed> $attrs
-     * @param list<mixed> $children
+     * @param  array<string|int, mixed>  $attrs
+     * @param  list<mixed>  $children
      */
     public function __construct(
         public readonly string $tag,
@@ -46,20 +44,20 @@ final class Element implements \Stringable
             throw new Exception("Unsafe element tag \"$tag\"");
         }
         $lower = \strtolower($tag);
-        $out = '<' . $tag . attr_string($this->attrs);
+        $out = '<'.$tag.attr_string($this->attrs);
         if (self::VOID_TAGS[$lower] ?? false) {
             if ($this->children !== []) {
                 throw new Exception("Void element <$tag> cannot have children");
             }
 
-            return $out . '>';
+            return $out.'>';
         }
         $out .= '>';
         foreach ($this->children as $child) {
             $out .= render($child);
         }
 
-        return $out . '</' . $tag . '>';
+        return $out.'</'.$tag.'>';
     }
 
     public function __toString(): string

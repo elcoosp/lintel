@@ -31,7 +31,7 @@ use Composer\Script\ScriptEvents;
  *    dump only (in-memory, `composer.json` stays untouched) and is
  *    idempotent across repeated dumps.
  */
-final class Plugin implements PluginInterface, EventSubscriberInterface
+final class Plugin implements EventSubscriberInterface, PluginInterface
 {
     public function activate(Composer $composer, IOInterface $io): void
     {
@@ -67,7 +67,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $vendorDir = $composer->getConfig()->get('vendor-dir');
         BinaryInstaller::resolve(
             $composer->getPackage()->getExtra(),
-            (\is_string($vendorDir) && $vendorDir !== '' ? $vendorDir : 'vendor') . '/bin',
+            (\is_string($vendorDir) && $vendorDir !== '' ? $vendorDir : 'vendor').'/bin',
             $event->getIo(),
         );
     }
@@ -93,15 +93,15 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $vendorDir = $config->get('vendor-dir');
         $vendorDir = \is_string($vendorDir) && $vendorDir !== '' ? $vendorDir : 'vendor';
         $root = self::projectRoot($vendorDir);
-        $manifest = $root . '/lintel.json';
-        if (!\is_file($manifest)) {
+        $manifest = $root.'/lintel.json';
+        if (! \is_file($manifest)) {
             return;
         }
         $decoded = \json_decode((string) \file_get_contents($manifest), true);
-        if (!\is_array($decoded)) {
+        if (! \is_array($decoded)) {
             $io->writeError(
-                'lintel: lintel.json at ' . $root
-                . ' is not a valid JSON object; skipping the prod function autoload'
+                'lintel: lintel.json at '.$root
+                .' is not a valid JSON object; skipping the prod function autoload'
             );
 
             return;
@@ -110,10 +110,10 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // --manifest` shape) — validated like the top-level object, so
         // the `artifacts` lookup indexes a real array.
         $prod = $decoded['prod'] ?? null;
-        if (!\is_array($prod)) {
+        if (! \is_array($prod)) {
             $io->writeError(
-                'lintel: lintel.json at ' . $root
-                . ': "prod" must be an object; skipping the prod function autoload'
+                'lintel: lintel.json at '.$root
+                .': "prod" must be an object; skipping the prod function autoload'
             );
 
             return;
@@ -124,34 +124,34 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             // build: nothing to inject is not an error.
             return;
         }
-        if (!\is_array($pairs)) {
+        if (! \is_array($pairs)) {
             $io->writeError(
-                'lintel: lintel.json at ' . $root
-                . ': "prod.artifacts" must be a source → artifact map; skipping the prod function autoload'
+                'lintel: lintel.json at '.$root
+                .': "prod.artifacts" must be a source → artifact map; skipping the prod function autoload'
             );
 
             return;
         }
         foreach ($pairs as $source => $artifact) {
-            if (!\is_string($source) || $source === '' || !\is_string($artifact) || $artifact === '') {
+            if (! \is_string($source) || $source === '' || ! \is_string($artifact) || $artifact === '') {
                 $io->writeError(
-                    'lintel: lintel.json at ' . $root
-                    . ': "prod.artifacts" must map non-empty source paths to non-empty artifact paths; '
-                    . 'skipping the prod function autoload'
+                    'lintel: lintel.json at '.$root
+                    .': "prod.artifacts" must map non-empty source paths to non-empty artifact paths; '
+                    .'skipping the prod function autoload'
                 );
 
                 return;
             }
         }
         \ksort($pairs);
-        $vendorLintel = $vendorDir . '/lintel';
-        if (!\is_dir($vendorLintel) && !@\mkdir($vendorLintel, 0777, true) && !\is_dir($vendorLintel)) {
-            $io->writeError('lintel: cannot create ' . $vendorLintel . '; skipping the prod function autoload');
+        $vendorLintel = $vendorDir.'/lintel';
+        if (! \is_dir($vendorLintel) && ! @\mkdir($vendorLintel, 0777, true) && ! \is_dir($vendorLintel)) {
+            $io->writeError('lintel: cannot create '.$vendorLintel.'; skipping the prod function autoload');
 
             return;
         }
-        \file_put_contents($vendorLintel . '/functions.php', self::generatedFile($pairs));
-        $entry = self::rootRelative($vendorLintel . '/functions.php', $root);
+        \file_put_contents($vendorLintel.'/functions.php', self::generatedFile($pairs));
+        $entry = self::rootRelative($vendorLintel.'/functions.php', $root);
         if ($entry === null) {
             $io->writeError(
                 'lintel: vendor dir is outside the project root; skipping the prod function autoload'
@@ -165,12 +165,12 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // no re-narrowing needed.
         $autoload = $package->getAutoload();
         $existing = $autoload['files'] ?? [];
-        if (!\in_array($entry, $existing, true)) {
+        if (! \in_array($entry, $existing, true)) {
             $existing[] = $entry;
         }
         $autoload['files'] = $existing;
         $package->setAutoload($autoload);
-        $io->write('lintel: ' . \count($existing) . ' function-component artifact(s) injected into the files autoload');
+        $io->write('lintel: '.\count($existing).' function-component artifact(s) injected into the files autoload');
     }
 
     /**
@@ -196,7 +196,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
      */
     private static function rootRelative(string $path, string $root): ?string
     {
-        if (!\str_starts_with($path, '/')) {
+        if (! \str_starts_with($path, '/')) {
             return $path;
         }
         // Resolve symlinks on BOTH sides before the prefix check (macOS:
@@ -213,7 +213,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         if ($realRoot !== false) {
             $root = $realRoot;
         }
-        if (\str_starts_with($path, $root . '/')) {
+        if (\str_starts_with($path, $root.'/')) {
             return \substr($path, \strlen($root) + 1);
         }
 
@@ -228,7 +228,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
      * source → artifact pair records the source in the
      * `$GLOBALS['lintelFromSource']` registry the dev loader consults.
      *
-     * @param array<string, string> $pairs manifest-relative source → artifact
+     * @param  array<string, string>  $pairs  manifest-relative source → artifact
      */
     private static function generatedFile(array $pairs): string
     {
@@ -251,8 +251,8 @@ foreach ([
 HEADER;
         $out .= "\n";
         foreach ($pairs as $source => $artifact) {
-            $out .= '    \'' . \str_replace('\'', '\\\'', $source) . '\' => '
-                . '\'' . \str_replace('\'', '\\\'', $artifact) . '\',' . "\n";
+            $out .= '    \''.\str_replace('\'', '\\\'', $source).'\' => '
+                .'\''.\str_replace('\'', '\\\'', $artifact).'\','."\n";
         }
         $out .= "] as \$lintelSource => \$lintelArtifact) {\n";
         $out .= "    if (!isset(\$lintelRequired[\$lintelArtifact])) {\n";

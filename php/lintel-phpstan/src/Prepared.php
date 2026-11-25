@@ -21,6 +21,5 @@ final class Prepared
         public readonly string $metadata,
         /** The signature stub path for `stubFiles`, or '' when none apply. */
         public readonly string $stub,
-    ) {
-    }
+    ) {}
 }

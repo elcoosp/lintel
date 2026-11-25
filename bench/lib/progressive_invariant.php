@@ -13,16 +13,16 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__.'/../vendor/autoload.php';
 
 use Lintel\Bench\ProgressiveTiming;
 
 try {
     $facts = ProgressiveTiming::run();
-} catch (\Throwable $e) {
-    \fwrite(STDERR, 'progressive invariant FAILED: ' . $e->getMessage() . "\n");
+} catch (Throwable $e) {
+    \fwrite(STDERR, 'progressive invariant FAILED: '.$e->getMessage()."\n");
     exit(1);
 }
 
-\fwrite(STDOUT, \json_encode($facts, \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR) . "\n");
+\fwrite(STDOUT, \json_encode($facts, \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR)."\n");
 exit(0);

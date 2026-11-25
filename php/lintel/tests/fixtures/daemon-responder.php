@@ -13,7 +13,7 @@ declare(strict_types=1);
 
 $socket = $argv[1] ?? '';
 $mode = $argv[2] ?? 'ok';
-$server = stream_socket_server('unix://' . $socket, $errno, $errstr);
+$server = stream_socket_server('unix://'.$socket, $errno, $errstr);
 if ($server === false) {
     fwrite(STDERR, (string) $errstr);
     exit(1);
@@ -33,6 +33,7 @@ while (($conn = @stream_socket_accept($server, 5)) !== false) {
         $separator = @fread($conn, 1);
         if ($separator !== "\n") {
             fclose($conn);
+
             continue;
         }
         $length = (int) $prefix;
@@ -57,9 +58,10 @@ while (($conn = @stream_socket_accept($server, 5)) !== false) {
             $body = json_encode($answer, JSON_UNESCAPED_SLASHES);
             if ($body === false) {
                 fclose($conn);
+
                 continue;
             }
-            fwrite($conn, sprintf('%010d', strlen($body)) . "\n" . $body);
+            fwrite($conn, sprintf('%010d', strlen($body))."\n".$body);
         }
     }
     fclose($conn);

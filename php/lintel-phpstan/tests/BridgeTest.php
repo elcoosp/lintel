@@ -12,8 +12,6 @@ use function dirname;
 use function getenv;
 use function glob;
 use function is_executable;
-use function is_file;
-use function json_decode;
 use function sprintf;
 use function sys_get_temp_dir;
 use function uniqid;
@@ -43,23 +41,23 @@ final class BridgeTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->cacheDir = sys_get_temp_dir() . '/lintel-phpstan-' . uniqid();
+        $this->cacheDir = sys_get_temp_dir().'/lintel-phpstan-'.uniqid();
     }
 
     protected function tearDown(): void
     {
-        foreach (glob($this->cacheDir . '/*') ?: [] as $file) {
+        foreach (glob($this->cacheDir.'/*') ?: [] as $file) {
             @unlink((string) $file);
         }
         @rmdir($this->cacheDir);
     }
 
-    public function testPrepareRecordsTheCompilerDiagnosticsVerbatim(): void
+    public function test_prepare_records_the_compiler_diagnostics_verbatim(): void
     {
-        $prepared = Bridge::prepare(dirname(__DIR__) . '/tests/fixture/Diagnostics.lintel.php', $this->cacheDir);
-        $metadata = Bridge::metadataFor($this->cacheDir . '/Diagnostics.php');
+        $prepared = Bridge::prepare(dirname(__DIR__).'/tests/fixture/Diagnostics.lintel.php', $this->cacheDir);
+        $metadata = Bridge::metadataFor($this->cacheDir.'/Diagnostics.php');
         self::assertNotNull($metadata, 'the sidecar exists beside the artifact shell');
-        self::assertSame(dirname(__DIR__) . '/tests/fixture/Diagnostics.lintel.php', $metadata['source']);
+        self::assertSame(dirname(__DIR__).'/tests/fixture/Diagnostics.lintel.php', $metadata['source']);
         self::assertNull($metadata['artifact'], 'a failing source produces no compiled artifact');
         // The diagnostics are the bridge's validated shape — `code` is
         // proven by `Bridge::decodeDiagnostic`, no re-narrowing here.
@@ -70,19 +68,19 @@ final class BridgeTest extends TestCase
         self::assertFileExists($prepared->metadata);
     }
 
-    public function testPrepareCompilesACleanSourceAndRecordsNoDiagnostics(): void
+    public function test_prepare_compiles_a_clean_source_and_records_no_diagnostics(): void
     {
-        $prepared = Bridge::prepare(dirname(__DIR__) . '/tests/fixture/Types.lintel.php', $this->cacheDir);
-        self::assertSame($this->cacheDir . '/Types.php', $prepared->artifact, '`build --out` drops the `.lintel` infix');
+        $prepared = Bridge::prepare(dirname(__DIR__).'/tests/fixture/Types.lintel.php', $this->cacheDir);
+        self::assertSame($this->cacheDir.'/Types.php', $prepared->artifact, '`build --out` drops the `.lintel` infix');
         self::assertFileExists($prepared->artifact, 'a clean source compiles through the same `lintel build` lane');
         $metadata = Bridge::metadataFor($prepared->artifact);
         self::assertNotNull($metadata);
         self::assertSame([], $metadata['diagnostics'], 'the clean source carries no LNT diagnostics');
     }
 
-    public function testStubCarriesTheScannerProvenFacts(): void
+    public function test_stub_carries_the_scanner_proven_facts(): void
     {
-        $prepared = Bridge::prepare(dirname(__DIR__) . '/tests/fixture/Types.lintel.php', $this->cacheDir);
+        $prepared = Bridge::prepare(dirname(__DIR__).'/tests/fixture/Types.lintel.php', $this->cacheDir);
         self::assertNotSame('', $prepared->stub);
         $stub = (string) file_get_contents($prepared->stub);
         // The source's namespace, the proven `string` type, required-ness
@@ -93,7 +91,7 @@ final class BridgeTest extends TestCase
         self::assertStringContainsString('function Card(string $title, $count, $children = null): \\Lintel\\Html {}', $stub, $stub);
     }
 
-    public function testOrdinaryPhpFilesHaveNoMetadata(): void
+    public function test_ordinary_php_files_have_no_metadata(): void
     {
         self::assertNull(Bridge::metadataFor(__FILE__), 'the rule costs ordinary PHP files nothing');
     }

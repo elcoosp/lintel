@@ -24,7 +24,7 @@ final class Directive
     {
         self::$bridge = $bridge;
         $blade->directive('lintel', static function (string $expression): string {
-            return '<?php echo \Lintel\Blade\Directive::render(' . $expression . '); ?>';
+            return '<?php echo \Lintel\Blade\Directive::render('.$expression.'); ?>';
         });
     }
 
