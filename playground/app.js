@@ -1,8 +1,8 @@
 // The T-13 playground logic: one module, zero external requests, so the
 // service worker (sw.js) can make the page fully offline after first load.
 // The compiler is the committed wasm bundle in ./assets/, built by
-// `make playground` from crates/lintel-wasm.
-import init, { compile_source, lintel_version } from './assets/lintel_wasm.js';
+// `make playground` from crates/lintl-wasm.
+import init, { compile_source, lintl_version } from './assets/lintl_wasm.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -66,7 +66,7 @@ foreach (Page(title: 'Streaming TTFB', items: ['one', 'two', 'three']) as $chunk
 
 declare(strict_types=1);
 
-$href = 'https://lintel.sh/docs?x=1';
+$href = 'https://lintl.sh/docs?x=1';
 $set = '/a.jpg 1x, /a@2x.jpg 2x';
 
 return <nav>
@@ -92,13 +92,13 @@ $payloads = [
 ];
 
 return <ul class="xss-gallery">
-    {array_map(fn ($p) => <li>{\\Lintel\\c($p)}</li>, $payloads)}
-    <li><a href={\\Lintel\\u('href', $payloads[2])}>{'scheme-allowlisted link'}</a></li>
+    {array_map(fn ($p) => <li>{\\Lintl\\c($p)}</li>, $payloads)}
+    <li><a href={\\Lintl\\u('href', $payloads[2])}>{'scheme-allowlisted link'}</a></li>
 </ul>;
 `,
   },
   'validation': {
-    label: 'Validation: dynamic on* handler (LNT0301)',
+    label: 'Validation: dynamic on* handler (LNL0301)',
     target: 'string',
     source: `<?php
 
@@ -304,7 +304,7 @@ async function main() {
   // The exports need the instance in place first — every wrapper reads the
   // module-level `wasm` the init promise installs.
   await init();
-  $('lintel-version').textContent = `compiler v${lintel_version()}`;
+  $('lintl-version').textContent = `compiler v${lintl_version()}`;
   compile_now();
 
   // Same-document permalink navigation (opening a share link while the tab

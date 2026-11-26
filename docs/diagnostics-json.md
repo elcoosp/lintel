@@ -6,15 +6,15 @@
 > this page records the exact machine contract — `Diagnostic::to_json` and
 > the CLI `--format=json` flag — so a CI job, editor pipe or LSP-style
 > consumer never scrapes rendered snippets. Testable in
-> `crates/lintel-diag` (inline unit tests) and
-> `crates/lintel-cli/tests/cli.rs`.
+> `crates/lintl-diag` (inline unit tests) and
+> `crates/lintl-cli/tests/cli.rs`.
 
 ## Source of truth
 
-- `crates/lintel-diag/src/lib.rs` — `Diagnostic::to_json`, the
+- `crates/lintl-diag/src/lib.rs` — `Diagnostic::to_json`, the
   single-object emitter; `SourceMap` supplies the position fields with
   the exact semantics `Diagnostic::render` has always used.
-- `crates/lintel-cli/src/lib.rs` — `--format=text|json` wiring on `build`
+- `crates/lintl-cli/src/lib.rs` — `--format=text|json` wiring on `build`
   and `check`; the sinks, exit codes and walk order are unchanged.
 
 ## Exact emission contract
@@ -23,7 +23,7 @@
 CLI writes one object per diagnostic followed by `\n` (JSON Lines):
 
 ```
-{"code":"LNT0301","severity":"error","message":"dynamic event-handler attribute `onclick` is not allowed","offset":21,"line":2,"col":16,"help":"use `data-action={...}` …","docs":"https://lintel.sh/e/LNT0301"}
+{"code":"LNL0301","severity":"error","message":"dynamic event-handler attribute `onclick` is not allowed","offset":21,"line":2,"col":16,"help":"use `data-action={...}` …","docs":"https://lintl.sh/e/LNL0301"}
 ```
 
 Details the docs above do not pin down, decided here so the behavior is
@@ -45,7 +45,7 @@ intentional and testable:
 5. **Escaping is JSON-minimal.** Strings escape `"` → `\"`, `\` → `\\`,
    and control characters → `\n`, `\r`, `\t` or `\u00xx`; everything else
    passes through as UTF-8. No crate dependency is added: the emitter is
-   hand-rolled like the renderer, keeping `lintel-diag` dependency-free.
+   hand-rolled like the renderer, keeping `lintl-diag` dependency-free.
 6. **Exit codes do not change.** `--format=json` changes only the
    rendering on the error sink: `check` still exits 1 on error-severity
    diagnostics, `build` still writes compiled PHP to stdout / `--out` /
@@ -63,7 +63,7 @@ intentional and testable:
   needs the file name correlates by position or waits for a batch envelope
   (a candidate next step, not a shipped one).
 - **No pretty printing or `serde`.** The output is one-line JSON Lines;
-  the dependency-free stance of `lintel-diag` (crate docs) is unchanged.
-- **No parse-error difference.** Parse diagnostics (`LNT01xx`) emit like
+  the dependency-free stance of `lintl-diag` (crate docs) is unchanged.
+- **No parse-error difference.** Parse diagnostics (`LNL01xx`) emit like
   every other diagnostic; they remain non-suppressible
   (`docs/ignore-directives.md`).

@@ -9,16 +9,16 @@ or read — never adjectives (§16 credibility rule).
 ## Post #1 — the hook
 
 ```
-Lintel: JSX for PHP 8.6. <Card user={$u}/> compiles to plain string concat — auto-escaped, no VDOM, line numbers preserved. Rust compiler, WASM playground → lintel.sh
+Lintl: JSX for PHP 8.6. <Card user={$u}/> compiles to plain string concat — auto-escaped, no VDOM, line numbers preserved. Rust compiler, WASM playground → lintl.sh
 ```
 
 - length: `wc -m` = **166** ≤ 280
 - claims → evidence: "compiles to plain string concat" and "line numbers
-  preserved" are the golden fixtures in `crates/lintel-core/tests/golden.rs`
-  + the line-preservation invariant `crates/lintel-core/tests/line_preservation.rs`;
+  preserved" are the golden fixtures in `crates/lintl-core/tests/golden.rs`
+  + the line-preservation invariant `crates/lintl-core/tests/line_preservation.rs`;
   "auto-escaped" is the §7.2 threat corpus (`php/runtime/tests/ThreatCorpusTest.php`);
   the playground link is the T-13 bundle (`playground/`, size budget
-  asserted by `crates/lintel-wasm/tests/size_budget.rs`).
+  asserted by `crates/lintl-wasm/tests/size_budget.rs`).
 - bench → evidence (§9.2 publishing rule): the compile's speed lives in
   `bench/results/` — **S1 median: 915 ns** per render (opcache-off,
   30 runs), against Blade's 13.93 µs on the same page — reproducible with
@@ -28,7 +28,7 @@ Lintel: JSX for PHP 8.6. <Card user={$u}/> compiles to plain string concat — a
 ## Post #2 — security demo
 
 ```
-Wrote a JSX compiler for PHP. Output is readable PHP, XSS-safe by default (31 hostile payloads in the threat corpus, 0 get through). Try it in the browser: lintel.sh/play
+Wrote a JSX compiler for PHP. Output is readable PHP, XSS-safe by default (31 hostile payloads in the threat corpus, 0 get through). Try it in the browser: lintl.sh/play
 ```
 
 - length: `wc -m` = **170** ≤ 280
@@ -37,7 +37,7 @@ Wrote a JSX compiler for PHP. Output is readable PHP, XSS-safe by default (31 ho
   `#[DataProvider]` for scheme obfuscations), every one asserting the
   payload prints **escaped** (`phpunit --list-tests` counts 31). The
   committed demo carries the same vectors condensed:
-  `lintel init --demo 2` writes `demo2-xss-gallery.lintel.php`, whose
+  `lintl init --demo 2` writes `demo2-xss-gallery.lintl.php`, whose
   `PAYLOADS` const holds 8 entries (`javascript:`, `JaVaScRiPt:`,
   `data:text/html;base64`, `vbscript:`, tab-obfuscated `java\tscript:`,
   `<script>`, attribute breakout `" onmouseover=`, `</script>`) — run it:
@@ -48,14 +48,14 @@ Wrote a JSX compiler for PHP. Output is readable PHP, XSS-safe by default (31 ho
 ## Post #3 — the RFC story
 
 ```
-Native JSX-in-PHP is an RFC for 8.7/9. Lintel lets you write it today and run `lintel migrate --to=native` when it lands. lintel.sh
+Native JSX-in-PHP is an RFC for 8.7/9. Lintl lets you write it today and run `lintl migrate --to=native` when it lands. lintl.sh
 ```
 
 - length: `wc -m` = **131** ≤ 280
 - claims → evidence: "an RFC for 8.7/9" is tracked with sources in
-  `docs/rfc-alignment.md` (T-00); `lintel migrate --to=native` **exists**
+  `docs/rfc-alignment.md` (T-00); `lintl migrate --to=native` **exists**
   — a thin alias over `build --target=rfc`, asserted by
-  `crates/lintel-cli/tests/cli.rs::migrate_is_a_thin_alias_for_build_target_rfc`
+  `crates/lintl-cli/tests/cli.rs::migrate_is_a_thin_alias_for_build_target_rfc`
   — so the post never claims a nonexistent command (launch honesty, §16).
 
 ## Character counts (verified)

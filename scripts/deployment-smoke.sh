@@ -3,7 +3,7 @@
 # page with the stream target, serve it through a real `rr serve` worker
 # pool, curl the endpoint, assert the rendered HTML byte for byte.
 #
-# Needs on PATH (or env): LINTEL_BIN (the built compiler), PHP_BIN
+# Needs on PATH (or env): LINTL_BIN (the built compiler), PHP_BIN
 # (PHP >= 8.6 with the RR worker extensions), rr (RoadRunner binary), and
 # php/runtime composer-installed (spiral/roadrunner-http for the worker
 # API) — the CI deployment job installs all four; the guide names the
@@ -11,23 +11,23 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LINTEL_BIN="${LINTEL_BIN:-$REPO_ROOT/target/release/lintel}"
+LINTL_BIN="${LINTL_BIN:-$REPO_ROOT/target/release/lintl}"
 PHP_BIN="${PHP_BIN:-php}"
 RUNTIME_AUTOLOAD="$REPO_ROOT/php/runtime/vendor/autoload.php"
 
 fail() { echo "deployment-smoke: FAIL: $*" >&2; exit 1; }
 
-[ -x "$LINTEL_BIN" ] || fail "the lintel binary is missing at $LINTEL_BIN (build it: cargo build --release -p lintel-cli)"
+[ -x "$LINTL_BIN" ] || fail "the lintl binary is missing at $LINTL_BIN (build it: cargo build --release -p lintl-cli)"
 command -v rr > /dev/null 2>&1 || fail "the rr binary is not on PATH (CI installs roadrunner-2025.1.15)"
 [ -f "$RUNTIME_AUTOLOAD" ] || fail "php/runtime is not composer-installed (composer install --working-dir=php/runtime)"
 "$PHP_BIN" -v > /dev/null 2>&1 || fail "PHP_BIN=$PHP_BIN does not run"
 
-WORK="$(mktemp -d /tmp/lintel-deployment-rr.XXXXXX)"
+WORK="$(mktemp -d /tmp/lintl-deployment-rr.XXXXXX)"
 trap 'rm -rf "$WORK"; [ -n "${RR_PID:-}" ] && kill "$RR_PID" 2>/dev/null' EXIT
 mkdir -p "$WORK/pages" "$WORK/public"
 
 # 1. The guide's minimal page (docs/deployment/roadrunner.md §4).
-cat > "$WORK/pages/Home.lintel.php" <<'SOURCE'
+cat > "$WORK/pages/Home.lintl.php" <<'SOURCE'
 <?php
 
 declare(strict_types=1);
@@ -41,7 +41,7 @@ function Home(string $name): Html
 SOURCE
 
 # 2. Compile with the stream target (guide §1).
-"$LINTEL_BIN" build --target=stream --out "$WORK/public/dist" "$WORK/pages" \
+"$LINTL_BIN" build --target=stream --out "$WORK/public/dist" "$WORK/pages" \
   || fail "the compile step failed"
 [ -f "$WORK/public/dist/Home.php" ] || fail "the compiled artifact is missing"
 
@@ -53,9 +53,9 @@ cat > "$WORK/worker.php" <<PHP
 require '$RUNTIME_AUTOLOAD';
 require '$WORK/public/dist/Home.php';
 
-use Lintel\RoadRunnerFlushTransport;
+use Lintl\RoadRunnerFlushTransport;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 \$rr = new \Spiral\RoadRunner\Http\HttpWorker(\Spiral\RoadRunner\Worker::create());
 while (\$rr->waitRequest() !== null) {

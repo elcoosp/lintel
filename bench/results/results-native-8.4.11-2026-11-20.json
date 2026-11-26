@@ -6,8 +6,8 @@
         "php_binary": "\/home\/z\/my-project\/tools\/php\/php",
         "os": "Linux 5.10.134-013.15.kangaroo.al8.x86_64 x86_64",
         "hostname": "c-6b005be3-140d72b5-7bc55e3733be",
-        "lintel_bin": "\/home\/z\/my-project\/lintel\/target\/release\/lintel",
-        "lintel_version": "lintel 0.1.0",
+        "lintl_bin": "\/home\/z\/my-project\/lintl\/target\/release\/lintl",
+        "lintl_version": "lintl 0.1.0",
         "settings": [
             "opcache-off",
             "opcache-on",
@@ -36,7 +36,7 @@
             "warmup": 3,
             "results": {
                 "S1": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 915,
                         "p95_ns": 990,
                         "min_ns": 906,
@@ -74,7 +74,7 @@
                     }
                 },
                 "S2": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 1289007.5,
                         "p95_ns": 11082593,
                         "min_ns": 1264149,
@@ -112,7 +112,7 @@
                     }
                 },
                 "S3": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 56124668.5,
                         "p95_ns": 93486270,
                         "min_ns": 31549803,
@@ -150,7 +150,7 @@
                     }
                 },
                 "S4": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 671149.5,
                         "p95_ns": 829095,
                         "min_ns": 654274,
@@ -188,14 +188,14 @@
                     }
                 },
                 "S5": {
-                    "lintel-sync": {
+                    "lintl-sync": {
                         "ttfb_median_ns": 15200721.5,
                         "ttfb_p95_ns": 15233975,
                         "total_median_ns": 15200721.5,
                         "total_p95_ns": 15233975,
                         "peak_bytes": 37748736
                     },
-                    "lintel-stream": {
+                    "lintl-stream": {
                         "ttfb_median_ns": 3061,
                         "ttfb_p95_ns": 4445,
                         "total_median_ns": 15216010.5,
@@ -217,7 +217,7 @@
             "warmup": 3,
             "results": {
                 "S1": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 918.5,
                         "p95_ns": 987,
                         "min_ns": 907,
@@ -255,7 +255,7 @@
                     }
                 },
                 "S2": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 1261344.5,
                         "p95_ns": 1278883,
                         "min_ns": 1249625,
@@ -293,7 +293,7 @@
                     }
                 },
                 "S3": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 31280413.5,
                         "p95_ns": 31660465,
                         "min_ns": 31027681,
@@ -331,7 +331,7 @@
                     }
                 },
                 "S4": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 671836,
                         "p95_ns": 835434,
                         "min_ns": 654621,
@@ -369,14 +369,14 @@
                     }
                 },
                 "S5": {
-                    "lintel-sync": {
+                    "lintl-sync": {
                         "ttfb_median_ns": 15288812,
                         "ttfb_p95_ns": 15339820,
                         "total_median_ns": 15288812,
                         "total_p95_ns": 15339820,
                         "peak_bytes": 37748736
                     },
-                    "lintel-stream": {
+                    "lintl-stream": {
                         "ttfb_median_ns": 3558.5,
                         "ttfb_p95_ns": 4632,
                         "total_median_ns": 15267104.5,
@@ -398,7 +398,7 @@
             "warmup": 3,
             "results": {
                 "S1": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 918.5,
                         "p95_ns": 1002,
                         "min_ns": 910,
@@ -436,7 +436,7 @@
                     }
                 },
                 "S2": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 1274694.5,
                         "p95_ns": 1385844,
                         "min_ns": 1251551,
@@ -474,7 +474,7 @@
                     }
                 },
                 "S3": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 31805587,
                         "p95_ns": 32528415,
                         "min_ns": 31552515,
@@ -512,7 +512,7 @@
                     }
                 },
                 "S4": {
-                    "lintel": {
+                    "lintl": {
                         "median_ns": 680619.5,
                         "p95_ns": 868641,
                         "min_ns": 661440,
@@ -550,14 +550,14 @@
                     }
                 },
                 "S5": {
-                    "lintel-sync": {
+                    "lintl-sync": {
                         "ttfb_median_ns": 15203126,
                         "ttfb_p95_ns": 15235261,
                         "total_median_ns": 15203126,
                         "total_p95_ns": 15235261,
                         "peak_bytes": 37748736
                     },
-                    "lintel-stream": {
+                    "lintl-stream": {
                         "ttfb_median_ns": 3080,
                         "ttfb_p95_ns": 4266,
                         "total_median_ns": 15223594,

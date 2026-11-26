@@ -13,7 +13,7 @@
 # Not in this sweep: the honest open-backlog phrasing ("future work",
 # "stays backlog") in the contract pages — those notes describe seams
 # that are genuinely not built (stream-boundary scaffolding, attribute
-# traversal, the remaining LNT pages) and are tracked, not stale.
+# traversal, the remaining LNL pages) and are tracked, not stale.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,7 +41,7 @@ while IFS= read -r -d '' f; do
     fi
 done < <(cd "$REPO_ROOT" && {
     printf '%s\0' README.md SECURITY.md install.sh
-    printf '%s\0' crates/lintel-cli/src/lib.rs
+    printf '%s\0' crates/lintl-cli/src/lib.rs
     find docs -name '*.md' ! -name 'architecture.md' -print0
     find docs-site/pages -name '*.md' -print0
 })

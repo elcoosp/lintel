@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Profiler;
+namespace Lintl\Blade\Profiler;
 
-use Lintel\Dev\Loader;
-use Lintel\SuspenseFlusher;
+use Lintl\Dev\Loader;
+use Lintl\SuspenseFlusher;
 
 /**
  * The §11 Laravel profiler panel's data source (§17.1-Q2's remaining

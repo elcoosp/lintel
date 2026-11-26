@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel;
+namespace Lintl;
 
 use Spiral\RoadRunner\Http\HttpWorkerInterface;
 

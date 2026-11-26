@@ -5,41 +5,41 @@
  *
  * Orchestrator (`php bench/run.php`): walks the OPcache/JIT settings matrix
  * by re-executing itself as a worker subprocess with `-d` flags, merges the
- * JSON, measures compile throughput with the lintel binary, probes the
+ * JSON, measures compile throughput with the lintl binary, probes the
  * opcode-count instrumentation, and writes JSON + Markdown + SVG into
  * bench/results/.
  *
  * Worker (`php bench/run.php worker --setting NAME`): compiles every
- * scenario source with the lintel binary (string / rfc / stream targets),
+ * scenario source with the lintl binary (string / rfc / stream targets),
  * warms the template engines, and times 30 renders per
  * scenario × competitor (median + p95) plus peak memory. Prints one JSON
  * line to stdout.
  *
- * Environment: LINTEL_BIN (path to the built lintel; default
- * ../target/release/lintel relative to this file), BENCH_RUNS (default 30).
+ * Environment: LINTL_BIN (path to the built lintl; default
+ * ../target/release/lintl relative to this file), BENCH_RUNS (default 30).
  */
 
 declare(strict_types=1);
 
 require __DIR__.'/vendor/autoload.php';
 
-use Lintel\Bench\Engines;
-use Lintel\Bench\Metrics;
-use Lintel\Bench\ProgressiveTiming;
-use Lintel\Bench\Scenarios;
+use Lintl\Bench\Engines;
+use Lintl\Bench\Metrics;
+use Lintl\Bench\ProgressiveTiming;
+use Lintl\Bench\Scenarios;
 use Markup\Element;
 
 const RUNS = 30;
 const WARMUP = 3;
 
-/** Resolve the lintel binary: LINTEL_BIN or the repo's release build. */
-function lintel_bin(): ?string
+/** Resolve the lintl binary: LINTL_BIN or the repo's release build. */
+function lintl_bin(): ?string
 {
-    $env = \getenv('LINTEL_BIN');
+    $env = \getenv('LINTL_BIN');
     if (\is_string($env) && $env !== '') {
         return \is_file($env) ? $env : null;
     }
-    $candidate = \dirname(__DIR__).'/target/release/lintel';
+    $candidate = \dirname(__DIR__).'/target/release/lintl';
 
     return \is_file($candidate) ? $candidate : null;
 }
@@ -48,12 +48,12 @@ function lintel_bin(): ?string
 function compile_scenario(string $bin, string $outDir, string $id, string $source, string $target): string
 {
     \is_dir($outDir) || \mkdir($outDir, 0777, true);
-    $src = "$outDir/$id.lintel.php";
+    $src = "$outDir/$id.lintl.php";
     \file_put_contents($src, $source);
     $cmd = [$bin, 'build', "--target=$target", '--out', "$outDir/$target", $src];
     $process = \proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     if (! \is_resource($process)) {
-        throw new RuntimeException("could not run the lintel binary: $bin");
+        throw new RuntimeException("could not run the lintl binary: $bin");
     }
     $out = (string) \stream_get_contents($pipes[1]);
     $err = (string) \stream_get_contents($pipes[2]);
@@ -61,11 +61,11 @@ function compile_scenario(string $bin, string $outDir, string $id, string $sourc
     \fclose($pipes[2]);
     $exit = \proc_close($process);
     if ($exit !== 0) {
-        throw new RuntimeException("lintel build --target=$target failed for $id (exit $exit): $err");
+        throw new RuntimeException("lintl build --target=$target failed for $id (exit $exit): $err");
     }
     $path = "$outDir/$target/$id.php";
     if (! \is_file($path)) {
-        throw new RuntimeException("lintel build did not write $path");
+        throw new RuntimeException("lintl build did not write $path");
     }
 
     return $path;
@@ -123,7 +123,7 @@ function time_runs(callable $render, int $runs, int $warmup): array
 function run_worker(string $setting, string $compiledDir): array
 {
     $runs = (int) (\getenv('BENCH_RUNS') ?: RUNS);
-    $bin = lintel_bin();
+    $bin = lintl_bin();
     $scenarios = Scenarios::all($compiledDir);
     $data = [
         'S1' => Scenarios::s1Data(),
@@ -148,14 +148,14 @@ function run_worker(string $setting, string $compiledDir): array
     foreach ($scenarios as $id => $scenario) {
         $results[$id] = [];
 
-        // Lintel string target, plus rfc (the same source, the RFC lowering)
+        // Lintl string target, plus rfc (the same source, the RFC lowering)
         // and — for S5 — the stream target, compiled from suffixed variants
         // so every lowering can be required side by side in one process.
         if ($bin !== null) {
             $stringPath = compile_scenario($bin, $compiledDir, $id, $scenario['source'], 'string');
-            $fnName = 'Lintel\\Bench\\Gen\\'.scenario_fns()[$id][0];
+            $fnName = 'Lintl\\Bench\\Gen\\'.scenario_fns()[$id][0];
             require $stringPath;
-            $results[$id]['lintel'] = bench_one(static fn (): string => (string) $fnName($data[$id]), $runs);
+            $results[$id]['lintl'] = bench_one(static fn (): string => (string) $fnName($data[$id]), $runs);
 
             if ($id !== 'S5') {
                 // S5's lanes are the streaming ones (§9.2): a string render
@@ -164,27 +164,27 @@ function run_worker(string $setting, string $compiledDir): array
                     require __DIR__.'/lib/rfc_reference.php';
                 }
                 $rfcPath = compile_scenario($bin, $compiledDir, $id, variant_source($scenario['source'], scenario_fns()[$id], 'Rfc', '\\Markup\\Element'), 'rfc');
-                $rfcFnName = 'Lintel\\Bench\\Gen\\'.scenario_fns()[$id][0].'Rfc';
+                $rfcFnName = 'Lintl\\Bench\\Gen\\'.scenario_fns()[$id][0].'Rfc';
                 require $rfcPath;
                 $results[$id]['rfc'] = bench_one(static fn (): string => (string) $rfcFnName($data[$id]), $runs);
             }
         } else {
-            $notes[] = 'no lintel binary: lintel/rfc lanes skipped';
+            $notes[] = 'no lintl binary: lintl/rfc lanes skipped';
         }
 
         // S5: streaming lanes (stream target + the hand-written floor).
         if ($id === 'S5') {
             // Sync lane: the whole page blocks before the first byte, so
             // its TTFB is the full render time.
-            $sync = $results[$id]['lintel'];
-            $results[$id]['lintel-sync'] = [
+            $sync = $results[$id]['lintl'];
+            $results[$id]['lintl-sync'] = [
                 'ttfb_median_ns' => $sync['median_ns'],
                 'ttfb_p95_ns' => $sync['p95_ns'],
                 'total_median_ns' => $sync['median_ns'],
                 'total_p95_ns' => $sync['p95_ns'],
                 'peak_bytes' => $sync['peak_bytes'],
             ];
-            unset($results[$id]['lintel']);
+            unset($results[$id]['lintl']);
             if ($bin !== null) {
                 // stream_source is authored streaming-safe: the emitted
                 // generator closures capture their locals (the §21.2 emit
@@ -192,8 +192,8 @@ function run_worker(string $setting, string $compiledDir): array
                 // through an ordinary parameter.
                 $streamPath = compile_scenario($bin, $compiledDir, $id, $scenario['stream_source'], 'stream');
                 require $streamPath;
-                $streamFn = 'Lintel\\Bench\\Gen\\S5PageStream';
-                $results[$id]['lintel-stream'] = bench_stream(
+                $streamFn = 'Lintl\\Bench\\Gen\\S5PageStream';
+                $results[$id]['lintl-stream'] = bench_stream(
                     static fn (): iterable => $streamFn($data['S5']),
                     $runs,
                 );
@@ -277,7 +277,7 @@ function compile_throughput(string $bin, string $workDir): array
     $base = Scenarios::all($workDir)['S2']['source'];
     $files = [];
     for ($i = 0; $i < $count; $i++) {
-        $path = \sprintf('%s/s2-%03d.lintel.php', $workDir, $i);
+        $path = \sprintf('%s/s2-%03d.lintl.php', $workDir, $i);
         // A unique constant keeps every file's content distinct.
         \file_put_contents($path, \str_replace('1,000-row', "row-set $i", $base));
         $files[] = $path;
@@ -286,7 +286,7 @@ function compile_throughput(string $bin, string $workDir): array
         $t0 = \hrtime(true);
         $process = \proc_open([$bin, 'build', '--out', "$workDir/out", ...$files], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         if (! \is_resource($process)) {
-            throw new RuntimeException('compile-throughput: could not run the lintel binary');
+            throw new RuntimeException('compile-throughput: could not run the lintl binary');
         }
         \stream_get_contents($pipes[1]);
         $err = (string) \stream_get_contents($pipes[2]);
@@ -344,7 +344,7 @@ $mode = $argv0[1] ?? 'orchestrator';
 
 if ($mode === 'worker') {
     $setting = (string) (\getenv('SETTING') ?: 'opcache-on');
-    $workRoot = \sys_get_temp_dir().'/lintel-bench-'.\getmypid();
+    $workRoot = \sys_get_temp_dir().'/lintl-bench-'.\getmypid();
     $compiled = "$workRoot/compiled";
     $worker = run_worker($setting, $compiled);
     // S5 note: the compiled S5 stream lane lives with the worker; drop scratch.
@@ -355,9 +355,9 @@ if ($mode === 'worker') {
 
 // ---- orchestrator ----------------------------------------------------------
 
-$bin = lintel_bin();
+$bin = lintl_bin();
 if ($bin === null) {
-    \fwrite(STDERR, "bench/run.php: no lintel binary (set LINTEL_BIN or build target/release/lintel)\n");
+    \fwrite(STDERR, "bench/run.php: no lintl binary (set LINTL_BIN or build target/release/lintl)\n");
     exit(1);
 }
 $settings = [
@@ -392,10 +392,10 @@ foreach ($settings as $name => $flags) {
 }
 
 // Compile throughput + opcode probe run outside the settings matrix.
-$throughput = compile_throughput($bin, \sys_get_temp_dir().'/lintel-bench-throughput');
+$throughput = compile_throughput($bin, \sys_get_temp_dir().'/lintl-bench-throughput');
 $compiledForProbe = [];
 foreach (['S1', 'S2', 'S3', 'S4', 'S5'] as $id) {
-    $probeDir = \sys_get_temp_dir().'/lintel-bench-probe';
+    $probeDir = \sys_get_temp_dir().'/lintl-bench-probe';
     $compiledForProbe[$id] = compile_scenario($bin, $probeDir, $id, Scenarios::all($probeDir)[$id]['source'], 'string');
 }
 $opcodes = opcode_counts($compiledForProbe);
@@ -417,8 +417,8 @@ $provenance = [
     'php_binary' => PHP_BINARY,
     'os' => \php_uname('s').' '.\php_uname('r').' '.\php_uname('m'),
     'hostname' => \php_uname('n'),
-    'lintel_bin' => $bin,
-    'lintel_version' => \trim((string) \shell_exec(\escapeshellarg($bin).' --version 2>&1')),
+    'lintl_bin' => $bin,
+    'lintl_version' => \trim((string) \shell_exec(\escapeshellarg($bin).' --version 2>&1')),
     'settings' => $settingsUsed,
     'runs' => RUNS,
     'warmup' => WARMUP,
@@ -437,7 +437,7 @@ $jsonPath = "$resultsDir/results-$slug.json";
 // ---- markdown + svg artifacts ---------------------------------------------
 
 $md = "# Bench results ($modeName) — PHP $version, $date\n\n";
-$md .= 'Hardware/OS: `'.$provenance['os'].'`, host `'.$provenance['hostname'].'`; lintel `'.$provenance['lintel_version'].'`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep '.Scenarios::s5Data()['ms'].' ms each. Raw JSON: `'.\basename($jsonPath)."`.\n\n";
+$md .= 'Hardware/OS: `'.$provenance['os'].'`, host `'.$provenance['hostname'].'`; lintl `'.$provenance['lintl_version'].'`; 30 runs per point, 3 warm-up renders; S5 boundaries sleep '.Scenarios::s5Data()['ms'].' ms each. Raw JSON: `'.\basename($jsonPath)."`.\n\n";
 $md .= "> Publishing rule (§9.2): no number appears in README/launch posts unless `make bench` reproduces it and the methodology page links this raw JSON.\n\n";
 $titles = [
     'S1' => 'S1 static-heavy page — ns/render',
@@ -467,7 +467,7 @@ $md .= Metrics::summaryTable('S5 streaming TTFB (time to first chunk)', $s5bySet
 $md .= Metrics::summaryTable('S5 total render time', $s5bySettingTotal, 'total');
 \file_put_contents("$resultsDir/chart-S5.svg", Metrics::barSvg('S5 TTFB ('.$settingsUsed[1].')', $s5bySettingTtfb[$settingsUsed[1]] ?? [], 'TTFB'));
 
-$md .= "### Compile throughput (lintel build, 100 sources)\n\n| metric | value |\n| --- | --- |\n";
+$md .= "### Compile throughput (lintl build, 100 sources)\n\n| metric | value |\n| --- | --- |\n";
 $md .= '| cold files/s | '.\sprintf('%.0f', $throughput['cold_files_per_s'])." |\n";
 $md .= '| warm files/s | '.\sprintf('%.0f', $throughput['warm_files_per_s'])." |\n\n";
 

@@ -14,12 +14,12 @@ parameters:
         - php/runtime/vendor
         - php/runtime/.phpunit.cache
         - php/runtime/tests
-        - php/lintel/vendor
-        - php/lintel/.phpunit.cache
-        - php/lintel/tests
-        - php/lintel-phpstan/vendor
-        - php/lintel-phpstan/.phpunit.cache
-        - php/lintel-phpstan/tests
+        - php/lintl/vendor
+        - php/lintl/.phpunit.cache
+        - php/lintl/tests
+        - php/lintl-phpstan/vendor
+        - php/lintl-phpstan/.phpunit.cache
+        - php/lintl-phpstan/tests
         - php/markup/vendor
         - php/markup/.phpunit.cache
         - php/markup/tests
@@ -29,22 +29,22 @@ parameters:
         - php/twig/vendor
         - php/twig/.phpunit.cache
         - php/twig/tests
-        # The markup package's e2e fixture is a `.lintel.php` source —
+        # The markup package's e2e fixture is a `.lintl.php` source —
         # compiler input, not PHP (the same rule the bridge's fixtures use).
         - php/markup/tests/fixture
         - php/blade/tests/fixture
         - php/twig/tests/fixture
-        # The bridge's fixtures are `.lintel.php` sources — compiler input,
+        # The bridge's fixtures are `.lintl.php` sources — compiler input,
         # not PHP (the bridge's own integration test drives PHPStan over
         # their compiled artifacts with its own ruleset).
-        - php/lintel-phpstan/tests/fixture
-        # The M2 starter's components are `.lintel.php` sources — compiler
+        - php/lintl-phpstan/tests/fixture
+        # The M2 starter's components are `.lintl.php` sources — compiler
         # input, not PHP (the starter smoke compiles them with the real
         # binary; php -l and PHPStan run over the compiled artifacts, not
         # the JSX sources — the same rule every other fixture uses).
         - php/starter/components
         # The starter's public/index.php entrypoint calls App\Page (a
-        # .lintel.php source compiled at runtime by the dev loader) — the
+        # .lintl.php source compiled at runtime by the dev loader) — the
         # function exists only after the dev loader runs, so PHPStan cannot
         # discover it statically. The starter smoke exercises it end-to-end.
         - php/starter/public

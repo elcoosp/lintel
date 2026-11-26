@@ -8,7 +8,7 @@
 #      registry (registry-1.docker.io, library/php:8.6-cli manifest list) —
 #      the pin must be the tag's CURRENT digest, not an invented hex string.
 #   3. Entrypoint contract: `CMD ["php", "run.php"]`, `bench/run.php` is
-#      tracked, `BENCH_MODE=docker` and `LINTEL_BIN=/lintel/lintel` are set,
+#      tracked, `BENCH_MODE=docker` and `LINTL_BIN=/lintl/lintl` are set,
 #      and the results directory the container writes to is the mounted one.
 #   4. Build (when a Docker daemon exists): `docker build` the image and
 #      smoke `php -v` inside it. Without a daemon the structural + registry
@@ -73,10 +73,10 @@ if git ls-files --error-unmatch bench/run.php >/dev/null 2>&1; then
 else
     bail "bench/run.php is not tracked — the image would run nothing"
 fi
-if grep -q '^ENV BENCH_MODE=docker$' "$DOCKERFILE" && grep -q '^ENV LINTEL_BIN=/lintel/lintel$' "$DOCKERFILE"; then
-    echo "present: BENCH_MODE=docker + LINTEL_BIN=/lintel/lintel (the binary arrives via the mounted volume)"
+if grep -q '^ENV BENCH_MODE=docker$' "$DOCKERFILE" && grep -q '^ENV LINTL_BIN=/lintl/lintl$' "$DOCKERFILE"; then
+    echo "present: BENCH_MODE=docker + LINTL_BIN=/lintl/lintl (the binary arrives via the mounted volume)"
 else
-    bail "the image must set BENCH_MODE=docker and LINTEL_BIN=/lintel/lintel"
+    bail "the image must set BENCH_MODE=docker and LINTL_BIN=/lintl/lintl"
 fi
 if grep -qE '^\s*-v "\$\$PWD/bench/results:/app/bench/results"' Makefile; then
     echo "present: the make bench-docker runner mounts bench/results into /app/bench/results"
@@ -86,9 +86,9 @@ fi
 
 step "4. build + smoke (requires a Docker daemon)"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    docker build -f "$DOCKERFILE" -t lintel-bench-validate . || bail "docker build failed"
-    docker run --rm lintel-bench-validate php -v | head -1 || bail "the image cannot run php"
-    docker rmi lintel-bench-validate >/dev/null 2>&1 || true
+    docker build -f "$DOCKERFILE" -t lintl-bench-validate . || bail "docker build failed"
+    docker run --rm lintl-bench-validate php -v | head -1 || bail "the image cannot run php"
+    docker rmi lintl-bench-validate >/dev/null 2>&1 || true
     echo "image built and smoke-ran (php -v inside the pinned image)"
 else
     echo "no Docker daemon here — the build+run lane is the CI bench job's step"

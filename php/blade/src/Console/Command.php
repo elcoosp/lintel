@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Console;
+namespace Lintl\Blade\Console;
 
 use Illuminate\Console\Command as IlluminateCommand;
-use Lintel\Dev\Loader;
+use Lintl\Dev\Loader;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * Base for the §11 `artisan lintel:*` wrappers (§17.1-Q2's remaining
- * Laravel surface): they wrap the SAME `lintel` binary the dev loader
- * spawns (LINTEL_BIN → the Composer cache → PATH, via
+ * Base for the §11 `artisan lintl:*` wrappers (§17.1-Q2's remaining
+ * Laravel surface): they wrap the SAME `lintl` binary the dev loader
+ * spawns (LINTL_BIN → the Composer cache → PATH, via
  * `Loader::binary()`), with the paths coming from Laravel — the explicit
- * constructor override, `config('lintel.*')`, then Laravel's
+ * constructor override, `config('lintl.*')`, then Laravel's
  * storage/resource defaults — so the commands respect the environment
  * the app booted in.
  */
@@ -25,7 +25,7 @@ abstract class Command extends IlluminateCommand
     /** @var list<string>|null the explicit source-dir override */
     private readonly ?array $sourceDirs;
 
-    /** @param list<string>|null $sourceDirs dirs holding `<Name>.lintel.php` */
+    /** @param list<string>|null $sourceDirs dirs holding `<Name>.lintl.php` */
     public function __construct(?string $cacheDir = null, ?array $sourceDirs = null)
     {
         $this->cacheDir = $cacheDir;
@@ -33,19 +33,19 @@ abstract class Command extends IlluminateCommand
         parent::__construct();
     }
 
-    /** The cache dir: the override, `config('lintel.cache_dir')`, or the
+    /** The cache dir: the override, `config('lintl.cache_dir')`, or the
      * framework-cache default. */
     protected function cacheDir(): string
     {
         if ($this->cacheDir !== null) {
             return $this->cacheDir;
         }
-        $configured = config('lintel.cache_dir');
+        $configured = config('lintl.cache_dir');
 
-        return \is_string($configured) && $configured !== '' ? $configured : storage_path('framework/cache/lintel');
+        return \is_string($configured) && $configured !== '' ? $configured : storage_path('framework/cache/lintl');
     }
 
-    /** The source dirs: the override, `config('lintel.source_dirs')`, or
+    /** The source dirs: the override, `config('lintl.source_dirs')`, or
      * the resource default. Non-string config entries are skipped.
      *
      * @return list<string> */
@@ -54,23 +54,23 @@ abstract class Command extends IlluminateCommand
         if ($this->sourceDirs !== null) {
             return $this->sourceDirs;
         }
-        $configured = config('lintel.source_dirs');
+        $configured = config('lintl.source_dirs');
 
         if (\is_array($configured)) {
             return \array_values(\array_filter($configured, \is_string(...)));
         }
 
-        return [resource_path('views/lintel')];
+        return [resource_path('views/lintl')];
     }
 
     /**
-     * Run the lintel binary, streaming stdout as plain lines and stderr
+     * Run the lintl binary, streaming stdout as plain lines and stderr
      * as error lines (RAW — diagnostics carry raw `<…>` markup the output
      * formatter must not eat), and translate the exit code.
      *
      * @param  list<string>  $args  the argument vector after the binary
      */
-    protected function runLintel(array $args): int
+    protected function runLintl(array $args): int
     {
         $command = [Loader::binary(), ...$args];
         $process = @\proc_open($command, [

@@ -2,25 +2,25 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Console;
+namespace Lintl\Blade\Console;
 
 /**
- * `artisan lintel:build` (§11 Laravel wrapper): compiles the app's
- * `.lintel.php` sources with the lintel binary — artifacts into the
- * configured cache dir and the T-31 `lintel.json` manifest into the
+ * `artisan lintl:build` (§11 Laravel wrapper): compiles the app's
+ * `.lintl.php` sources with the lintl binary — artifacts into the
+ * configured cache dir and the T-31 `lintl.json` manifest into the
  * workspace root (the common ancestor of the source dirs and the cache
  * dir — the app root, wherever artisan runs from) — so a prod deploy is
  * warmed by the same command the app boots with.
  */
 final class BuildCommand extends Command
 {
-    protected $signature = 'lintel:build';
+    protected $signature = 'lintl:build';
 
-    protected $description = 'Compile the Lintel sources (§11): artifacts into the cache dir + the lintel.json manifest';
+    protected $description = 'Compile the Lintl sources (§11): artifacts into the cache dir + the lintl.json manifest';
 
     public function handle(): int
     {
-        return $this->runLintel([
+        return $this->runLintl([
             'build',
             ...$this->sourceDirs(),
             '--out',

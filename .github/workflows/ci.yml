@@ -55,27 +55,27 @@ jobs:
       - name: Install PHP deps with Pun (replaces composer install)
         run: |
           pun install --working-dir=php/runtime
-          pun install --working-dir=php/lintel
-          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/lintl
+          pun install --working-dir=php/lintl-phpstan
           pun install --working-dir=php/markup
           pun install --working-dir=php/blade
           pun install --working-dir=php/twig
           pun install --working-dir=bench
-      - name: Build the lintel binary for the PHP gates
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary for the PHP gates
+        run: cargo build --release -p lintl-cli
       - name: composer validate (every composer.json)
         run: |
           composer validate --working-dir=php/runtime --no-check-all
-          composer validate --working-dir=php/lintel --no-check-all
-          composer validate --working-dir=php/lintel-phpstan --no-check-all
+          composer validate --working-dir=php/lintl --no-check-all
+          composer validate --working-dir=php/lintl-phpstan --no-check-all
           composer validate --working-dir=php/markup --no-check-all
           composer validate --working-dir=php/blade --no-check-all
           composer validate --working-dir=php/twig --no-check-all
           composer validate --working-dir=bench --no-check-all
       - name: Pun format + lint (src directories only)
         run: |
-          pun format php/runtime/src php/lintel/src php/lintel-phpstan/src php/markup/src php/blade/src php/twig/src
-          pun lint php/runtime/src php/lintel/src php/lintel-phpstan/src php/markup/src php/blade/src php/twig/src
+          pun format php/runtime/src php/lintl/src php/lintl-phpstan/src php/markup/src php/blade/src php/twig/src
+          pun lint php/runtime/src php/lintl/src php/lintl-phpstan/src php/markup/src php/blade/src php/twig/src
       - name: Rust PHP gates (php -l on every golden output + init demo execution)
         run: cargo test --workspace --all-features
         env:
@@ -83,7 +83,7 @@ jobs:
       - name: PHPUnit threat corpus (§7.2) + installer/loader suite
         run: bash scripts/php-gates.sh test
         env:
-          LINTEL_TEST_BIN: ${{ github.workspace }}/target/release/lintel
+          LINTL_TEST_BIN: ${{ github.workspace }}/target/release/lintl
       - name: "§10 server adapters — the RoadRunner live lane + the Swoole/FrankenPHP/ReactPHP structural lanes (the deferred adapters gap closes)"
         run: |
           curl -fsSL --retry 2 -o /tmp/rr.tar.gz \
@@ -92,7 +92,7 @@ jobs:
           echo "/tmp/rr-bin" >> "$GITHUB_PATH"
           php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
         env:
-          LINTEL_E2E_RR: '1'
+          LINTL_E2E_RR: '1'
       - name: PHPStan (level max)
         run: bash scripts/php-gates.sh stan
 
@@ -114,29 +114,29 @@ jobs:
       - name: Install PHP deps with Pun (ignore platform req since lock requires 8.6)
         run: |
           pun install --working-dir=php/runtime --ignore-platform-req=php
-          pun install --working-dir=php/lintel --ignore-platform-req=php
-          pun install --working-dir=php/lintel-phpstan --ignore-platform-req=php
+          pun install --working-dir=php/lintl --ignore-platform-req=php
+          pun install --working-dir=php/lintl-phpstan --ignore-platform-req=php
           pun install --working-dir=php/markup --ignore-platform-req=php
           pun install --working-dir=php/blade --ignore-platform-req=php
           pun install --working-dir=php/twig --ignore-platform-req=php
           pun install --working-dir=bench --ignore-platform-req=php
-      - name: Build the lintel binary
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary
+        run: cargo build --release -p lintl-cli
       - name: PHPUnit with Lela (all packages)
         run: |
-          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
-          lela php/lintel/vendor/bin/phpunit --configuration php/lintel/phpunit.xml
+          LINTL_TEST_BIN="${{ github.workspace }}/target/release/lintl" \
+          lela php/lintl/vendor/bin/phpunit --configuration php/lintl/phpunit.xml
           lela php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml
-          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
-          lela php/lintel-phpstan/vendor/bin/phpunit --configuration php/lintel-phpstan/phpunit.xml
-          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          LINTL_TEST_BIN="${{ github.workspace }}/target/release/lintl" \
+          lela php/lintl-phpstan/vendor/bin/phpunit --configuration php/lintl-phpstan/phpunit.xml
+          LINTL_TEST_BIN="${{ github.workspace }}/target/release/lintl" \
           lela php/markup/vendor/bin/phpunit --configuration php/markup/phpunit.xml
-          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          LINTL_TEST_BIN="${{ github.workspace }}/target/release/lintl" \
           lela php/blade/vendor/bin/phpunit --configuration php/blade/phpunit.xml
-          LINTEL_TEST_BIN="${{ github.workspace }}/target/release/lintel" \
+          LINTL_TEST_BIN="${{ github.workspace }}/target/release/lintl" \
           lela php/twig/vendor/bin/phpunit --configuration php/twig/phpunit.xml
         env:
-          LINTEL_TEST_BIN: ${{ github.workspace }}/target/release/lintel
+          LINTL_TEST_BIN: ${{ github.workspace }}/target/release/lintl
 
   dx:
     runs-on: ubuntu-latest
@@ -155,18 +155,18 @@ jobs:
       - name: Install PHP deps with Pun
         run: |
           pun install --working-dir=php/runtime
-          pun install --working-dir=php/lintel
-          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/lintl
+          pun install --working-dir=php/lintl-phpstan
           pun install --working-dir=php/markup
           pun install --working-dir=php/blade
           pun install --working-dir=php/twig
           pun install --working-dir=bench
-      - name: Build the lintel binary
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary
+        run: cargo build --release -p lintl-cli
       - name: T-11 acceptance — fresh plain-PHP AND Laravel skeletons (composer require → edit → refresh, no watcher)
         run: bash scripts/dx-smoke.sh
         env:
-          LINTEL_BIN: ${{ github.workspace }}/target/release/lintel
+          LINTL_BIN: ${{ github.workspace }}/target/release/lintl
 
   starter:
     name: starter (M2 — the zero-Rust first-run path)
@@ -186,26 +186,26 @@ jobs:
       - name: Install PHP deps with Pun
         run: |
           pun install --working-dir=php/runtime
-          pun install --working-dir=php/lintel
-          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/lintl
+          pun install --working-dir=php/lintl-phpstan
           pun install --working-dir=php/markup
           pun install --working-dir=php/blade
           pun install --working-dir=php/twig
           pun install --working-dir=bench
-      - name: Build the lintel binary (the prebuilt binary the installer plugin caches)
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary (the prebuilt binary the installer plugin caches)
+        run: cargo build --release -p lintl-cli
       - name: M2 starter smoke — composer create-project → dev loader → prod build → HTTP serve (NO Rust toolchain at runtime)
         run: bash scripts/starter-smoke.sh
         env:
-          LINTEL_BIN: ${{ github.workspace }}/target/release/lintel
+          LINTL_BIN: ${{ github.workspace }}/target/release/lintl
 
   bench:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build the lintel binary
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary
+        run: cargo build --release -p lintl-cli
       - name: "T-14 — the §9.2 harness on the Docker-pinned php:8.6 image (digest pin; no native fallback in CI)"
         run: make bench-docker
       - name: Commit-nothing guard — results land as job artifacts, not tree edits
@@ -253,7 +253,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: "T-16 grammar: tokenize .lintel.php the way VS Code does"
+      - name: "T-16 grammar: tokenize .lintl.php the way VS Code does"
         working-directory: editors/vscode
         run: |
           npm install --no-audit --no-fund
@@ -290,15 +290,15 @@ jobs:
       - name: The live adapter lanes (Swoole ext server + real FrankenPHP binary + the php -S FPM lane)
         run: php php/runtime/vendor/bin/phpunit --configuration php/runtime/phpunit.xml --filter AdapterTransportTest
         env:
-          LINTEL_E2E_FRANKENPHP: '1'
+          LINTL_E2E_FRANKENPHP: '1'
 
   launch-assets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build the lintel binary the tape drives
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary the tape drives
+        run: cargo build --release -p lintl-cli
       - name: Put the binary on PATH for the tape
         run: echo "$PWD/target/release" >> "$GITHUB_PATH"
       - name: "T-19 launch GIF: render docs/demo.tape (edit → refresh → compiled view)"
@@ -324,30 +324,30 @@ jobs:
         with:
           php-version: '8.6'
       - name: Build the release binary for this runner
-        run: cargo build --release -p lintel-cli
+        run: cargo build --release -p lintl-cli
       - name: Stage a local dist (archive + SHA256SUMS) the way release.yml does
         shell: bash
         run: |
           case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) ARCHIVE=lintel-linux-x64.tar.gz ;;
-            Darwin-arm64) ARCHIVE=lintel-macos-arm64.tar.gz ;;
-            Darwin-x86_64) ARCHIVE=lintel-macos-x64.tar.gz ;;
-            MINGW*) ARCHIVE=lintel-windows-x64.zip ;;
+            Linux-x86_64) ARCHIVE=lintl-linux-x64.tar.gz ;;
+            Darwin-arm64) ARCHIVE=lintl-macos-arm64.tar.gz ;;
+            Darwin-x86_64) ARCHIVE=lintl-macos-x64.tar.gz ;;
+            MINGW*) ARCHIVE=lintl-windows-x64.zip ;;
           esac
           mkdir -p dist
           if [ "${ARCHIVE##*.}" = zip ]; then
-            cp target/release/lintel.exe dist/
-            (cd dist && 7z a lintel-windows-x64.zip lintel.exe && rm lintel.exe)
+            cp target/release/lintl.exe dist/
+            (cd dist && 7z a lintl-windows-x64.zip lintl.exe && rm lintl.exe)
           else
-            cp target/release/lintel dist/
-            (cd dist && tar -czf "$ARCHIVE" lintel && rm lintel)
+            cp target/release/lintl dist/
+            (cd dist && tar -czf "$ARCHIVE" lintl && rm lintl)
           fi
-          (cd dist && sha256sum lintel-* > SHA256SUMS)
+          (cd dist && sha256sum lintl-* > SHA256SUMS)
       - name: "T-20: install + render a component inside the 10-minute budget"
         shell: bash
         env:
-          LINTEL_RELEASE_ROOT: ${{ github.workspace }}/dist
-          LINTEL_RUNTIME_PATH: ${{ github.workspace }}/php/runtime/src/functions.php
+          LINTL_RELEASE_ROOT: ${{ github.workspace }}/dist
+          LINTL_RUNTIME_PATH: ${{ github.workspace }}/php/runtime/src/functions.php
         run: bash scripts/walkthrough.sh
 
   windows-daemon:
@@ -364,7 +364,7 @@ jobs:
         # lane and the p50/p99-vs-spawn measurement over TCP. Serial: each
         # test tears down a scratch directory whose socket the next test's
         # daemon must not hold open (Windows directory locking is strict).
-        run: cargo test -p lintel-cli --all-features --test watch -- --test-threads=1
+        run: cargo test -p lintl-cli --all-features --test watch -- --test-threads=1
 
   fuzz:
     runs-on: ubuntu-latest
@@ -377,7 +377,7 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: "M2 corpus seeding — the differential templates, the fallback edges and the §7.2 payloads"
-        run: cargo test -p lintel-core --test fuzz_corpus
+        run: cargo test -p lintl-core --test fuzz_corpus
       - name: "T-09: the ten-minute fuzz acceptance on compile(), over the seeded corpus"
         run: cargo fuzz run compile_fuzz -- -max_total_time=600
         env:
@@ -400,14 +400,14 @@ jobs:
       - name: Install PHP deps with Pun
         run: |
           pun install --working-dir=php/runtime
-          pun install --working-dir=php/lintel
-          pun install --working-dir=php/lintel-phpstan
+          pun install --working-dir=php/lintl
+          pun install --working-dir=php/lintl-phpstan
           pun install --working-dir=php/markup
           pun install --working-dir=php/blade
           pun install --working-dir=php/twig
           pun install --working-dir=bench
-      - name: Build the lintel binary
-        run: cargo build --release -p lintel-cli
+      - name: Build the lintl binary
+        run: cargo build --release -p lintl-cli
       - name: Install RoadRunner (the version docs/deployment/roadrunner.md pins)
         run: |
           curl -fsSL --retry 2 -o /tmp/rr.tar.gz \

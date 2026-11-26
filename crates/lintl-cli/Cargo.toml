@@ -1,0 +1,42 @@
+[package]
+name = "lintl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The `lintl` command-line interface: build and check `.lintl.php` sources"
+repository = "https://github.com/elcoosp/lintl"
+
+[dependencies]
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintl-core = { version = "0.1.0", path = "../lintl-core" }
+# The T-31 manifest reads/updates the project's `lintl.json` as real JSON
+# (preserving the user's keys) — hand-rolled splicing would corrupt it.
+serde_json = "1"
+# The T-12 daemon watches the project for changed `.lintl.php` sources.
+notify = "8"
+# The M2 build cache keys entries on a SHA-256 CONTENT hash (mtime lies
+# after a git checkout) keyed with the compile target.
+sha2 = "0.10"
+# The `.lintl-cache/stats.json` counters are shared mutable state: a watch
+# daemon and a concurrent `lintl build` write the same file, so the write
+# is flocked (fs2 wraps flock(2) / LockFileEx cross-platform).
+fs2 = "0.4"
+
+[[bin]]
+name = "lintl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintl-core = { version = "0.1.0", path = "../lintl-core" }
+serde_json = "1"
+
+criterion = "0.5"
+
+[[bench]]
+name = "build_cache"
+harness = false

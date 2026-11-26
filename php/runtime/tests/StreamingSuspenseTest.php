@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
-use Lintel\Html;
-use Lintel\Suspense;
-use Lintel\Tests\Support\StreamingPage;
+use Lintl\Html;
+use Lintl\Suspense;
+use Lintl\Tests\Support\StreamingPage;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\c;
-use function Lintel\stream;
+use function Lintl\c;
+use function Lintl\stream;
 
 /**
  * The §10 streaming & suspense runtime (architecture doc §10,
@@ -74,8 +74,8 @@ final class StreamingSuspenseTest extends TestCase
 
         self::assertStringContainsString('<template id="lt-1-r">', $joined);
         self::assertStringContainsString('<p>Resolved</p>', $joined);
-        self::assertStringContainsString('</template><script>lintelSwap("lt-1")</script>', $joined);
-        self::assertStringContainsString('function lintelSwap(', $joined, 'the one-time swap runtime ships with the first resolved boundary');
+        self::assertStringContainsString('</template><script>lintlSwap("lt-1")</script>', $joined);
+        self::assertStringContainsString('function lintlSwap(', $joined, 'the one-time swap runtime ships with the first resolved boundary');
     }
 
     /** §10: a genuinely slow boundary — the work blocks before resolving. The
@@ -119,7 +119,7 @@ final class StreamingSuspenseTest extends TestCase
     public function test_swap_script_is_emitted_once(): void
     {
         $joined = \implode('', self::capture(StreamingPage::twoBoundaries()));
-        self::assertSame(1, \substr_count($joined, 'function lintelSwap('));
+        self::assertSame(1, \substr_count($joined, 'function lintlSwap('));
     }
 
     /** §10 compat: the sync target runs boundaries inline — no fallback, no swap. */
@@ -140,7 +140,7 @@ final class StreamingSuspenseTest extends TestCase
         // The swap runtime ships once, the template opens, the subtree's
         // chunks flush one by one, the template closes, the swap call runs.
         $normalized = \array_map(
-            static fn (string $chunk): string => \str_contains($chunk, 'function lintelSwap(') ? 'DEF' : $chunk,
+            static fn (string $chunk): string => \str_contains($chunk, 'function lintlSwap(') ? 'DEF' : $chunk,
             $chunks,
         );
         self::assertSame(
@@ -155,7 +155,7 @@ final class StreamingSuspenseTest extends TestCase
                 '<p>one</p>',
                 '<p>two</p>',
                 '</template>',
-                '<script>lintelSwap("lt-1")</script>',
+                '<script>lintlSwap("lt-1")</script>',
             ],
             $normalized,
         );

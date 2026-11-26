@@ -7,11 +7,11 @@
 #      so the release edits never rely on "CI will catch it").
 #   2. The four publishable crates resolve to ONE workspace version.
 #   3. The `cargo publish -p …` order in release.yml is topologically sound:
-#      every crate's internal lintel-* dependency publishes earlier.
+#      every crate's internal lintl-* dependency publishes earlier.
 #   4. The CHANGELOG carries a valid `## [0.1.0]` release section with
 #      content — the exact text the release job extracts for the release body
 #      (the same awk is run here, so what you preview is what ships).
-#   5. The composer publish targets exist: lintel/lintel + markup/markup,
+#   5. The composer publish targets exist: lintl/lintl + markup/markup,
 #      named exactly as the workflow publishes them.
 #   6. `cargo publish --dry-run` packages each crate standalone (the real
 #      crates.io acceptance: the packaged Cargo.toml + the verification
@@ -48,7 +48,7 @@ else
     VERSIONS=$(python3 - "$META" <<'PY'
 import json, sys
 meta = json.loads(sys.argv[1])
-names = {"lintel-core", "lintel-diag", "lintel-cli", "lintel-lsp"}
+names = {"lintl-core", "lintl-diag", "lintl-cli", "lintl-lsp"}
 versions = {p["name"]: p["version"] for p in meta["packages"] if p["name"] in names}
 print(json.dumps(versions))
 PY
@@ -70,7 +70,7 @@ PY
 fi
 
 step "3. publish order is topologically sound"
-ORDER=$(grep -oE 'cargo publish .*-p (lintel-[a-z]+)' "$WORKFLOW" | sed -E 's/.*-p (lintel-[a-z]+)$/\1/') || ORDER=""
+ORDER=$(grep -oE 'cargo publish .*-p (lintl-[a-z]+)' "$WORKFLOW" | sed -E 's/.*-p (lintl-[a-z]+)$/\1/') || ORDER=""
 if [ -z "$ORDER" ]; then
     bail "release.yml carries no cargo publish steps — the crates.io leg is missing"
 else
@@ -79,7 +79,7 @@ else
 import json, sys
 meta = json.loads(sys.argv[1])
 order = sys.argv[2].split()
-names = {"lintel-core", "lintel-diag", "lintel-cli", "lintel-lsp"}
+names = {"lintl-core", "lintl-diag", "lintl-cli", "lintl-lsp"}
 deps = {}
 for p in meta["packages"]:
     deps[p["name"]] = [d["name"] for d in p["dependencies"] if d["name"] in names]
@@ -116,9 +116,9 @@ else
 fi
 
 step "5. composer publish targets exist"
-for pkg in lintel/lintel markup/markup; do
+for pkg in lintl/lintl markup/markup; do
     case "$pkg" in
-        lintel/lintel) DIR="php/lintel" ;;
+        lintl/lintl) DIR="php/lintl" ;;
         markup/markup) DIR="php/markup" ;;
     esac
     NAME=$(python3 -c "import json; print(json.load(open('$DIR/composer.json'))['name'])" 2>/dev/null) || NAME=""
@@ -128,7 +128,7 @@ for pkg in lintel/lintel markup/markup; do
         bail "$DIR/composer.json declares '$NAME', the workflow publishes '$pkg'"
     fi
 done
-for pkg in lintel/lintel markup/markup; do
+for pkg in lintl/lintl markup/markup; do
     if ! grep -q "$pkg" "$WORKFLOW"; then
         bail "release.yml never mentions $pkg — the composer publish leg is missing"
     fi
@@ -141,18 +141,18 @@ else
     # Pre-tag reality: a dependent crate resolves its sibling's registry
     # version, which only exists on crates.io AFTER the release job
     # publishes it (in dependency order). So exactly one failure class is
-    # expected pre-tag — "no matching package named `lintel-X` found" /
+    # expected pre-tag — "no matching package named `lintl-X` found" /
     # "candidate versions found which didn't match" for an INTERNAL
     # dependency — and it is reported as deferred-to-the-release-job, never
     # silent. Every other packaging failure (a missing version requirement
     # on a path dep, a broken manifest, a failed verification build) is a
     # hard stop. Post-tag, with the crates live, all four verify fully.
     deferred=0
-    for crate in lintel-diag lintel-core lintel-lsp lintel-cli; do
+    for crate in lintl-diag lintl-core lintl-lsp lintl-cli; do
         OUT=$(cargo publish --dry-run --allow-dirty --locked -p "$crate" 2>&1)
         if [ $? -eq 0 ]; then
             echo "packaged standalone: $crate"
-        elif printf '%s' "$OUT" | grep -qE "no matching package named .lintel-|candidate versions found which didn't match"; then
+        elif printf '%s' "$OUT" | grep -qE "no matching package named .lintl-|candidate versions found which didn't match"; then
             echo "deferred (expected pre-tag): $crate — its internal dependency's new version is not on crates.io yet;"
             echo "  the release job's publish step dry-runs each crate immediately after its dependency publishes (diag → core → lsp → cli)"
             deferred=$((deferred + 1))

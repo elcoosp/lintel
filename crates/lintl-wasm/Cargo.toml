@@ -1,0 +1,19 @@
+[package]
+name = "lintl-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WASM entry crate for the T-13 playground: lintl-core compile() behind a wasm-bindgen seam"
+repository = "https://github.com/elcoosp/lintl"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# the version rides the release (T-18): crates.io refuses a path dep without one
+lintl-core = { version = "0.1.0", path = "../lintl-core" }
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true

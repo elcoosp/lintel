@@ -1,9 +1,9 @@
 {
-  "name": "lintel-vscode",
-  "displayName": "Lintel (JSX for PHP)",
-  "description": "Syntax highlighting for .lintel.php (JSX-in-PHP) and problem matching for `lintel check`",
+  "name": "lintl-vscode",
+  "displayName": "Lintl (JSX for PHP)",
+  "description": "Syntax highlighting for .lintl.php (JSX-in-PHP) and problem matching for `lintl check`",
   "version": "0.1.0",
-  "publisher": "lintel",
+  "publisher": "lintl",
   "license": "MIT OR Apache-2.0",
   "engines": {
     "vscode": "^1.80.0"
@@ -14,34 +14,34 @@
   "contributes": {
     "languages": [
       {
-        "id": "lintel",
+        "id": "lintl",
         "aliases": [
-          "Lintel (JSX in PHP)",
-          "lintel"
+          "Lintl (JSX in PHP)",
+          "lintl"
         ],
         "extensions": [
-          ".lintel.php"
+          ".lintl.php"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "lintel",
-        "scopeName": "source.lintel.php",
-        "path": "./grammars/lintel.tmLanguage.json",
+        "language": "lintl",
+        "scopeName": "source.lintl.php",
+        "path": "./grammars/lintl.tmLanguage.json",
         "embeddedLanguages": {
           "source.php": "php",
-          "meta.embedded.expression.lintel": "php"
+          "meta.embedded.expression.lintl": "php"
         }
       }
     ],
     "problemMatchers": [
       {
-        "name": "lintel-check",
-        "label": "Lintel diagnostics (`lintel check`)",
-        "owner": "lintel",
-        "source": "lintel",
+        "name": "lintl-check",
+        "label": "Lintl diagnostics (`lintl check`)",
+        "owner": "lintl",
+        "source": "lintl",
         "severity": "error",
         "fileLocation": [
           "relative",
@@ -49,14 +49,14 @@
         ],
         "pattern": [
           {
-            "comment": "error[LNT0301]: dynamic event-handler attribute `onclick` is not allowed",
-            "regexp": "^(error|warning)\\[(LNT\\d{4})\\]: (.*)$",
+            "comment": "error[LNL0301]: dynamic event-handler attribute `onclick` is not allowed",
+            "regexp": "^(error|warning)\\[(LNL\\d{4})\\]: (.*)$",
             "severity": 1,
             "code": 2,
             "message": 3
           },
           {
-            "comment": "  ┌─ resources/Button.lintel.php:12:20 (the rendered source excerpt that names the file)",
+            "comment": "  ┌─ resources/Button.lintl.php:12:20 (the rendered source excerpt that names the file)",
             "regexp": "^\\s*┌─\\s+(.+):(\\d+):(\\d+)\\s*$",
             "file": 1,
             "line": 2,

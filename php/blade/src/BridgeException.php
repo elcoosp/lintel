@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade;
+namespace Lintl\Blade;
 
-/** Thrown when a @lintel invocation names a component no source dir holds. */
+/** Thrown when a @lintl invocation names a component no source dir holds. */
 final class BridgeException extends \RuntimeException {}

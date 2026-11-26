@@ -1,6 +1,6 @@
 # Benchmarks
 
-Lintel's numbers come from one reproducible harness (`bench/`, the §9.2
+Lintl's numbers come from one reproducible harness (`bench/`, the §9.2
 specification): five scenarios, the competitor engines (hand-written `echo`
 as the floor, Blade, Twig, Plates, the `--target=rfc` lowering), an
 OPcache/JIT settings matrix, 30 timed renders per point, and committed raw

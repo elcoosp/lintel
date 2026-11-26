@@ -11,7 +11,7 @@ namespace Markup;
  * Rendering is escape-by-default: children print through
  * {@see Markup\render()} (strings escaped, `\Markup\Html` trusted,
  * nested values walked) and attribute values print through the same
- * attribute routing the string target's emitted `\Lintel\a()/u()/cls()/
+ * attribute routing the string target's emitted `\Lintl\a()/u()/cls()/
  * sty()/srcset()` calls enforce — URL attributes scheme-check, class
  * lists/maps join, style maps ride the safe charset, srcset candidates
  * split and scheme-check, `on*` handlers and invalid names are rejected.

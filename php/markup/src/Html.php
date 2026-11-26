@@ -9,7 +9,7 @@ namespace Markup;
  * runtime concern outside the compiler's output shape"). Author-trusted
  * markup rides through rendering verbatim; everything else — every plain
  * string child and scalar attribute value — prints escaped. Mirrors the
- * shape of `\Lintel\Html` so the two runtimes stay interchangeable at the
+ * shape of `\Lintl\Html` so the two runtimes stay interchangeable at the
  * call sites the string target compiles to.
  */
 final class Html implements \Stringable

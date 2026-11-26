@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel;
+namespace Lintl;
 
 final class Html implements \Stringable
 {
@@ -21,7 +21,7 @@ final class Html implements \Stringable
 }
 
 // Author-facing signatures are written unqualified (`function Badge(): Html`,
-// doc §6.9 / the `lintel init` demo), and compiled output is global-namespace
+// doc §6.9 / the `lintl init` demo), and compiled output is global-namespace
 // PHP: alias the global name so those type hints resolve to the runtime class.
 if (! \class_exists('Html', false)) {
     \class_alias(Html::class, 'Html');
@@ -31,8 +31,8 @@ if (! \class_exists('Html', false)) {
  * The §10 `<Suspense>` boundary value (architecture doc §10).
  *
  * A streaming component yields a Suspense instance where the boundary sits
- * (`yield new \Lintel\Suspense(fallback: …, work: …)`): the flush runtime
- * (`Lintel\stream()`) sinks the fallback in place immediately and appends
+ * (`yield new \Lintl\Suspense(fallback: …, work: …)`): the flush runtime
+ * (`Lintl\stream()`) sinks the fallback in place immediately and appends
  * the boundary's resolved content out-of-order inside a `<template>` plus a
  * swap script. Consumed outside the flush runtime (through `c()`, i.e. the
  * sync target) the boundary runs inline: no fallback, the resolved value
@@ -267,7 +267,7 @@ function attrs(array $m): string
 }
 
 /**
- * The §10 flush loop (@internal — `Lintel\stream()` is the public entry).
+ * The §10 flush loop (@internal — `Lintl\stream()` is the public entry).
  *
  * It walks a stream-target render tree exactly the way `c()` walks a
  * Traversable: chunk strings are compiler-produced markup (or data already
@@ -290,7 +290,7 @@ function attrs(array $m): string
 final class SuspenseFlusher
 {
     /** The one-time in-place swap runtime (§10 step 3). */
-    public const SWAP_RUNTIME = '<script>function lintelSwap(id){var t=document.getElementById(id+"-r"),p=document.getElementById(id);if(!t||!p)return;p.replaceChildren(t.content.cloneNode(true));t.remove();}</script>';
+    public const SWAP_RUNTIME = '<script>function lintlSwap(id){var t=document.getElementById(id+"-r"),p=document.getElementById(id);if(!t||!p)return;p.replaceChildren(t.content.cloneNode(true));t.remove();}</script>';
 
     /**
      * Process-global count of boundaries whose fallback placeholder was
@@ -424,7 +424,7 @@ final class SuspenseFlusher
             $this->emit(c($resolved));
         }
         $this->emit('</template>');
-        $this->emit('<script>lintelSwap("'.$id.'")</script>');
+        $this->emit('<script>lintlSwap("'.$id.'")</script>');
     }
 }
 

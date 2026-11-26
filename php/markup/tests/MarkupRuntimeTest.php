@@ -18,7 +18,7 @@ use function Markup\render;
  * `new \Markup\Element('tag', [...attrs], [...children])` with raw PHP
  * expressions riding through — so the runtime escapes every dynamic value
  * at print time under the same attribute routing the string target's
- * `\Lintel\a()/u()/cls()/sty()/srcset()` helpers enforce (doc §6.8, §7.1).
+ * `\Lintl\a()/u()/cls()/sty()/srcset()` helpers enforce (doc §6.8, §7.1).
  */
 final class MarkupRuntimeTest extends TestCase
 {
@@ -64,7 +64,7 @@ final class MarkupRuntimeTest extends TestCase
         new Element('br', [], ['oops'])->render();
     }
 
-    /** URL attributes scheme-check like \Lintel\u() (doc §4.4): hostile schemes become about:invalid#blocked. */
+    /** URL attributes scheme-check like \Lintl\u() (doc §4.4): hostile schemes become about:invalid#blocked. */
     public function test_url_attributes_scheme_check(): void
     {
         self::assertSame('<a href="about:invalid#blocked">x</a>', new Element('a', ['href' => 'javascript:alert(1)'], ['x'])->render());
@@ -75,7 +75,7 @@ final class MarkupRuntimeTest extends TestCase
         self::assertSame('<a ping="about:invalid#blocked"></a>', new Element('a', ['ping' => 'vbscript:x'])->render());
     }
 
-    /** class={…} accepts string | list | map like \Lintel\cls(). */
+    /** class={…} accepts string | list | map like \Lintl\cls(). */
     public function test_class_attribute_shapes(): void
     {
         self::assertSame('<b class="a b"></b>', new Element('b', ['class' => ['a', 'b']])->render());
@@ -92,7 +92,7 @@ final class MarkupRuntimeTest extends TestCase
         new Element('b', ['style' => ['color' => 'red;background:url(x)']])->render();
     }
 
-    /** srcset splits candidates and scheme-checks each URL like \Lintel\srcset() (§7.1). */
+    /** srcset splits candidates and scheme-checks each URL like \Lintl\srcset() (§7.1). */
     public function test_srcset_attribute_candidates(): void
     {
         self::assertSame(
@@ -115,7 +115,7 @@ final class MarkupRuntimeTest extends TestCase
         new Element('b', ['onclick' => 'alert(1)'])->render();
     }
 
-    /** Invalid attribute names are rejected like \Lintel\attrs(). */
+    /** Invalid attribute names are rejected like \Lintl\attrs(). */
     public function test_invalid_attribute_name_throws(): void
     {
         $this->expectException(Exception::class);

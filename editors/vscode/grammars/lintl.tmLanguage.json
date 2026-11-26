@@ -1,0 +1,251 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lintl (JSX in PHP)",
+  "scopeName": "source.lintl.php",
+  "comment": "The T-16 grammar: PHP first (the editor's stock PHP grammar carries the whole language), with JSX highlighted at the expression-start positions the Lintl spec (§4.1) defines. `<` after an operand stays a less-than comparison — only expression-start `<` opens markup. Element regions run from the open tag to the backreferenced close tag (or `/>`), so children and nesting highlight too.",
+  "patterns": [
+    {
+      "include": "#jsx-element"
+    },
+    {
+      "include": "#jsx-fragment"
+    },
+    {
+      "include": "source.php"
+    }
+  ],
+  "repository": {
+    "lintl-jsx": {
+      "comment": "Expression-start positions: return, echo, print, yield, =, =>, (, comma, [, ?, :, ., &&, ||, ??, case. The lookbehind keeps `$a < $b` a comparison.",
+      "patterns": [
+        {
+          "include": "#jsx-element"
+        },
+        {
+          "include": "#jsx-fragment"
+        }
+      ]
+    },
+    "jsx-fragment": {
+      "begin": "(?<=(?:return|echo|print|yield|=|=>|\\(|,|\\[|\\?|:|\\.|&&|\\||\\?\\?|case)\\s)(<>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.lintl"
+        }
+      },
+      "end": "(</>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.end.lintl"
+        }
+      },
+      "name": "meta.element.lintl.fragment",
+      "patterns": [
+        {
+          "include": "#jsx-children"
+        }
+      ]
+    },
+    "jsx-element": {
+      "comment": "A root element: only expression-start positions may open it (the lookbehind). The region runs to the self-close or the backreferenced close tag, so children highlight and nesting recurses.",
+      "begin": "(?<=(?:return|echo|print|yield|=|=>|\\(|,|\\[|\\?|:|\\.|&&|\\||\\?\\?|case)\\s)(<)([A-Za-z][A-Za-z0-9_]*(?:\\\\[A-Za-z][A-Za-z0-9_]*)?)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.lintl"
+        },
+        "2": {
+          "name": "entity.name.tag.lintl",
+          "patterns": [
+            {
+              "comment": "HTML elements are lowercase; components and namespace paths keep the tag styling.",
+              "match": "\\\\",
+              "name": "punctuation.separator.namespace.lintl"
+            }
+          ]
+        }
+      },
+      "end": "(/>)|(</)(\\2)(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.end.lintl"
+        },
+        "2": {
+          "name": "punctuation.definition.tag.begin.lintl"
+        },
+        "3": {
+          "name": "entity.name.tag.lintl"
+        },
+        "4": {
+          "name": "punctuation.definition.tag.end.lintl"
+        }
+      },
+      "name": "meta.element.lintl",
+      "patterns": [
+        {
+          "include": "#jsx-attrs"
+        },
+        {
+          "comment": "The open tag's own `>` (the region's end only fires on the close tag).",
+          "match": ">",
+          "name": "punctuation.definition.tag.end.lintl"
+        },
+        {
+          "include": "#jsx-children"
+        }
+      ]
+    },
+    "jsx-element-nested": {
+      "comment": "A nested element inside children: no lookbehind (children text sits between the parent's tags, not at an expression start).",
+      "begin": "(<)([A-Za-z][A-Za-z0-9_]*(?:\\\\[A-Za-z][A-Za-z0-9_]*)?)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.lintl"
+        },
+        "2": {
+          "name": "entity.name.tag.lintl"
+        }
+      },
+      "end": "(/>)|(</)(\\2)(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.end.lintl"
+        },
+        "2": {
+          "name": "punctuation.definition.tag.begin.lintl"
+        },
+        "3": {
+          "name": "entity.name.tag.lintl"
+        },
+        "4": {
+          "name": "punctuation.definition.tag.end.lintl"
+        }
+      },
+      "name": "meta.element.lintl",
+      "patterns": [
+        {
+          "include": "#jsx-attrs"
+        },
+        {
+          "match": ">",
+          "name": "punctuation.definition.tag.end.lintl"
+        },
+        {
+          "include": "#jsx-children"
+        }
+      ]
+    },
+    "jsx-attrs": {
+      "patterns": [
+        {
+          "comment": "Static attribute value (single or double quoted).",
+          "match": "([A-Za-z][A-Za-z0-9_-]*)(=)(\"[^\"]*\"|'[^']*')",
+          "captures": {
+            "1": {
+              "name": "entity.other.attribute-name.lintl"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.lintl"
+            },
+            "3": {
+              "name": "string.quoted.lintl"
+            }
+          },
+          "name": "meta.attribute.lintl"
+        },
+        {
+          "comment": "Dynamic attribute value: the {expr} body is PHP.",
+          "begin": "([A-Za-z][A-Za-z0-9_-]*)(=)(\\{)",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.other.attribute-name.lintl"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.lintl"
+            },
+            "3": {
+              "name": "punctuation.definition.expression.begin.lintl"
+            }
+          },
+          "end": "(\\})",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.expression.end.lintl"
+            }
+          },
+          "name": "meta.attribute.lintl",
+          "patterns": [
+            {
+              "include": "source.php"
+            }
+          ]
+        },
+        {
+          "comment": "Spread: {...$attrs}.",
+          "begin": "(\\{)(\\.\\.\\.)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.expression.begin.lintl"
+            },
+            "2": {
+              "name": "keyword.operator.spread.lintl"
+            }
+          },
+          "end": "(\\})",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.expression.end.lintl"
+            }
+          },
+          "name": "meta.spread.lintl",
+          "patterns": [
+            {
+              "include": "source.php"
+            }
+          ]
+        },
+        {
+          "comment": "Bare boolean attribute.",
+          "match": "[A-Za-z][A-Za-z0-9_-]*",
+          "name": "entity.other.attribute-name.lintl"
+        }
+      ]
+    },
+    "jsx-children": {
+      "patterns": [
+        {
+          "comment": "A nested element recurses (no expression-start lookbehind here).",
+          "include": "#jsx-element-nested"
+        },
+        {
+          "comment": "A {expr} child is PHP, and JSX may nest inside the expression.",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.expression.begin.lintl"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.expression.end.lintl"
+            }
+          },
+          "name": "meta.embedded.expression.lintl",
+          "patterns": [
+            {
+              "include": "source.php"
+            },
+            {
+              "include": "#lintl-jsx"
+            }
+          ]
+        },
+        {
+          "comment": "Raw text children are plain text.",
+          "match": "[^{<]+",
+          "name": "text.lintl"
+        }
+      ]
+    }
+  }
+}

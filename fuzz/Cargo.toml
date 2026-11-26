@@ -1,5 +1,5 @@
 [package]
-name = "lintel-fuzz"
+name = "lintl-fuzz"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -10,8 +10,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
-lintel-core = { path = "../crates/lintel-core" }
-lintel-lsp = { path = "../crates/lintel-lsp" }
+lintl-core = { path = "../crates/lintl-core" }
+lintl-lsp = { path = "../crates/lintl-lsp" }
 
 [[bin]]
 name = "compile_fuzz"

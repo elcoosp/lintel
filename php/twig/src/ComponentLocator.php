@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig;
+namespace Lintl\Twig;
 
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
 
 /**
  * The §11 Symfony component locator (§17.1-Q2's remaining Symfony
- * surface): resolves a component name to its `#[AsLintelComponent]`
- * service via the `lintel.component.<name>` aliases the
+ * surface): resolves a component name to its `#[AsLintlComponent]`
+ * service via the `lintl.component.<name>` aliases the
  * {@see ComponentPass} registers. Unknown names yield `null` — the
- * {@see Extension} falls back to the `.lintel.php` sources, so the file
+ * {@see Extension} falls back to the `.lintl.php` sources, so the file
  * lane and the service lane compose instead of competing.
  */
 final class ComponentLocator

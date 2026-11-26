@@ -12,10 +12,10 @@ use function Markup\render;
  * The RFC-convergence end-to-end (architecture Year 3 "RFC convergence"):
  * ONE fixture compiled with `--target=rfc` renders through the new
  * `\Markup\` runtime, byte-identical to the SAME fixture compiled with the
- * string target and rendered through `\Lintel\c()`. The compiler side of
- * the rfc target shipped in lintel-core (docs/rfc-alignment.md) — this is
+ * string target and rendered through `\Lintl\c()`. The compiler side of
+ * the rfc target shipped in lintl-core (docs/rfc-alignment.md) — this is
  * the runtime side that was missing. The compile runs the real
- * `lintel` binary (LINTEL_TEST_BIN, the same lane the lintel package's
+ * `lintl` binary (LINTL_TEST_BIN, the same lane the lintl package's
  * tests use); each target renders in its own process so the two compiled
  * files' same-named components don't collide.
  */
@@ -24,16 +24,16 @@ final class MarkupE2eTest extends TestCase
     /** The rfc target renders the same fixture to the string target's bytes. */
     public function test_rfc_runtime_matches_the_string_target_for_a_fixture_component(): void
     {
-        $binary = getenv('LINTEL_TEST_BIN') ?: __DIR__.'/../../../target/release/lintel';
-        self::assertFileExists($binary, 'the lintel binary must be built for the e2e lane');
-        $fixture = __DIR__.'/fixture/Page.lintel.php';
+        $binary = getenv('LINTL_TEST_BIN') ?: __DIR__.'/../../../target/release/lintl';
+        self::assertFileExists($binary, 'the lintl binary must be built for the e2e lane');
+        $fixture = __DIR__.'/fixture/Page.lintl.php';
 
         $rfcPhp = shell_exec(escapeshellarg($binary).' build '.escapeshellarg($fixture).' --target=rfc');
         $stringPhp = shell_exec(escapeshellarg($binary).' build '.escapeshellarg($fixture));
         self::assertIsString($rfcPhp);
         self::assertIsString($stringPhp);
 
-        $tmp = sys_get_temp_dir().'/lintel-markup-e2e-'.bin2hex((string) random_bytes(4));
+        $tmp = sys_get_temp_dir().'/lintl-markup-e2e-'.bin2hex((string) random_bytes(4));
         mkdir($tmp, 0777, true);
         file_put_contents($tmp.'/page-rfc.php', $rfcPhp);
         file_put_contents($tmp.'/page-string.php', $stringPhp);
@@ -55,7 +55,7 @@ PHP,
 <?php
 require {AUTOLOAD};
 require {COMPILED};
-echo \Lintel\c(Page('W"orld<script>', 'javascript:alert(1)'));
+echo \Lintl\c(Page('W"orld<script>', 'javascript:alert(1)'));
 PHP,
                 $tmp.'/page-string.php',
             );

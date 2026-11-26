@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig;
+namespace Lintl\Twig;
 
-/** Thrown when a lintel_render() call names a component no source dir holds. */
+/** Thrown when a lintl_render() call names a component no source dir holds. */
 final class BridgeException extends \RuntimeException {}

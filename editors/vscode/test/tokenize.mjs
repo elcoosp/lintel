@@ -1,9 +1,9 @@
-// The T-16 acceptance check (verbatim: "JSX highlighted inside .lintel.php"):
+// The T-16 acceptance check (verbatim: "JSX highlighted inside .lintl.php"):
 // the grammar runs through the same tokenizer engine VS Code uses
 // (vscode-textmate + vscode-oniguruma) and the assertions pin the behavior,
 // not just the JSON's shape:
 //   - a component and an HTML element at expression-start positions get
-//     markup scopes (entity.name.tag.lintel);
+//     markup scopes (entity.name.tag.lintl);
 //   - a `{...}` child keeps its PHP expression scope;
 //   - `$a < $b` (operand-position `<`) never becomes markup.
 // CI's `editors` job runs this on every push (setup-node + npm test).
@@ -20,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // The oniguruma wasm ships with vscode-oniguruma in node_modules.
 await loadWASM(await readFile(join(here, '../node_modules/vscode-oniguruma/release/onig.wasm')));
 
-const grammar = JSON.parse(await readFile(join(here, '../grammars/lintel.tmLanguage.json'), 'utf8'));
+const grammar = JSON.parse(await readFile(join(here, '../grammars/lintl.tmLanguage.json'), 'utf8'));
 
 const registry = new Registry({
   onigLib: Promise.resolve(oniguruma),
@@ -28,7 +28,7 @@ const registry = new Registry({
     scopeName === grammar.scopeName ? grammar : null,
 });
 
-const grammar_ = await registry.loadGrammar('source.lintel.php');
+const grammar_ = await registry.loadGrammar('source.lintl.php');
 
 function tokenize(source) {
   const lines = source.split('\n');
@@ -65,21 +65,21 @@ const component = tokenize([
   '',
 ].join('\n'));
 check(
-  'component tag gets entity.name.tag.lintel',
-  line_tokens(component, 1).includes('entity.name.tag.lintel'),
+  'component tag gets entity.name.tag.lintl',
+  line_tokens(component, 1).includes('entity.name.tag.lintl'),
   line_tokens(component, 1),
 );
 check(
-  'the component open bracket is lintel punctuation',
-  line_tokens(component, 1).includes('punctuation.definition.tag.begin.lintel'),
+  'the component open bracket is lintl punctuation',
+  line_tokens(component, 1).includes('punctuation.definition.tag.begin.lintl'),
   line_tokens(component, 1),
 );
 
 // 2. An HTML element at expression start is markup too.
 const html = tokenize('<?php\nreturn <div class="hero">hi</div>;\n');
 check(
-  'html element gets entity.name.tag.lintel',
-  line_tokens(html, 1).includes('entity.name.tag.lintel'),
+  'html element gets entity.name.tag.lintl',
+  line_tokens(html, 1).includes('entity.name.tag.lintl'),
   line_tokens(html, 1),
 );
 
@@ -87,7 +87,7 @@ check(
 const expr = tokenize('<?php\nreturn <b>{$name}</b>;\n');
 check(
   'a {expr} child embeds php scopes',
-  line_tokens(expr, 1).includes('meta.embedded.expression.lintel'),
+  line_tokens(expr, 1).includes('meta.embedded.expression.lintl'),
   line_tokens(expr, 1),
 );
 
@@ -95,7 +95,7 @@ check(
 const compare = tokenize('<?php\n$ok = $a < $b;\n');
 check(
   'operand-position < stays a comparison',
-  !line_tokens(compare, 1).includes('entity.name.tag.lintel'),
+  !line_tokens(compare, 1).includes('entity.name.tag.lintl'),
   line_tokens(compare, 1),
 );
 
@@ -104,7 +104,7 @@ check(
 const multiline = tokenize('<?php\nreturn <main>\n    <Row>one</Row>\n</main>;\n');
 check(
   'a nested row inside a multiline element is markup',
-  line_tokens(multiline, 2).includes('entity.name.tag.lintel'),
+  line_tokens(multiline, 2).includes('entity.name.tag.lintl'),
   line_tokens(multiline, 2),
 );
 

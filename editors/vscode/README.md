@@ -1,10 +1,10 @@
-# Lintel for VS Code (T-16, grammar-only)
+# Lintl for VS Code (T-16, grammar-only)
 
-Syntax highlighting for `.lintel.php` — JSX inside PHP, exactly where the
+Syntax highlighting for `.lintl.php` — JSX inside PHP, exactly where the
 language spec puts it (expression-start positions) — plus a problem matcher
-that turns `lintel check` output into editor diagnostics.
+that turns `lintl check` output into editor diagnostics.
 
-**Acceptance (verbatim):** *JSX highlighted inside `.lintel.php`.* The
+**Acceptance (verbatim):** *JSX highlighted inside `.lintl.php`.* The
 tokenization test below runs the grammar through the same engine VS Code
 uses (`vscode-textmate` + `vscode-oniguruma`) and asserts the behavior: a
 component and an HTML element at expression starts get markup scopes, a
@@ -13,25 +13,25 @@ multiline element keeps nesting across lines.
 
 ## What ships
 
-- `grammars/lintel.tmLanguage.json` — the grammar: PHP first (the editor's
+- `grammars/lintl.tmLanguage.json` — the grammar: PHP first (the editor's
   stock PHP grammar carries the language), JSX at expression starts, back-
   referenced close tags so children and nesting highlight.
 - `language-configuration.json` — brackets, comments, auto-closing pairs.
-- `package.json` — the `lintel` language bound to `*.lintel.php`, the
-  `source.lintel.php` grammar with PHP embedded languages, and the
-  `lintel-check` problem matcher.
+- `package.json` — the `lintl` language bound to `*.lintl.php`, the
+  `source.lintl.php` grammar with PHP embedded languages, and the
+  `lintl-check` problem matcher.
 - `test/tokenize.mjs` — the acceptance check (`npm test`).
 
 ## The problem matcher
 
-Tasks run `lintel check` (exit 1 on error-severity diagnostics); attaching
-the `lintel-check` matcher turns the rendered output —
-`error[LNT0301]: message` followed by the `┌─ file:line:col` excerpt line —
+Tasks run `lintl check` (exit 1 on error-severity diagnostics); attaching
+the `lintl-check` matcher turns the rendered output —
+`error[LNL0301]: message` followed by the `┌─ file:line:col` excerpt line —
 into file-anchored editor problems:
 
 ```jsonc
 // .vscode/tasks.json
-{ "type": "shell", "command": "vendor/bin/lintel check src/", "problemMatcher": "$lintel-check" }
+{ "type": "shell", "command": "vendor/bin/lintl check src/", "problemMatcher": "$lintl-check" }
 ```
 
 ## Verify the grammar

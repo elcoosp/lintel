@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests\Support;
+namespace Lintl\Tests\Support;
 
-use Lintel\SwooleResponse;
+use Lintl\SwooleResponse;
 
 /**
- * The structural fake for the `Lintel\SwooleResponse` contract
+ * The structural fake for the `Lintl\SwooleResponse` contract
  * (AdapterTransportTest): records the adapter's calls in order.
  */
 final class FakeSwooleResponse implements SwooleResponse

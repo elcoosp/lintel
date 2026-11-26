@@ -535,45 +535,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
-name = "lintel-cli"
+name = "lintl-cli"
 version = "0.1.0"
 dependencies = [
  "criterion",
  "fs2",
- "lintel-core",
+ "lintl-core",
  "notify",
  "serde_json",
  "sha2",
 ]
 
 [[package]]
-name = "lintel-core"
+name = "lintl-core"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "lintel-diag",
+ "lintl-diag",
  "proptest",
  "serde_json",
 ]
 
 [[package]]
-name = "lintel-diag"
+name = "lintl-diag"
 version = "0.1.0"
 
 [[package]]
-name = "lintel-docs"
+name = "lintl-docs"
 version = "0.1.0"
 dependencies = [
- "lintel-diag",
+ "lintl-diag",
  "pulldown-cmark",
 ]
 
 [[package]]
-name = "lintel-lsp"
+name = "lintl-lsp"
 version = "0.1.0"
 dependencies = [
  "fs2",
- "lintel-core",
+ "lintl-core",
  "lsp-types",
  "serde",
  "serde_json",
@@ -582,10 +582,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "lintel-wasm"
+name = "lintl-wasm"
 version = "0.1.0"
 dependencies = [
- "lintel-core",
+ "lintl-core",
  "wasm-bindgen",
 ]
 

@@ -13,12 +13,12 @@ declare(strict_types=1);
 // Every payload rides a dynamic child (the c() lane) and, when
 // URL/scheme-shaped, a dynamic URL attribute (the u() lane). The
 // companion PHPUnit test (ExpandedThreatCorpusTest) compiles each
-// source with the real lintel binary, executes the compiled PHP under
+// source with the real lintl binary, executes the compiled PHP under
 // real PHP, and asserts the rendered output carries NO live attack
-// surface. A compile-time validator rejection (LNT0301 etc.) is the
+// surface. A compile-time validator rejection (LNL0301 etc.) is the
 // strongest inertness and is counted as a passing vector.
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
 final class ExpandedThreatCorpus
 {

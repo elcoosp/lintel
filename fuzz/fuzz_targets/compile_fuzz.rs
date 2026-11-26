@@ -9,11 +9,11 @@
 //! view with the scanner-fallback lane on malformed input) ends cleanly on
 //! any input. The 60-second local smoke is `make fuzz`; CI's nightly lane
 //! runs the ten-minute acceptance over the seeded corpus
-//! (`crates/lintel-core/tests/fuzz_corpus.rs`).
+//! (`crates/lintl-core/tests/fuzz_corpus.rs`).
 
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use lintel_core::{compile, Options, Target};
+use lintl_core::{compile, Options, Target};
 
 /// Frame one client message the LSP JSON-RPC loop speaks:
 /// `Content-Length: N`, CRLF CRLF, then N bytes.
@@ -42,7 +42,7 @@ fuzz_target!(|data: &[u8]| {
         // pass too.
         if data.len() % 20 == 0 {
             if let Some(bin) = std::env::var_os("PHP_BIN") {
-                let dir = std::env::temp_dir().join("lintel-fuzz-php");
+                let dir = std::env::temp_dir().join("lintl-fuzz-php");
                 let _ = std::fs::create_dir_all(&dir);
                 let input_file = dir.join(format!("input-{}.php", std::process::id()));
                 std::fs::write(&input_file, source).expect("write fuzz input");
@@ -89,7 +89,7 @@ fuzz_target!(|data: &[u8]| {
         "method": "textDocument/didOpen",
         "params": {
             "textDocument": {
-                "uri": "file:///fuzz/Case.lintel.php",
+                "uri": "file:///fuzz/Case.lintl.php",
                 "languageId": "php",
                 "version": 1,
                 "text": source,
@@ -103,6 +103,6 @@ fuzz_target!(|data: &[u8]| {
         input.extend_from_slice(&framed(&body.to_string()));
     }
     let mut output = Vec::new();
-    let code = lintel_lsp::run(&mut std::io::Cursor::new(input.as_slice()), &mut output);
+    let code = lintl_lsp::run(&mut std::io::Cursor::new(input.as_slice()), &mut output);
     assert_eq!(code, 0, "the LSP session ends cleanly on any input");
 });

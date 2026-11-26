@@ -1,43 +1,43 @@
 #!/usr/bin/env bash
 # T-20 dry run (architecture doc §15/§16): the fresh-machine installer.
 #
-#   curl -fsSL https://lintel.sh/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/elcoosp/lintel/main/install.sh | sh -s -- --version v0.1.0
+#   curl -fsSL https://lintl.sh/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/elcoosp/lintl/main/install.sh | sh -s -- --version v0.1.0
 #
 # Downloads the release archive for the running OS/arch, verifies its
 # SHA-256 against the release's `SHA256SUMS` (the checksum file the release
 # workflow publishes and the Composer plugin pins), and installs the
-# `lintel` binary to ~/.local/bin (or $LINTEL_BIN_DIR / a --prefix).
+# `lintl` binary to ~/.local/bin (or $LINTL_BIN_DIR / a --prefix).
 #
-# LINTEL_RELEASE_ROOT overrides the release base URL — the local dry run
+# LINTL_RELEASE_ROOT overrides the release base URL — the local dry run
 # and the CI install-smoke job point it at a directory of prepared archives
 # so the *whole* script (detect → download → verify → install → smoke) is
 # exercised without a published release.
 set -eu
 
-RELEASE_ROOT="${LINTEL_RELEASE_ROOT:-https://github.com/elcoosp/lintel/releases/download/v0.1.0}"
-BIN_DIR="${LINTEL_BIN_DIR:-${HOME}/.local/bin}"
+RELEASE_ROOT="${LINTL_RELEASE_ROOT:-https://github.com/elcoosp/lintl/releases/download/v0.1.0}"
+BIN_DIR="${LINTL_BIN_DIR:-${HOME}/.local/bin}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-say() { printf 'lintel-install: %s\n' "$1" >&2; }
+say() { printf 'lintl-install: %s\n' "$1" >&2; }
 
 # 1. Detect the platform (§12.1: linux x64/arm64 musl, macOS x64/arm64, Windows x64).
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$OS-$ARCH" in
-    Linux-x86_64) ARCHIVE="lintel-linux-x64.tar.gz" ;;
-    Linux-aarch64) ARCHIVE="lintel-linux-arm64.tar.gz" ;;
-    Darwin-x86_64) ARCHIVE="lintel-macos-x64.tar.gz" ;;
-    Darwin-arm64) ARCHIVE="lintel-macos-arm64.tar.gz" ;;
-    MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64 | MINGW*-amd64) ARCHIVE="lintel-windows-x64.zip" ;;
-    *) say "unsupported platform: $OS-$ARCH (build from source: cargo install lintel-cli)"; exit 1 ;;
+    Linux-x86_64) ARCHIVE="lintl-linux-x64.tar.gz" ;;
+    Linux-aarch64) ARCHIVE="lintl-linux-arm64.tar.gz" ;;
+    Darwin-x86_64) ARCHIVE="lintl-macos-x64.tar.gz" ;;
+    Darwin-arm64) ARCHIVE="lintl-macos-arm64.tar.gz" ;;
+    MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64 | MINGW*-amd64) ARCHIVE="lintl-windows-x64.zip" ;;
+    *) say "unsupported platform: $OS-$ARCH (build from source: cargo install lintl-cli)"; exit 1 ;;
 esac
 say "detected $OS-$ARCH — fetching $ARCHIVE"
 
 # 2. Download the archive and the checksum file, verify (§12.3 supply-chain stance).
 fetch() {
-    # $1 = URL or local path, $2 = output path. LINTEL_RELEASE_ROOT may be a
+    # $1 = URL or local path, $2 = output path. LINTL_RELEASE_ROOT may be a
     # local directory (the CI install-smoke job and the local dry run stage
     # archives on disk) or a file:// URL — both are copied verbatim; only a
     # remote http(s) URL needs curl/wget. curl rejects a bare local path with
@@ -88,20 +88,20 @@ mkdir -p "$BIN_DIR"
 case "$ARCHIVE" in
     *.zip)
         unzip -o "$TMP/$ARCHIVE" -d "$TMP" >/dev/null
-        cp "$TMP/lintel.exe" "$BIN_DIR/lintel.exe"
-        BIN="$BIN_DIR/lintel.exe"
+        cp "$TMP/lintl.exe" "$BIN_DIR/lintl.exe"
+        BIN="$BIN_DIR/lintl.exe"
         ;;
     *.tar.gz)
         tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-        install "$TMP/lintel" "$BIN_DIR/lintel"
-        BIN="$BIN_DIR/lintel"
+        install "$TMP/lintl" "$BIN_DIR/lintl"
+        BIN="$BIN_DIR/lintl"
         ;;
 esac
 say "installed $BIN"
 
 # 4. Smoke: the binary runs and the PATH picks it up.
-if ! command -v lintel >/dev/null 2>&1; then
+if ! command -v lintl >/dev/null 2>&1; then
     say "add ${BIN_DIR} to your PATH (e.g. add 'export PATH=\"${BIN_DIR}:\$PATH\"' to your shell rc)"
 fi
 "$BIN" --version
-say "done — try: lintel init && lintel build --in-place hello.lintel.php"
+say "done — try: lintl init && lintl build --in-place hello.lintl.php"

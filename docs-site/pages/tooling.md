@@ -1,20 +1,20 @@
 # Tooling: incremental builds & the LSP workspace index
 
-Two Phase 9 capabilities make Lintel pleasant at project scale: the build
-cache that turns a warm `lintel build` into pure I/O, and the language
+Two Phase 9 capabilities make Lintl pleasant at project scale: the build
+cache that turns a warm `lintl build` into pure I/O, and the language
 server's persistent workspace index that lets rename, references, symbols
 and definition see the files you have not opened. Phase 11 extends the
 index with an independent tree-sitter parse (the section below).
 
 ## Incremental builds (the build cache)
 
-`lintel build` caches compiled PHP under `.lintel-cache/` in the workspace
+`lintl build` caches compiled PHP under `.lintl-cache/` in the workspace
 root — the common ancestor of the build inputs and `--out`, so the cache
 lands with the sources it describes from any invocation directory. One
 entry per source **content** + **target** pair:
 
 ```
-.lintel-cache/
+.lintl-cache/
   3f9c….php    # the compiled artifact (the string lowering's output)
   3f9c….json   # metadata sidecar: source path, target, options hash,
                # and the cold build's rendered warnings
@@ -31,15 +31,15 @@ and `--format=json` shapes are stored) and writes the output — the §9.3
 performance target "warm (cache hit): I/O-bound".
 
 ```sh
-lintel build src/ --out build            # cold: compiles + stores
-lintel build src/ --out build            # warm: all cache hits
-lintel build src/ --out build --no-cache # bypasses lookup AND store (CI)
+lintl build src/ --out build            # cold: compiles + stores
+lintl build src/ --out build            # warm: all cache hits
+lintl build src/ --out build --no-cache # bypasses lookup AND store (CI)
 ```
 
-`--no-cache` exists for CI and debugging; `lintel check` and `lintel
+`--no-cache` exists for CI and debugging; `lintl check` and `lintl
 analyze` never read the cache (they must always re-validate), and a
 stdout build — the dev loader's compile lane — leaves no cache beside the
-sources it compiles. Add `.lintel-cache/` to your `.gitignore` (the
+sources it compiles. Add `.lintl-cache/` to your `.gitignore` (the
 repository's own does).
 
 ## LSP workspace index
@@ -47,8 +47,8 @@ repository's own does).
 The language server no longer limits rename, references, workspace
 symbols and go-to-definition to the files you have open. On
 `initialize` it walks the workspace root (from `workspaceFolders` or
-`rootUri`), parses every `.lintel.php` file's component declarations, and
-keeps them in an in-memory index backed by `.lintel-cache/lsp-index.json`
+`rootUri`), parses every `.lintl.php` file's component declarations, and
+keeps them in an in-memory index backed by `.lintl-cache/lsp-index.json`
 — a lightweight on-disk cache keyed by file mtime+size, so a fresh
 session skips re-parsing unchanged files.
 
@@ -82,11 +82,11 @@ A file whose tree-sitter parse produces no usable declaration structure
 falls back to the scanner alone, so broken input never blanks a file out
 of the workspace. Markup regions stay the scanner's job: the PHP grammar
 does not model JSX, so the lane contributes declaration structure while
-lintel-core remains the authority on component invocations.
+lintl-core remains the authority on component invocations.
 
 ## Reviewing migrations (`migrate --dry-run`)
 
-`lintel migrate --dry-run` prints a unified diff per file without writing
+`lintl migrate --dry-run` prints a unified diff per file without writing
 anything, and each hunk header carries the nearest enclosing function
 signature — git's funcname convention, PHP-shaped:
 
@@ -104,7 +104,7 @@ no context.
 ## The fuzz corpus (Phase 12)
 
 `make fuzz` (the 60-second smoke) and CI's ten-minute lane no longer
-start from an empty corpus: `crates/lintel-core/tests/fuzz_corpus.rs`
+start from an empty corpus: `crates/lintl-core/tests/fuzz_corpus.rs`
 seeds `fuzz/corpus/compile_fuzz/` with the differential acceptance's 220
 generated templates (deterministically replayed through the same
 strategies the acceptance runs), the 23 isolated reconciliation cases,

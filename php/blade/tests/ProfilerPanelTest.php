@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Tests;
+namespace Lintl\Blade\Tests;
 
-use Lintel\Blade\Bridge;
-use Lintel\Blade\Profiler\DebugbarCollector;
-use Lintel\Blade\Profiler\Panel;
-use Lintel\Dev\Loader;
-use Lintel\Html;
-use Lintel\Suspense;
+use Lintl\Blade\Bridge;
+use Lintl\Blade\Profiler\DebugbarCollector;
+use Lintl\Blade\Profiler\Panel;
+use Lintl\Dev\Loader;
+use Lintl\Html;
+use Lintl\Suspense;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\stream;
+use function Lintl\stream;
 
 /**
  * The §11 profiler surface (§17.1-Q2's remaining Laravel surface): the
@@ -44,7 +44,7 @@ final class ProfilerPanelTest extends TestCase
         self::assertSame(0, $m['cache_hits']);
         self::assertGreaterThan(0.0, $m['compile_time_ms'], 'the compile spend is measured');
 
-        $notes = $cacheDir.'/Notes.lintel.php';
+        $notes = $cacheDir.'/Notes.lintl.php';
         \file_put_contents($notes, '<?php // comment-only source, no declarations');
         Loader::require($notes, $cacheDir);
         Loader::require($notes, $cacheDir);
@@ -100,12 +100,12 @@ final class ProfilerPanelTest extends TestCase
         (new Bridge($cacheDir, [$cacheDir]))->render($name, ['name' => 'D']);
 
         $collector = new DebugbarCollector($panel);
-        self::assertSame('lintel', $collector->getName());
+        self::assertSame('lintl', $collector->getName());
 
         $widgets = $collector->getWidgets();
-        self::assertArrayHasKey('lintel', $widgets);
-        self::assertSame('PhpDebugBar.Widgets.VariableListWidget', $widgets['lintel']['widget']);
-        self::assertSame('lintel', $widgets['lintel']['map']);
+        self::assertArrayHasKey('lintl', $widgets);
+        self::assertSame('PhpDebugBar.Widgets.VariableListWidget', $widgets['lintl']['widget']);
+        self::assertSame('lintl', $widgets['lintl']['map']);
 
         $data = $collector->collect();
         self::assertSame(1, $data['files']);
@@ -114,17 +114,17 @@ final class ProfilerPanelTest extends TestCase
         self::assertSame(0, $data['suspense_flushed']);
     }
 
-    /** A workspace with one `<Name>.lintel.php` component, compiled fresh. */
+    /** A workspace with one `<Name>.lintl.php` component, compiled fresh. */
     private function workspace(string $name): string
     {
-        $dir = sys_get_temp_dir().'/lintel-panel-'.bin2hex((string) random_bytes(4));
+        $dir = sys_get_temp_dir().'/lintl-panel-'.bin2hex((string) random_bytes(4));
         \mkdir($dir, 0777, true);
-        \file_put_contents($dir.'/'.$name.'.lintel.php', <<<LINTEL
+        \file_put_contents($dir.'/'.$name.'.lintl.php', <<<LINTL
         <?php
         function {$name}(string \$name = '') {
             return <b class="badge">Hello, {\$name}</b>;
         }
-        LINTEL);
+        LINTL);
 
         return $dir;
     }

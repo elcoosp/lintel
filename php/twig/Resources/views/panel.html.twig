@@ -1,18 +1,18 @@
 {# The §11 Symfony Web Profiler panel template (§17.1-Q2's remaining
-   Symfony surface) — renders the LintelDataCollector snapshot inside the
+   Symfony surface) — renders the LintlDataCollector snapshot inside the
    WebProfilerBundle layout. An app registers it on the collector:
 
        data_collector:
-           lintel:
-               id: Lintel\Twig\Profiler\LintelDataCollector
-               template: '@LintelTwig/panel.html.twig'
+           lintl:
+               id: Lintl\Twig\Profiler\LintlDataCollector
+               template: '@LintlTwig/panel.html.twig'
 
    with the namespace pointed at this package's Resources/views. #}
 {% extends '@WebProfiler/Profiler/layout.html.twig' %}
 
 {% block toolbar %}
     {% set icon %}
-        <span class="sf-toolbar-label">Lintel</span>
+        <span class="sf-toolbar-label">Lintl</span>
         <span class="sf-toolbar-value">{{ collector.metrics.files }}</span>
         <span class="sf-toolbar-label">files</span>
     {% endset %}
@@ -29,12 +29,12 @@
 {% block menu %}
     <span class="label">
         <span class="icon">{# ⚡ #}L</span>
-        <strong>Lintel</strong>
+        <strong>Lintl</strong>
     </span>
 {% endblock %}
 
 {% block panel %}
-    <h2>Lintel <span class="dump-inline">— compiled components, cache and streaming for this window</span></h2>
+    <h2>Lintl <span class="dump-inline">— compiled components, cache and streaming for this window</span></h2>
     <table class="metric">
         <thead><tr><th>Metric</th><th>Value</th></tr></thead>
         <tbody>

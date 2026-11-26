@@ -1,6 +1,6 @@
 {
-    "name": "lintel/runtime",
-    "description": "The Lintel PHP runtime: the escaping helpers compiled markup calls (architecture doc §6.8)",
+    "name": "lintl/runtime",
+    "description": "The Lintl PHP runtime: the escaping helpers compiled markup calls (architecture doc §6.8)",
     "type": "library",
     "license": "MIT",
     "autoload": {
@@ -8,7 +8,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Lintel\\Tests\\": "tests/"
+            "Lintl\\Tests\\": "tests/"
         }
     },
     "require": {

@@ -17,35 +17,35 @@ export PATH="$DEMO_HOME/.local/bin:/usr/bin:/bin:$PATH"
 START="$(date +%s)"
 
 echo "== step 1: install (curl | sh with the checksum verified) =="
-LINTEL_RELEASE_ROOT="${LINTEL_RELEASE_ROOT:-file:///tmp/dist}" \
-LINTEL_BIN_DIR="$HOME/.local/bin" \
+LINTL_RELEASE_ROOT="${LINTL_RELEASE_ROOT:-file:///tmp/dist}" \
+LINTL_BIN_DIR="$HOME/.local/bin" \
     bash "$(dirname "$0")/../install.sh"
 
 echo; echo "== step 2: scaffold the demo =="
 mkdir -p "$HOME/project" && cd "$HOME/project"
-lintel init
+lintl init
 
 echo; echo "== step 3: edit the component =="
 # `sed -i.bak` (then drop the backup) is portable across GNU sed (Linux CI,
 # Git Bash) and BSD sed (macOS): a bare `sed -i 's|...|...|'` makes BSD sed
 # take the script as the backup suffix and fail with "extra characters at
 # the end of h command".
-sed -i.bak 's|<h1>Hello,|<h1>Rendered by Lintel —|' hello.lintel.php
-rm -f hello.lintel.php.bak
-grep -n "Rendered by Lintel" hello.lintel.php
+sed -i.bak 's|<h1>Hello,|<h1>Rendered by Lintl —|' hello.lintl.php
+rm -f hello.lintl.php.bak
+grep -n "Rendered by Lintl" hello.lintl.php
 
 echo; echo "== step 4: rebuild in place (edit → refresh) =="
-lintel build --in-place hello.lintel.php
+lintl build --in-place hello.lintl.php
 
 echo; echo "== step 5: load the runtime and render over HTTP =="
-# Published flow: `composer require lintel/runtime` (the autoload chain
+# Published flow: `composer require lintl/runtime` (the autoload chain
 # registers the helpers). The pre-release dry run vendors the runtime
 # source instead — same classes, same helpers. The runtime is more than
 # one file: functions.php require_once's its sibling transports.php, so
 # the whole src/ directory is copied, never just functions.php (copying
 # the single file leaves transports.php behind and the render 500s).
-if [ -n "${LINTEL_RUNTIME_PATH:-}" ]; then
-    src_dir="$(dirname "$LINTEL_RUNTIME_PATH")"
+if [ -n "${LINTL_RUNTIME_PATH:-}" ]; then
+    src_dir="$(dirname "$LINTL_RUNTIME_PATH")"
     cp "$src_dir"/*.php .
 fi
 cat > index.php <<'PHP'
@@ -69,7 +69,7 @@ kill $SERVER 2>/dev/null || true
 wait $SERVER 2>/dev/null || true
 echo "rendered: $BODY"
 case "$BODY" in
-    *"Rendered by Lintel"*) echo "RENDER OK: the edited component came back over HTTP" ;;
+    *"Rendered by Lintl"*) echo "RENDER OK: the edited component came back over HTTP" ;;
     *) echo "RENDER FAIL"; exit 1 ;;
 esac
 

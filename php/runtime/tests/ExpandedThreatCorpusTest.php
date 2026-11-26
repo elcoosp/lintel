@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -11,11 +11,11 @@ use PHPUnit\Framework\TestCase;
  * M1 release-readiness: the independent threat-corpus expansion. Every
  * vector in {@see ExpandedThreatCorpus} rides a dynamic child (the c() lane)
  * and, when URL/scheme-shaped, a dynamic URL attribute (the u() lane). Each
- * source is compiled with the REAL `lintel` binary (LINTEL_TEST_BIN), the
+ * source is compiled with the REAL `lintl` binary (LINTL_TEST_BIN), the
  * compiled PHP is executed under real PHP, and the rendered output is
  * asserted INERT: no live `<script>` tag, no `javascript:`/`vbscript:`/
  * `data:text/html` scheme in a rendered URL, no unescaped `on\w+=` event
- * handler. A compile-time validator rejection (LNT0301 etc.) is the
+ * handler. A compile-time validator rejection (LNL0301 etc.) is the
  * strongest inertness — the source never becomes executable PHP — and is
  * counted as a passing vector with its code pinned.
  *
@@ -28,11 +28,11 @@ use PHPUnit\Framework\TestCase;
  */
 final class ExpandedThreatCorpusTest extends TestCase
 {
-    /** The lintel binary (the release build; CI sets LINTEL_TEST_BIN). */
+    /** The lintl binary (the release build; CI sets LINTL_TEST_BIN). */
     private static function binary(): string
     {
-        $binary = getenv('LINTEL_TEST_BIN') ?: __DIR__.'/../../../target/release/lintel';
-        self::assertFileExists($binary, 'the lintel binary must be built (cargo build --release -p lintel-cli)');
+        $binary = getenv('LINTL_TEST_BIN') ?: __DIR__.'/../../../target/release/lintl';
+        self::assertFileExists($binary, 'the lintl binary must be built (cargo build --release -p lintl-cli)');
 
         return $binary;
     }
@@ -40,14 +40,14 @@ final class ExpandedThreatCorpusTest extends TestCase
     /** A unique temp dir per test run (parallel-safe). */
     private static function workDir(): string
     {
-        $dir = sys_get_temp_dir().'/lintel-expanded-threat-'.bin2hex((string) random_bytes(6));
+        $dir = sys_get_temp_dir().'/lintl-expanded-threat-'.bin2hex((string) random_bytes(6));
         @mkdir($dir, 0o777, true);
 
         return $dir;
     }
 
     /**
-     * Compile a `.lintel.php` source with the real binary; return the
+     * Compile a `.lintl.php` source with the real binary; return the
      * compiled PHP, or null + the diagnostic text if the compiler rejected
      * the source (a validator refusal — the strongest inertness).
      *
@@ -55,7 +55,7 @@ final class ExpandedThreatCorpusTest extends TestCase
      */
     private static function compile(string $binary, string $source, string $workDir): array
     {
-        $src = $workDir.'/case.lintel.php';
+        $src = $workDir.'/case.lintl.php';
         file_put_contents($src, $source);
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -64,7 +64,7 @@ final class ExpandedThreatCorpusTest extends TestCase
         ];
         $cmd = escapeshellarg($binary).' build '.escapeshellarg($src);
         $proc = proc_open($cmd, $descriptors, $pipes);
-        self::assertIsResource($proc, 'lintel build spawns');
+        self::assertIsResource($proc, 'lintl build spawns');
         fclose($pipes[0]);
         $stdout = (string) stream_get_contents($pipes[1]);
         $stderr = (string) stream_get_contents($pipes[2]);
@@ -72,7 +72,7 @@ final class ExpandedThreatCorpusTest extends TestCase
         fclose($pipes[2]);
         $code = proc_close($proc);
         // A non-zero exit with diagnostics means the compiler rejected the
-        // source (LNT0301 for an onclick spread, etc.) — the strongest
+        // source (LNL0301 for an onclick spread, etc.) — the strongest
         // inertness. Return null + the stderr so the test pins the code.
         if ($code !== 0) {
             return [null, $stderr];
@@ -193,11 +193,11 @@ PHP);
             [$compiled, $stderr] = $this->compile($binary, $childSource, $workDir);
             if ($compiled === null) {
                 // Compile-time rejection: the strongest inertness. Pin that
-                // the rejection carries an LNT code (not a crash).
+                // the rejection carries an LNL code (not a crash).
                 self::assertMatchesRegularExpression(
-                    '/LNT\d{4}/',
+                    '/LNL\d{4}/',
                     $stderr,
-                    "{$name}: compile rejection must carry an LNT code (payload: {$payload})"
+                    "{$name}: compile rejection must carry an LNL code (payload: {$payload})"
                 );
 
                 return;

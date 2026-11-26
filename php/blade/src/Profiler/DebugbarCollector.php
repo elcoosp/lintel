@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Profiler;
+namespace Lintl\Blade\Profiler;
 
 use DebugBar\DataCollector\DataCollectorInterface;
 use DebugBar\DataCollector\Renderable;
 
 /**
  * The §11 Laravel Debugbar collector (§17.1-Q2's remaining Laravel
- * surface): registers as a `lintel` tab whose widget lists the profiler
+ * surface): registers as a `lintl` tab whose widget lists the profiler
  * metrics — files compiled, cache hits/misses, compilation time, suspense
  * boundaries flushed — captured from a real render window. Apps shipping
  * laravel-debugbar add it with one line (`Debugbar::addCollector(new
@@ -30,7 +30,7 @@ final class DebugbarCollector implements DataCollectorInterface, Renderable
     /** The unique collector name — the tab id and the widget map key. */
     public function getName(): string
     {
-        return 'lintel';
+        return 'lintl';
     }
 
     /** The toolbar widget: a variable list of the metric snapshot.
@@ -38,11 +38,11 @@ final class DebugbarCollector implements DataCollectorInterface, Renderable
     public function getWidgets(): array
     {
         return [
-            'lintel' => [
+            'lintl' => [
                 'icon' => 'bolt',
-                'title' => 'Lintel',
+                'title' => 'Lintl',
                 'widget' => 'PhpDebugBar.Widgets.VariableListWidget',
-                'map' => 'lintel',
+                'map' => 'lintl',
                 'default' => '{}',
             ],
         ];

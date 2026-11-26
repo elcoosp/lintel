@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig\Tests;
+namespace Lintl\Twig\Tests;
 
-use Lintel\Dev\Loader;
-use Lintel\Html;
-use Lintel\Suspense;
-use Lintel\Twig\Extension;
-use Lintel\Twig\Profiler\LintelDataCollector;
+use Lintl\Dev\Loader;
+use Lintl\Html;
+use Lintl\Suspense;
+use Lintl\Twig\Extension;
+use Lintl\Twig\Profiler\LintlDataCollector;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Twig\Environment;
 use Twig\Loader\ArrayLoader;
 
-use function Lintel\stream;
+use function Lintl\stream;
 
 /**
  * The §11 Symfony Web Profiler panel's data source (§17.1-Q2's remaining
@@ -34,7 +34,7 @@ final class ProfilerCollectorTest extends TestCase
     {
         $name = 'Pfc'.bin2hex((string) random_bytes(4));
         $cacheDir = $this->workspace($name);
-        $collector = new LintelDataCollector;
+        $collector = new LintlDataCollector;
         $collector->reset();
 
         $this->renderInTwig($cacheDir, $name);
@@ -46,7 +46,7 @@ final class ProfilerCollectorTest extends TestCase
         self::assertSame(0, $m['cache_hits']);
         self::assertGreaterThan(0.0, $m['compile_time_ms'], 'the compile spend is measured');
 
-        $notes = $cacheDir.'/Notes.lintel.php';
+        $notes = $cacheDir.'/Notes.lintl.php';
         \file_put_contents($notes, '<?php // comment-only source, no declarations');
         Loader::require($notes, $cacheDir);
         Loader::require($notes, $cacheDir);
@@ -60,7 +60,7 @@ final class ProfilerCollectorTest extends TestCase
     /** A real streamed render with a boundary lands in the snapshot. */
     public function test_collector_counts_suspense_boundaries_flushed(): void
     {
-        $collector = new LintelDataCollector;
+        $collector = new LintlDataCollector;
         $collector->reset();
 
         $tree = [
@@ -83,7 +83,7 @@ final class ProfilerCollectorTest extends TestCase
         $this->renderInTwig($cacheDir, $name);
         self::assertGreaterThan(0, Loader::metrics()->files);
 
-        $collector = new LintelDataCollector;
+        $collector = new LintlDataCollector;
         $collector->reset();
         $collector->collect(new Request, new Response);
         $m = $collector->metrics();
@@ -97,32 +97,32 @@ final class ProfilerCollectorTest extends TestCase
     /** The profiler plumbing: panel id + template resource the app wires. */
     public function test_collector_name_and_template_resource(): void
     {
-        $collector = new LintelDataCollector;
+        $collector = new LintlDataCollector;
 
-        self::assertSame('lintel', $collector->getName());
+        self::assertSame('lintl', $collector->getName());
         self::assertFileExists(__DIR__.'/../Resources/views/panel.html.twig', 'the app-pointable template ships');
     }
 
     /** Render a suite-unique component through the bridge's Twig function. */
     private function renderInTwig(string $cacheDir, string $name): string
     {
-        $twig = new Environment(new ArrayLoader(['p.twig' => '{{ lintel_render(name_var) }}']));
+        $twig = new Environment(new ArrayLoader(['p.twig' => '{{ lintl_render(name_var) }}']));
         $twig->addExtension(new Extension($cacheDir, [$cacheDir]));
 
         return $twig->render('p.twig', ['name_var' => $name]);
     }
 
-    /** A workspace with one `<Name>.lintel.php` component, compiled fresh. */
+    /** A workspace with one `<Name>.lintl.php` component, compiled fresh. */
     private function workspace(string $name): string
     {
-        $dir = sys_get_temp_dir().'/lintel-sf-profiler-'.bin2hex((string) random_bytes(4));
+        $dir = sys_get_temp_dir().'/lintl-sf-profiler-'.bin2hex((string) random_bytes(4));
         \mkdir($dir, 0777, true);
-        \file_put_contents($dir.'/'.$name.'.lintel.php', <<<LINTEL
+        \file_put_contents($dir.'/'.$name.'.lintl.php', <<<LINTL
         <?php
         function {$name}(string \$name = '') {
             return <b class="badge">Hello, {\$name}</b>;
         }
-        LINTEL);
+        LINTL);
 
         return $dir;
     }

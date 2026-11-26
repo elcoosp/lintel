@@ -1,12 +1,12 @@
 {
-    "name": "lintel/starter",
-    "description": "The zero-Rust first-run starter (M2 release-readiness): composer create-project lintel/starter my-app && cd my-app && php -S localhost:8000 renders a working page with NO Rust toolchain installed — the installer plugin fetches the prebuilt binary. This composer.json is consumed by create-project; for the local smoke (scripts/starter-smoke.sh) the path repositories pointing at php/lintel + php/runtime are added by the smoke script — the published starter resolves lintel/lintel + lintel/runtime from Packagist (DEFERRED-TO-MAINTAINER, named in the starter README).",
+    "name": "lintl/starter",
+    "description": "The zero-Rust first-run starter (M2 release-readiness): composer create-project lintl/starter my-app && cd my-app && php -S localhost:8000 renders a working page with NO Rust toolchain installed — the installer plugin fetches the prebuilt binary. This composer.json is consumed by create-project; for the local smoke (scripts/starter-smoke.sh) the path repositories pointing at php/lintl + php/runtime are added by the smoke script — the published starter resolves lintl/lintl + lintl/runtime from Packagist (DEFERRED-TO-MAINTAINER, named in the starter README).",
     "type": "project",
     "license": "MIT",
     "require": {
         "php": ">=8.5",
-        "lintel/lintel": "*",
-        "lintel/runtime": "*"
+        "lintl/lintl": "*",
+        "lintl/runtime": "*"
     },
     "require-dev": {
         "phpstan/phpstan": "^2.1"
@@ -21,12 +21,12 @@
     "config": {
         "sort-packages": true,
         "allow-plugins": {
-            "lintel/lintel": true
+            "lintl/lintl": true
         }
     },
     "scripts": {
         "serve": "@php -S localhost:8000 -t public",
-        "build": "lintel build components --out public/dist --manifest",
-        "check": "lintel check components"
+        "build": "lintl build components --out public/dist --manifest",
+        "check": "lintl check components"
     }
 }

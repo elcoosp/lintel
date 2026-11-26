@@ -1,7 +1,7 @@
 # Production deployment: Swoole / OpenSwoole
 
 Swoole keeps the whole HTTP server inside PHP coroutines — one resident
-process, coroutine-scheduled request handlers, no FPM at all. The Lintel
+process, coroutine-scheduled request handlers, no FPM at all. The Lintl
 lane is `SwooleFlushTransport`
 (`php/runtime/src/transports.php`): status + headers on `begin()`, one
 `write()` per chunk, `end()` closes — chunks reach the already-open
@@ -14,13 +14,13 @@ out-of-order flushes arrive progressively with no queueing layer.
   the runtime (`SwooleFlushTransport::isAvailable()`); the response
   surface is validated up front by `fromSwoole()`, which throws before
   any byte is written when the object is not a Swoole HTTP response.
-- `composer require lintel/runtime` (the helpers + the transport).
-- The Lintel compiler once, at deploy time.
+- `composer require lintl/runtime` (the helpers + the transport).
+- The Lintl compiler once, at deploy time.
 
 ## 1. Compile the pages (deploy step)
 
 ```sh
-vendor/bin/lintel build --target=stream --out public/dist pages/
+vendor/bin/lintl build --target=stream --out public/dist pages/
 ```
 
 ## 2. The server script
@@ -33,10 +33,10 @@ vendor/bin/lintel build --target=stream --out public/dist pages/
 require __DIR__.'/vendor/autoload.php';
 require __DIR__.'/public/dist/Home.php';
 
-use Lintel\SwooleFlushTransport;
+use Lintl\SwooleFlushTransport;
 use Swoole\Http\Server;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 $server = new Server('0.0.0.0', 8080, SWOOLE_PROCESS, SWOOLE_SOCK_TCP);
 
@@ -77,7 +77,7 @@ land in flush order regardless of scheduling.
 
 ## 4. A minimal page
 
-The same `pages/Home.lintel.php` as the other guides — the compiled
+The same `pages/Home.lintl.php` as the other guides — the compiled
 `Home()` returns the generator tree and `stream_via()` walks it:
 
 ```php
@@ -123,6 +123,6 @@ curl -sN http://127.0.0.1:8080/suspense | head -c 200
 - Put nginx in front only for TLS/limits and keep
   `proxy_buffering off` (the transport already sends
   `X-Accel-Buffering: no`).
-- The dev loop stays on the `lintel watch` daemon
+- The dev loop stays on the `lintl watch` daemon
   (`docs/daemon-protocol.md`); prod runs the compiled tree — the watcher
-  and the `.lintel-cache/` build cache never serve traffic.
+  and the `.lintl-cache/` build cache never serve traffic.

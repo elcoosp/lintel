@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests\Support;
+namespace Lintl\Tests\Support;
 
-use Lintel\Html;
-use Lintel\Suspense;
+use Lintl\Html;
+use Lintl\Suspense;
 
-use function Lintel\c;
+use function Lintl\c;
 
 /**
  * Page builders for the §10 streaming/suspense e2e (StreamingSuspenseTest).

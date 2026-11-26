@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\View\Compilers\BladeCompiler;
@@ -19,19 +19,19 @@ use Twig\Loader\ArrayLoader;
  * rendering the SAME dynamic values through Blade (Laravel's `{{ }}`,
  * `htmlspecialchars`-based) and Twig (its own autoescape, `htmlentities`-
  * based) — two independent, widely-deployed third-party templating engines
- * — and comparing the output byte-for-byte against Lintel's `c()` and
+ * — and comparing the output byte-for-byte against Lintl's `c()` and
  * `a()` helpers.
  *
  * The covered subset (honestly stated): the generated-template shapes
  * expressible in all three engines — a dynamic child (text context) and a
  * quoted attribute value. Class lists, spreads, srcset and style maps are
- * Lintel-specific routing (Blade/Twig have no direct equivalent) and are
+ * Lintl-specific routing (Blade/Twig have no direct equivalent) and are
  * NOT compared here; the threat corpus covers them. The point of THIS
  * oracle is: a disagreement with a third-party engine on a plain text or
  * attribute value is a finding, not a rounding error.
  *
  * KNOWN, INVESTIGATED DIVERGENCE (the oracle's first finding): the
- * apostrophe. Lintel escapes `'` as `&apos;` (it uses `ENT_QUOTES |
+ * apostrophe. Lintl escapes `'` as `&apos;` (it uses `ENT_QUOTES |
  * ENT_SUBSTITUTE | ENT_HTML5`, the modern HTML5-correct entity); Blade
  * and Twig escape `'` as `&#039;` (they use `ENT_QUOTES` without
  * `ENT_HTML5`, the older numeric entity). Both are valid HTML5 escaping of
@@ -44,8 +44,8 @@ use Twig\Loader\ArrayLoader;
  *
  * What "byte-for-byte" means here: all three engines escape `<`, `>`, `&`
  * and `"` (and `'` under ENT_QUOTES / Twig's htmlstrategy). The literal
- * bytes of the escaped output must match across Lintel, Blade and Twig for
- * the covered subset. A mismatch means Lintel's escaper diverges from an
+ * bytes of the escaped output must match across Lintl, Blade and Twig for
+ * the covered subset. A mismatch means Lintl's escaper diverges from an
  * independent implementation — a real bug to investigate, never a rounding
  * difference.
  */
@@ -54,7 +54,7 @@ final class IndependentOracleTest extends TestCase
     /** A fresh Blade compiler with its own cache dir (parallel-safe). */
     private function bladeCompiler(): BladeCompiler
     {
-        $cache = sys_get_temp_dir().'/lintel-oracle-blade-'.bin2hex((string) random_bytes(4));
+        $cache = sys_get_temp_dir().'/lintl-oracle-blade-'.bin2hex((string) random_bytes(4));
         @mkdir($cache, 0o777, true);
 
         return new BladeCompiler(new Filesystem, $cache);
@@ -65,7 +65,7 @@ final class IndependentOracleTest extends TestCase
     {
         $blade = $this->bladeCompiler();
         $compiled = $blade->compileString('{{ $v }}');
-        $file = sys_get_temp_dir().'/lintel-oracle-blade-run-'.bin2hex((string) random_bytes(4)).'.php';
+        $file = sys_get_temp_dir().'/lintl-oracle-blade-run-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($file, $compiled);
         try {
             $extract = static function (string $__f, string $v): string {
@@ -90,14 +90,14 @@ final class IndependentOracleTest extends TestCase
         return $twig->render('c.twig', ['v' => $value]);
     }
 
-    /** Render a value through Lintel's c() (the child escaper). */
-    private function lintelChild(string $value): string
+    /** Render a value through Lintl's c() (the child escaper). */
+    private function lintlChild(string $value): string
     {
-        return \Lintel\c($value);
+        return \Lintl\c($value);
     }
 
     /**
-     * Normalize the known, investigated apostrophe divergence: Lintel emits
+     * Normalize the known, investigated apostrophe divergence: Lintl emits
      * `&apos;` (ENT_HTML5), Blade/Twig emit `&#039;` (ENT_QUOTES without
      * ENT_HTML5). Both are valid HTML5 escaping of `'` and render identically;
      * this normalization lets the remaining byte-for-byte comparison surface
@@ -114,9 +114,9 @@ final class IndependentOracleTest extends TestCase
     {
         $blade = $this->bladeCompiler();
         // Blade escapes {{ }} with htmlspecialchars (ENT_QUOTES), matching
-        // Lintel's a() for a quoted attribute value.
+        // Lintl's a() for a quoted attribute value.
         $compiled = $blade->compileString('<a title="{{ $v }}">x</a>');
-        $file = sys_get_temp_dir().'/lintel-oracle-blade-attr-'.bin2hex((string) random_bytes(4)).'.php';
+        $file = sys_get_temp_dir().'/lintl-oracle-blade-attr-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($file, $compiled);
         try {
             $extract = static function (string $__f, string $v): string {
@@ -150,10 +150,10 @@ final class IndependentOracleTest extends TestCase
         return ' title="'.$m[1].'"';
     }
 
-    /** Render a value as a quoted attribute through Lintel's a(). */
-    private function lintelAttr(string $value): string
+    /** Render a value as a quoted attribute through Lintl's a(). */
+    private function lintlAttr(string $value): string
     {
-        return \Lintel\a('title', $value);
+        return \Lintl\a('title', $value);
     }
 
     /**
@@ -199,47 +199,47 @@ final class IndependentOracleTest extends TestCase
     }
 
     /**
-     * The child context: Lintel's c() must agree with Blade's {{ }} and
+     * The child context: Lintl's c() must agree with Blade's {{ }} and
      * Twig's autoescape, byte-for-byte, for every covered value. */
     #[DataProvider('provideValues')]
-    public function test_lintel_child_agrees_with_blade_and_twig(string $value): void
+    public function test_lintl_child_agrees_with_blade_and_twig(string $value): void
     {
-        $lintel = $this->normalizeApostrophe($this->lintelChild($value));
+        $lintl = $this->normalizeApostrophe($this->lintlChild($value));
         $blade = $this->normalizeApostrophe($this->bladeChild($value));
         $twig = $this->normalizeApostrophe($this->twigChild($value));
         // All three must agree. If any pair disagrees, that is a FINDING —
-        // Lintel's escaper diverges from an independent implementation.
+        // Lintl's escaper diverges from an independent implementation.
         self::assertSame(
             $blade,
-            $lintel,
-            "Lintel c() disagrees with Blade {{}} for value: {$value}\n--- lintel ---\n{$lintel}\n--- blade ---\n{$blade}"
+            $lintl,
+            "Lintl c() disagrees with Blade {{}} for value: {$value}\n--- lintl ---\n{$lintl}\n--- blade ---\n{$blade}"
         );
         self::assertSame(
             $twig,
-            $lintel,
-            "Lintel c() disagrees with Twig autoescape for value: {$value}\n--- lintel ---\n{$lintel}\n--- twig ---\n{$twig}"
+            $lintl,
+            "Lintl c() disagrees with Twig autoescape for value: {$value}\n--- lintl ---\n{$lintl}\n--- twig ---\n{$twig}"
         );
     }
 
-    /** The attribute context: Lintel's a() must agree with Blade's and
+    /** The attribute context: Lintl's a() must agree with Blade's and
      * Twig's quoted-attribute escaping, byte-for-byte, for every covered
-     * value. (Lintel emits ` name="value"`; Blade/Twig emit the same inside
+     * value. (Lintl emits ` name="value"`; Blade/Twig emit the same inside
      * ` title="..."`, so we extract and compare the `title="..."` form.) */
     #[DataProvider('provideValues')]
-    public function test_lintel_attribute_agrees_with_blade_and_twig(string $value): void
+    public function test_lintl_attribute_agrees_with_blade_and_twig(string $value): void
     {
-        $lintel = $this->normalizeApostrophe($this->lintelAttr($value));
+        $lintl = $this->normalizeApostrophe($this->lintlAttr($value));
         $blade = $this->normalizeApostrophe($this->bladeAttr($value));
         $twig = $this->normalizeApostrophe($this->twigAttr($value));
         self::assertSame(
             $blade,
-            $lintel,
-            "Lintel a() disagrees with Blade attr for value: {$value}\n--- lintel ---\n{$lintel}\n--- blade ---\n{$blade}"
+            $lintl,
+            "Lintl a() disagrees with Blade attr for value: {$value}\n--- lintl ---\n{$lintl}\n--- blade ---\n{$blade}"
         );
         self::assertSame(
             $twig,
-            $lintel,
-            "Lintel a() disagrees with Twig attr for value: {$value}\n--- lintel ---\n{$lintel}\n--- twig ---\n{$twig}"
+            $lintl,
+            "Lintl a() disagrees with Twig attr for value: {$value}\n--- lintl ---\n{$lintl}\n--- twig ---\n{$twig}"
         );
     }
 

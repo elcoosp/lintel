@@ -10,14 +10,14 @@
 > `docs/rfc-alignment.md`, `docs/stream-alignment.md`,
 > `docs/srcset-alignment.md` and `docs/ignore-directives.md` record their
 > contracts, so the behavior is intentional and testable
-> (`crates/lintel-core/tests/elision.rs`,
-> `crates/lintel-core/tests/typed_elision.rs`).
+> (`crates/lintl-core/tests/elision.rs`,
+> `crates/lintl-core/tests/typed_elision.rs`).
 
 ## Source of truth
 
 - §7.3: `(int)`/`(float)` casts and `count()` calls *skip escaping* — an
   int/float interpolates as digits (`NAN`/`INF` included) and cannot carry
-  markup, so the `\Lintel\c()` call is pure overhead (§9.1: "everything
+  markup, so the `\Lintl\c()` call is pure overhead (§9.1: "everything
   folds that can fold; measure instead of assuming").
 - Doc 4.4 (escape-by-default) is unchanged for everything else: any child
   whose type is not provable at compile time keeps the helper.
@@ -32,7 +32,7 @@
 | `{count($rows)}` | `count($rows)` (always returns an int) |
 | `{(int)$row->cells()}` | raw — the cast covers a `$var` accessor chain |
 | `{(int)($a . $b)}` | raw — the cast covers the whole parenthesized group |
-| `{(int)$n . $suffix}` | `\Lintel\c((int)$n . $suffix)` — the operator binds the cast's *result*; the child is a string |
+| `{(int)$n . $suffix}` | `\Lintl\c((int)$n . $suffix)` — the operator binds the cast's *result*; the child is a string |
 | `{count($rows) . ' rows'}` | wrapped — same rule: `count()` must exhaust the expression |
 | `{(string)$s}` | wrapped — a string cast is a string and can carry markup |
 | `{strlen($s)}` | wrapped — unknown callee, unknown return type |
@@ -61,16 +61,16 @@ Details the doc does not pin down, decided here:
    signature table — the honest v0.1 subset elides only the two shapes the
    language itself proves: casts and `count()`.
 5. **Only child expressions elide.** Attribute values keep
-   `\Lintel\a/u/srcset/cls/sty` because those helpers carry semantics a
+   `\Lintl\a/u/srcset/cls/sty` because those helpers carry semantics a
    scalar fold would drop (bool/null handling, per-URL scheme checks,
-   class/style list handling); spreads stay `\Lintel\attrs()`; components
+   class/style list handling); spreads stay `\Lintl\attrs()`; components
    stay named arguments.
 6. **Both markup targets share the fold.** The string target emits the raw
    expression as a concat operand, the stream target as a `yield` chunk;
    the `rfc` target was already helper-free and passes the expression
    through unchanged.
 7. **Line preservation holds.** The elided expression is a dynamic part
-   like `\Lintel\c(...)` and participates in the same newline
+   like `\Lintl\c(...)` and participates in the same newline
    interleaving; the `elided_children_preserve_line_numbers` test asserts
    the invariant end-to-end.
 
@@ -79,7 +79,7 @@ Details the doc does not pin down, decided here:
 The doc's remaining v0.1 bullet — *direct `htmlspecialchars` when the
 expression is a typed parameter of the enclosing function* — folds on the
 same rule: the declaration already proves the value is a string, so the
-generic `\Lintel\c()` wrapper's runtime check is pure overhead.
+generic `\Lintl\c()` wrapper's runtime check is pure overhead.
 
 | Source child (inside `function Card(...)`) | Lowered PHP |
 |---|---|
@@ -114,23 +114,23 @@ Details the doc does not pin down, decided here:
     closure's `string`-typed parameters elide inside it, its untyped
     parameters do not, and the enclosing function's elisions are untouched.
 11. **Only child expressions fold, on both markup targets.** Attribute
-    values keep `\Lintel\a/u/srcset/cls/sty` (rule 5), component arguments
+    values keep `\Lintl\a/u/srcset/cls/sty` (rule 5), component arguments
     stay named arguments, the `rfc` target stays helper-free, and the
     emitted call participates in the same line-preservation interleaving.
 12. **The declaration, not the call site, is the proof.** A
     `string $title` parameter is a string at every use in the body (PHP
     rejects `null` for a non-nullable parameter); what the compiler cannot
     know — shadowing, rebinding, dynamic binding — is exactly what the
-    scope rules above unprove. A false negative costs one `\Lintel\c()`
+    scope rules above unprove. A false negative costs one `\Lintl\c()`
     call at render time; a false elision would fold a rebound value.
 
 ## What the compiler does not do yet
 
 - **PHPStan-backed elision** (`int|float|bool|numeric-string|literal`) is
-  now the shipped `lintel analyze` path — `docs/type-elision.md` records
+  now the shipped `lintl analyze` path — `docs/type-elision.md` records
   the contract, the per-rule proofs and the elision-rate report; `bool`
   deliberately keeps the helper (render parity, recorded there). The
   `fn`-arrow bodies' own typed parameters still wait (rule 10).
 - **No runtime change.** The PHP runtime (T-07) is unaffected: the emitted
-  calls shrink, the `\Lintel\c()` helper itself stays for every wrapped
+  calls shrink, the `\Lintl\c()` helper itself stays for every wrapped
   child.

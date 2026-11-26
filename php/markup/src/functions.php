@@ -7,21 +7,21 @@ namespace Markup;
 /**
  * The RFC-parity rendering contract (docs/rfc-alignment.md: "Escaping is
  * the runtime's contract (escape-by-default)"). The compiler emits raw PHP
- * expressions — no `\Lintel\` helpers — so this runtime owns escaping at
+ * expressions — no `\Lintl\` helpers — so this runtime owns escaping at
  * print time under the SAME rules the string target's helpers enforce
  * (doc §6.8 attribute routing, §7.1 srcset): children escape by default
  * with `\Markup\Html` as the trusted sink; attribute values route by
  * attribute name (URL allowlist / class list / style charset / srcset
  * candidates); `on*` handlers and unsafe names throw.
  *
- * This package is deliberately standalone (no Lintel dependency): RFC
- * output must run with zero lock-in — the pitch of `lintel migrate
+ * This package is deliberately standalone (no Lintl dependency): RFC
+ * output must run with zero lock-in — the pitch of `lintl migrate
  * --to=native` (doc §0.1/§17).
  */
 const FLAGS = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5;
 
 /** Attribute names routed to the URL scheme allowlist — the same list the
- * string lowering emits `\Lintel\u()` for (emit.rs URL_ATTRS, doc §4.4). */
+ * string lowering emits `\Lintl\u()` for (emit.rs URL_ATTRS, doc §4.4). */
 const URL_ATTRS = [
     'href' => true, 'src' => true, 'action' => true, 'formaction' => true,
     'poster' => true, 'cite' => true, 'data' => true, 'manifest' => true,
@@ -126,7 +126,7 @@ function srcset_attr(string $name, mixed $v): string
     return ' '.$name.'="'.e(\implode(', ', $out)).'"';
 }
 
-/** class={…}: string | list | ['cls' => bool] — the \Lintel\cls() shapes. */
+/** class={…}: string | list | ['cls' => bool] — the \Lintl\cls() shapes. */
 function cls_attr(mixed $v): string
 {
     $out = [];

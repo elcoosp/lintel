@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # rename-readiness.sh <candidate> (M0 release-readiness card)
 #
-# The `lintel` crate name on crates.io is TAKEN by an unrelated package (a
-# JSON/YAML validator); `lintel-cli` and `lintel-core` are also taken. The
+# The `lintl` crate name on crates.io is TAKEN by an unrelated package (a
+# JSON/YAML validator); `lintl-cli` and `lintl-core` are also taken. The
 # maintainer is running a community naming process rather than picking a
 # new name here. This script reports the full rename surface for ANY
 # candidate WITHOUT renaming anything: it queries crates.io AND Packagist
@@ -17,7 +17,7 @@
 #
 # Usage:
 #   bash scripts/rename-readiness.sh <candidate>
-#   bash scripts/rename-readiness.sh mylintel
+#   bash scripts/rename-readiness.sh mylintl
 #
 # Network: queries crates.io/api/v1 and repo.packagist.org (both public,
 # read-only GET). If the network is unreachable, the script prints the
@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 CANDIDATE="${1:-}"
 if [ -z "$CANDIDATE" ]; then
     echo "usage: bash scripts/rename-readiness.sh <candidate>"
-    echo "  e.g. bash scripts/rename-readiness.sh mylintel"
+    echo "  e.g. bash scripts/rename-readiness.sh mylintl"
     exit 2
 fi
 
@@ -45,7 +45,7 @@ fi
 
 step() { printf '\n== %s ==\n' "$1"; }
 
-UA="lintel-rename-readiness/0.1 (release-readiness; https://github.com/elcoosp/lintel)"
+UA="lintl-rename-readiness/0.1 (release-readiness; https://github.com/elcoosp/lintl)"
 crates_collision=0
 packagist_collision=0
 network_ok=1
@@ -56,10 +56,10 @@ network_ok=1
 step "1. registry availability for '$CANDIDATE'"
 
 # The publishable Rust crates (release.yml's cargo publish order).
-RUST_CRATES=(lintel-diag lintel-core lintel-lsp lintel-cli)
+RUST_CRATES=(lintl-diag lintl-core lintl-lsp lintl-cli)
 # The composer packages (release.yml's Packagist update-package targets +
 # the dev-only ones the maintainer would also rename).
-COMPOSER_PKGS=(lintel/lintel lintel/runtime lintel/blade lintel/twig lintel/phpstan markup/markup)
+COMPOSER_PKGS=(lintl/lintl lintl/runtime lintl/blade lintl/twig lintl/phpstan markup/markup)
 
 echo "  crates.io:"
 for crate in "$CANDIDATE" \
@@ -122,11 +122,11 @@ fi
 
 # ----------------------------------------------------------------------------
 # 2. The would-change surface (every file/line that mentions the current
-#    `lintel` name as a crate/composer/namespace/URL/CLI string).
+#    `lintl` name as a crate/composer/namespace/URL/CLI string).
 # ----------------------------------------------------------------------------
-step "2. would-change surface (current 'lintel' name → '$CANDIDATE')"
+step "2. would-change surface (current 'lintl' name → '$CANDIDATE')"
 
-# The literal `lintel` token is scanned across tracked files (git ls-files)
+# The literal `lintl` token is scanned across tracked files (git ls-files)
 # so vendor/target/node_modules never appear. Each hit is classified by
 # kind (crate-name, composer-name, php-namespace, docs-url, repo-url,
 # cli-string, prose-mention) so the maintainer sees WHY it would change.
@@ -138,7 +138,7 @@ git ls-files -z | while IFS= read -r -d '' f; do
     esac
     # Skip the historical bench results (frozen artifacts, not rename targets).
     case "$f" in bench/results/*) continue ;; esac
-    hits=$(grep -nE 'lintel' "$f" 2>/dev/null || true)
+    hits=$(grep -nE 'lintl' "$f" 2>/dev/null || true)
     if [ -n "$hits" ]; then
         # Classify each hit so the maintainer sees WHY it would change.
         while IFS= read -r line; do
@@ -146,12 +146,12 @@ git ls-files -z | while IFS= read -r -d '' f; do
             rest="${line#*:}"
             kind=""
             case "$rest" in
-                *lintel-diag*|*lintel-core*|*lintel-lsp*|*lintel-cli*|*lintel-wasm*|*lintel-docs*|*lintel-fuzz*) kind="crate-name" ;;
-                *lintel/lintel*|*lintel/runtime*|*lintel/blade*|*lintel/twig*|*lintel/phpstan*|*markup/markup*) kind="composer-name" ;;
-                *"namespace Lintel"*|*"use Lintel"*|*"use function Lintel"*|*"Lintel\\\\"*) kind="php-namespace" ;;
-                *lintel.sh*) kind="docs-url" ;;
-                *elcoosp/lintel*) kind="repo-url" ;;
-                *"lintel init"*|*"lintel build"*|*"lintel check"*|*"lintel analyze"*|*"lintel migrate"*|*"lintel watch"*|*"lintel stats"*|*"name = \"lintel"*|*"\`lintel\`"*) kind="cli-string" ;;
+                *lintl-diag*|*lintl-core*|*lintl-lsp*|*lintl-cli*|*lintl-wasm*|*lintl-docs*|*lintl-fuzz*) kind="crate-name" ;;
+                *lintl/lintl*|*lintl/runtime*|*lintl/blade*|*lintl/twig*|*lintl/phpstan*|*markup/markup*) kind="composer-name" ;;
+                *"namespace Lintl"*|*"use Lintl"*|*"use function Lintl"*|*"Lintl\\\\"*) kind="php-namespace" ;;
+                *lintl.sh*) kind="docs-url" ;;
+                *elcoosp/lintl*) kind="repo-url" ;;
+                *"lintl init"*|*"lintl build"*|*"lintl check"*|*"lintl analyze"*|*"lintl migrate"*|*"lintl watch"*|*"lintl stats"*|*"name = \"lintl"*|*"\`lintl\`"*) kind="cli-string" ;;
                 *) kind="prose-mention" ;;
             esac
             printf '%s:%s [%s] %s\n' "$f" "$lineno" "$kind" "$rest"

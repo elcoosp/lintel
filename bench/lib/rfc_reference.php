@@ -6,7 +6,7 @@
  * rfc-alignment.md). The RFC itself is still under discussion and ships no
  * runtime; this stub exists so the `--target=rfc` competitor is *executed*
  * in the bench harness instead of skipped, under the SAME escaping contract
- * the doc pins (§4.9: "Escape-by-default ✔ + context-aware" on the Lintel
+ * the doc pins (§4.9: "Escape-by-default ✔ + context-aware" on the Lintl
  * side, escape-by-default is the RFC runtime's job). It is not part of the
  * compiler, the runtime or any shipped package.
  */

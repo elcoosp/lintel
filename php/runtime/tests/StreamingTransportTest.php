@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
-use Lintel\CliFlushTransport;
-use Lintel\FlushTransport;
-use Lintel\Html;
-use Lintel\Suspense;
-use Lintel\Tests\Support\StreamingPage;
+use Lintl\CliFlushTransport;
+use Lintl\FlushTransport;
+use Lintl\Html;
+use Lintl\Suspense;
+use Lintl\Tests\Support\StreamingPage;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 /**
  * The §10 flush transports (architecture doc §10: "FPM (flush +
@@ -81,18 +81,18 @@ final class StreamingTransportTest extends TestCase
      * arrived in the late-flushed chunk prints escaped. */
     public function test_fpm_adapter_over_http_server(): void
     {
-        $docroot = sys_get_temp_dir().'/lintel-stream-'.bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintl-stream-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $runtime = \dirname(__DIR__).'/src/functions.php';
         $router = <<<'PHP'
 <?php declare(strict_types=1);
 require {RUNTIME};
 
-use Lintel\FpmFlushTransport;
-use Lintel\Suspense;
+use Lintl\FpmFlushTransport;
+use Lintl\Suspense;
 
-use function Lintel\c;
-use function Lintel\stream_via;
+use function Lintl\c;
+use function Lintl\stream_via;
 
 $payload = '<script>alert("pwned")</script>';
 $page = (static function () use ($payload): \Generator {
@@ -181,6 +181,6 @@ PHP;
             && strpos((string) $out, '<template id="lt-1-r">') > strpos((string) $out, '</main>'),
             $out,
         );
-        self::assertStringContainsString('</template><script>lintelSwap("lt-1")</script>', $out);
+        self::assertStringContainsString('</template><script>lintlSwap("lt-1")</script>', $out);
     }
 }

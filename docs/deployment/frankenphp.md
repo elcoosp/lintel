@@ -1,7 +1,7 @@
 # Production deployment: FrankenPHP
 
 FrankenPHP embeds PHP inside Caddy — a resident worker mode with
-goroutine-scheduled PHP execution and native HTTP streaming. The Lintel
+goroutine-scheduled PHP execution and native HTTP streaming. The Lintl
 lane is `FrankenPHPFlushTransport`
 (`php/runtime/src/transports.php`): the same `echo + flush` streaming
 shape the FPM lane uses, plus `X-Accel-Buffering: no` and a
@@ -13,15 +13,15 @@ as the render produces it.
 - FrankenPHP (the official Docker image `dunglas/frankenphp` is the
   standard install; the Caddy builds with the `frankenphp` module are the
   non-Docker path). PHP ≥ 8.6 inside the image.
-- `composer require lintel/runtime` (the helpers + the transport). The
+- `composer require lintl/runtime` (the helpers + the transport). The
   transport detects the runtime (`FrankenPHPFlushTransport::isAvailable()`
   checks `FRANKENPHP_WORKER` and `SERVER_SOFTWARE`).
-- The Lintel compiler once, at deploy time.
+- The Lintl compiler once, at deploy time.
 
 ## 1. Compile the pages (deploy step)
 
 ```sh
-vendor/bin/lintel build --target=stream --out public/dist pages/
+vendor/bin/lintl build --target=stream --out public/dist pages/
 ```
 
 ## 2. The Caddyfile
@@ -63,9 +63,9 @@ differences are invisible to the page code):
 require __DIR__.'/../vendor/autoload.php';
 require __DIR__.'/dist/Home.php';
 
-use Lintel\FrankenPHPFlushTransport;
+use Lintl\FrankenPHPFlushTransport;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 stream_via(Home(name: 'Ada'), new FrankenPHPFlushTransport());
 ```
@@ -76,7 +76,7 @@ each flush to the HTTP/2/3 connection immediately.
 
 ## 4. A minimal page
 
-The same `pages/Home.lintel.php` as every other guide — the compiled
+The same `pages/Home.lintl.php` as every other guide — the compiled
 `Home()` returns the generator tree, `stream_via()` walks it:
 
 ```php
@@ -125,6 +125,6 @@ curl -sN http://127.0.0.1:8080/suspense | head -c 200
 - TLS/HTTP-3 comes from Caddy itself — no reverse proxy needed for the
   common case; keep `flush_interval -1` for streaming routes if a later
   Caddy version defaults to buffering.
-- The dev loop remains the `lintel watch` daemon
+- The dev loop remains the `lintl watch` daemon
   (`docs/daemon-protocol.md`); prod ships the compiled `dist/` tree —
-  the watcher and the `.lintel-cache/` build cache never serve traffic.
+  the watcher and the `.lintl-cache/` build cache never serve traffic.

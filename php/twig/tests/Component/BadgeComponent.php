@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig\Tests\Component;
+namespace Lintl\Twig\Tests\Component;
 
-use Lintel\Html;
-use Lintel\Twig\AsLintelComponent;
+use Lintl\Html;
+use Lintl\Twig\AsLintlComponent;
 
-use function Lintel\e;
+use function Lintl\e;
 
 /** The §11 DI fixture: a service component (trusted markup, prop escaped). */
-#[AsLintelComponent(name: 'Badge')]
+#[AsLintlComponent(name: 'Badge')]
 final class BadgeComponent
 {
     public function __invoke(string $name = ''): Html

@@ -2,7 +2,7 @@
 
 > Task T-00 (architecture doc §15) requires the exact lowering names for
 > `--target=rfc` to be recorded before the target ships. This page is that
-> record for `lintel-core` v0.2 work.
+> record for `lintl-core` v0.2 work.
 
 ## Source of truth
 
@@ -29,9 +29,9 @@ under discussion, target PHP 8.7/9.0, php-src PR #22661):
 | `<br />` | `new \Markup\Element('br', [], [])` (empty children; voids render themselves) |
 
 Details the doc does not pin down, decided here so the behavior is
-intentional and testable (`crates/lintel-core/tests/rfc_target.rs`):
+intentional and testable (`crates/lintl-core/tests/rfc_target.rs`):
 
-1. **No `\Lintel\` helpers.** The `rfc` target emits zero `\Lintel\*()`
+1. **No `\Lintl\` helpers.** The `rfc` target emits zero `\Lintl\*()`
    calls: dynamic children/attributes pass through as raw PHP expressions
    because escaping under the RFC model is the runtime's job
    (escape-by-default). The string target keeps the context-aware helpers.
@@ -57,7 +57,7 @@ intentional and testable (`crates/lintel-core/tests/rfc_target.rs`):
 
 ## Migration path
 
-`Target::Rfc` is the lowering that `lintel migrate --to=native` (doc §0.1)
+`Target::Rfc` is the lowering that `lintl migrate --to=native` (doc §0.1)
 will emit once the RFC stabilizes. Recompiling a file with
 `Options { target: Target::Rfc }` produces RFC-shaped output today, which
 keeps the migration rehearsal (doc §4.9) runnable against real code.
@@ -76,15 +76,15 @@ closes it:
   escapes every plain string child and scalar attribute value at print
   time; `\Markup\Html::unsafeRaw()` is the only trusted sink; unknown
   child types throw. Attributes route by name under the SAME rules the
-  string target's emitted `\Lintel\a()/u()/cls()/sty()/srcset()` calls
+  string target's emitted `\Lintl\a()/u()/cls()/sty()/srcset()` calls
   enforce (the §4.4 URL_ATTRS list, §7.1 srcset candidates, the `on*`
   and name-shape rejections) — so the two targets' security contracts
   are byte-identical.
 - **Parity is executable:** the e2e (`php/markup/tests/MarkupE2eTest.php`)
   compiles ONE fixture with `--target=rfc` and `--target=string` through
   the real binary and asserts `\Markup\render(...)` produces the same
-  bytes `\Lintel\c(...)` does — hostile payloads print escaped and
+  bytes `\Lintl\c(...)` does — hostile payloads print escaped and
   hostile URL schemes block in both lanes.
-- The package is deliberately standalone (no Lintel dependency): RFC
-  output must run with zero lock-in, the `lintel migrate --to=native`
+- The package is deliberately standalone (no Lintl dependency): RFC
+  output must run with zero lock-in, the `lintl migrate --to=native`
   pitch (doc §0.1/§17 Year 3 "RFC convergence").

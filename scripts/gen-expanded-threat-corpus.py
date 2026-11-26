@@ -12,8 +12,8 @@ Sources (both public, attribution preserved in the emitted corpus file):
 Each payload rides a dynamic child (the `c()` lane) AND, when it is
 URL/scheme-shaped, a dynamic URL attribute (the `u()` lane). The corpus
 is emitted as a PHP data-provider class consumed by the new
-ExpandedThreatCorpusTest; that test compiles each `.lintel.php` source
-with the real `lintel` binary, executes the compiled PHP under real PHP,
+ExpandedThreatCorpusTest; that test compiles each `.lintl.php` source
+with the real `lintl` binary, executes the compiled PHP under real PHP,
 and asserts the rendered output carries NO live attack surface:
   - no raw `<script>` tag from a dynamic value
   - no `javascript:`/`vbscript:`/`data:text/html` scheme in a rendered URL
@@ -21,7 +21,7 @@ and asserts the rendered output carries NO live attack surface:
   - no `</` close-tag breakout from a dynamic child
 
 If a payload's source fails to COMPILE (a validator rejection — e.g. an
-`onclick={...}` spread is LNT0301), the test asserts the rejection code
+`onclick={...}` spread is LNL0301), the test asserts the rejection code
 rather than the rendered output: a compile-time refusal is the strongest
 inertness. The corpus counts BOTH classes (compiled-inert + rejected).
 
@@ -125,12 +125,12 @@ def main() -> int:
     lines.append("// Every payload rides a dynamic child (the c() lane) and, when")
     lines.append("// URL/scheme-shaped, a dynamic URL attribute (the u() lane). The")
     lines.append("// companion PHPUnit test (ExpandedThreatCorpusTest) compiles each")
-    lines.append("// source with the real lintel binary, executes the compiled PHP under")
+    lines.append("// source with the real lintl binary, executes the compiled PHP under")
     lines.append("// real PHP, and asserts the rendered output carries NO live attack")
-    lines.append("// surface. A compile-time validator rejection (LNT0301 etc.) is the")
+    lines.append("// surface. A compile-time validator rejection (LNL0301 etc.) is the")
     lines.append("// strongest inertness and is counted as a passing vector.")
     lines.append("")
-    lines.append("namespace Lintel\\Tests;")
+    lines.append("namespace Lintl\\Tests;")
     lines.append("")
     lines.append("final class ExpandedThreatCorpus")
     lines.append("{")

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Bench;
+namespace Lintl\Bench;
 
 use Illuminate\Events\Dispatcher;
 use Illuminate\Filesystem\Filesystem;
@@ -19,7 +19,7 @@ use Twig\Loader\FilesystemLoader;
  * The competitor template engines (§9.2: hand-written echo as the floor,
  * Blade and Twig pre-compiled, Plates) wired standalone, plus the template
  * sources each scenario renders. Every engine renders the SAME data as the
- * Lintel/echo/rfc lanes; escaping is each engine's default (Blade `{{ }}`
+ * Lintl/echo/rfc lanes; escaping is each engine's default (Blade `{{ }}`
  * and Twig autoescape use htmlspecialchars, Plates templates call e()
  * explicitly — the same ENT_QUOTES|SUBSTITUTE|HTML5 matrix).
  */
@@ -88,7 +88,7 @@ final class Engines
 final class BladeTemplates
 {
     public const S1 = <<<'BLADE'
-<div class="page"><header class="hero"><h1>{{ $d['title'] }}</h1><nav><a href="https://lintel.sh">docs</a><a href="https://lintel.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>{{ $d['note'] }} · {{ $d['year'] }} {{ $d['brand'] }}</small></footer></main></div>
+<div class="page"><header class="hero"><h1>{{ $d['title'] }}</h1><nav><a href="https://lintl.sh">docs</a><a href="https://lintl.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>{{ $d['note'] }} · {{ $d['year'] }} {{ $d['brand'] }}</small></footer></main></div>
 BLADE;
 
     public const S2 = <<<'BLADE'
@@ -127,7 +127,7 @@ BLADE;
 final class TwigTemplates
 {
     public const S1 = <<<'TWIG'
-<div class="page"><header class="hero"><h1>{{ d.title }}</h1><nav><a href="https://lintel.sh">docs</a><a href="https://lintel.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>{{ d.note }} · {{ d.year }} {{ d.brand }}</small></footer></main></div>
+<div class="page"><header class="hero"><h1>{{ d.title }}</h1><nav><a href="https://lintl.sh">docs</a><a href="https://lintl.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>{{ d.note }} · {{ d.year }} {{ d.brand }}</small></footer></main></div>
 TWIG;
 
     public const S2 = <<<'TWIG'
@@ -157,7 +157,7 @@ TWIG;
 final class PlatesTemplates
 {
     public const S1 = <<<'PLATES'
-<div class="page"><header class="hero"><h1><?=$this->e($d['title'])?></h1><nav><a href="https://lintel.sh">docs</a><a href="https://lintel.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small><?=$this->e($d['note'])?> · <?=$this->e((string) $d['year'])?> <?=$this->e($d['brand'])?></small></footer></main></div>
+<div class="page"><header class="hero"><h1><?=$this->e($d['title'])?></h1><nav><a href="https://lintl.sh">docs</a><a href="https://lintl.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author's line numbers, not the compiled file's.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small><?=$this->e($d['note'])?> · <?=$this->e((string) $d['year'])?> <?=$this->e($d['brand'])?></small></footer></main></div>
 PLATES;
 
     public const S2 = <<<'PLATES'

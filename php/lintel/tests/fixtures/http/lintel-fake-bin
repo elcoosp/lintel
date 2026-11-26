@@ -1,5 +1,0 @@
-#!/bin/sh
-# Fixture "lintel binary" for the §12 installer tests: a tiny stand-in the
-# installer can download, checksum-verify and cache. The real binaries are
-# release engineering (T-18); nothing live is invented here.
-echo "lintel-fake-bin fixture"

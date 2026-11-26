@@ -17,9 +17,9 @@ the pinned runtime and the methodology page links the raw JSON.**
 | S5 | streaming TTFB with 3 slow boundaries | the `stream` target |
 
 Competitors per §9.2: hand-written `echo` (the floor), Blade (compiled,
-illuminate/view), Twig (compiled), Plates, the lintel `--target=rfc`
-lowering, and the lintel string target. S5 adds a hand-written
-generator-chunk floor and the lintel stream target.
+illuminate/view), Twig (compiled), Plates, the lintl `--target=rfc`
+lowering, and the lintl string target. S5 adds a hand-written
+generator-chunk floor and the lintl stream target.
 
 ## Settings matrix
 
@@ -38,7 +38,7 @@ with `-d` flags), 30 timed renders per point after 3 warm-ups.
   does not), the metric is recorded as `null` in the JSON and the summary
   says so — no number is invented. The CI bench job re-probes on the pinned
   image.
-- **compile throughput**: `lintel build --out` over 100 distinct sources,
+- **compile throughput**: `lintl build --out` over 100 distinct sources,
   cold (fresh process, cold page cache) and warm (second run), files/s.
 
 ## Runtime pinning
@@ -77,7 +77,7 @@ the compiler core is frozen this session.
 
 ```sh
 # native (no Docker):
-LINTEL_BIN=/path/to/lintel php bench/run.php
+LINTL_BIN=/path/to/lintl php bench/run.php
 
 # pinned (Docker):
 make bench

@@ -1,7 +1,7 @@
 # Production deployment: RoadRunner
 
 RoadRunner runs the PHP application as a resident worker pool behind a
-Go HTTP server — no FPM, no per-request process spawn. The Lintel lane
+Go HTTP server — no FPM, no per-request process spawn. The Lintl lane
 uses the `RoadRunnerFlushTransport`
 (`php/runtime/src/transports.php`): RR's PHP worker API is pull-based, so
 `stream_via()` runs the render first with the transport queueing every
@@ -20,16 +20,16 @@ the flush order — the invariant the lane fails the bench run on.
 - RoadRunner ≥ 2025.1 (the CI verification lane pins
   `roadrunner-2025.1.15-linux-amd64`).
 - PHP 8.6 with `ext-sockets`/`ext-pcntl` (the RR worker lifecycle).
-- `composer require lintel/runtime spiral/roadrunner-http` — the
+- `composer require lintl/runtime spiral/roadrunner-http` — the
   `spiral/roadrunner-http` package the transport's `HttpWorkerInterface`
   comes from.
-- The Lintel compiler once, at deploy time (`vendor/bin/lintel` via the
+- The Lintl compiler once, at deploy time (`vendor/bin/lintl` via the
   installer plugin, or a release binary).
 
 ## 1. Compile the pages (deploy step)
 
 ```sh
-vendor/bin/lintel build --target=stream --out public/dist pages/
+vendor/bin/lintl build --target=stream --out public/dist pages/
 ```
 
 ## 2. The worker script
@@ -42,9 +42,9 @@ vendor/bin/lintel build --target=stream --out public/dist pages/
 require __DIR__.'/vendor/autoload.php';
 require __DIR__.'/public/dist/Home.php';
 
-use Lintel\RoadRunnerFlushTransport;
+use Lintl\RoadRunnerFlushTransport;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 // One long-lived worker loop: each request renders and responds in place.
 $rr = new \Spiral\RoadRunner\Http\HttpWorker(\Spiral\RoadRunner\Worker::create());
@@ -94,7 +94,7 @@ rr serve -c .rr.yaml
 
 ## 4. A minimal page
 
-The same `pages/Home.lintel.php` as the FPM guide compiles unchanged —
+The same `pages/Home.lintl.php` as the FPM guide compiles unchanged —
 `Home()` returns the generator tree; only the transport differs between
 lanes. That is the §10 sync-compat contract: the same source compiles to
 string target (fully buffered) or stream target (progressive), and the
@@ -134,5 +134,5 @@ curl -sN http://127.0.0.1:8080/suspense
   listener; wire it to your deploy hook.
 - Measure the win: T-12's daemon-vs-spawn numbers live in the same
   spirit — a resident worker pool removes the per-request process spawn
-  FPM pays; the `lintel watch` dev daemon (`docs/daemon-protocol.md`)
+  FPM pays; the `lintl watch` dev daemon (`docs/daemon-protocol.md`)
   mirrors that design for the dev loop.

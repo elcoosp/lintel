@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Bench;
+namespace Lintl\Bench;
 
 /**
  * Metric math and artifact writers for the §9.2 harness: percentile

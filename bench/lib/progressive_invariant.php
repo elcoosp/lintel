@@ -15,7 +15,7 @@ declare(strict_types=1);
 
 require __DIR__.'/../vendor/autoload.php';
 
-use Lintel\Bench\ProgressiveTiming;
+use Lintl\Bench\ProgressiveTiming;
 
 try {
     $facts = ProgressiveTiming::run();

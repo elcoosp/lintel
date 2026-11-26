@@ -1,6 +1,6 @@
 # The T-13 playground (task card: WASM + Playground)
 
-The Lintel compiler running in the browser as WebAssembly: write JSX-in-PHP on
+The Lintl compiler running in the browser as WebAssembly: write JSX-in-PHP on
 the left, watch the compiled plain PHP appear on the right, diagnostics panel
 below, examples dropdown up top, shareable permalinks (`#src=…&t=…`) and a
 "copy compiled" button.
@@ -8,7 +8,7 @@ below, examples dropdown up top, shareable permalinks (`#src=…&t=…`) and a
 **Acceptance (T-13, verbatim):** *loads <1 MB gz; works offline after first
 load.*
 
-- The size budget is asserted by `crates/lintel-wasm/tests/size_budget.rs`:
+- The size budget is asserted by `crates/lintl-wasm/tests/size_budget.rs`:
   the `wasm32-unknown-unknown` bundle (built `opt-level=z` + fat LTO,
   `strip = true`) must gzip to under 1 MB — as must the whole page payload.
 - The page makes zero external requests; `sw.js` precaches every asset, so
@@ -40,11 +40,11 @@ constant in `sw.js` so already-installed service workers refresh.
 
 ## API surface
 
-The crate exposes exactly two functions (`crates/lintel-wasm/src/lib.rs`):
+The crate exposes exactly two functions (`crates/lintl-wasm/src/lib.rs`):
 
 - `compile_source(source, target)` → JSON envelope
   `{ok, php, diagnostics, error}`; each diagnostic carries the machine fields
   of `docs/diagnostics-json.md` plus a rendered form for the panel.
-- `lintel_version()` → the compiler version the footer shows.
+- `lintl_version()` → the compiler version the footer shows.
 
 The target words are the CLI's: `string` (default), `stream`, `rfc`.

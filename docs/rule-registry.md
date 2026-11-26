@@ -1,29 +1,29 @@
 # Rule registry: the self-describing validation-rule seam
 
-> Architecture doc §4.4/§18 pin the diagnostic contracts (stable `LNTxxxx`
+> Architecture doc §4.4/§18 pin the diagnostic contracts (stable `LNLxxxx`
 > codes, a `help:` line on every diagnostic), and §21.1 lists the
-> `docs/errors/LNT*.md` index pages as not yet written. Consumers —
+> `docs/errors/LNL*.md` index pages as not yet written. Consumers —
 > docs-site generators, editor integrations, CI reporters — need that
 > knowledge in machine-readable form *today*, without scraping prose or
 > rendered snippets. This page records the exact contract of the
 > rule-registry seam: `validate::RuleMeta`, the
 > `ValidationRule::meta` trait method, `validate::builtin_rule_metas` /
 > `validate::registry_metas` (re-exported at the crate root) and the CLI's
-> `lintel rules` subcommand. Testable in
-> `crates/lintel-core/tests/rule_registry.rs` and
-> `crates/lintel-cli/tests/cli.rs`, demoed by
-> `examples/rule_registry.rs` + `crates/lintel-cli/examples/rules_library.rs`,
+> `lintl rules` subcommand. Testable in
+> `crates/lintl-core/tests/rule_registry.rs` and
+> `crates/lintl-cli/tests/cli.rs`, demoed by
+> `examples/rule_registry.rs` + `crates/lintl-cli/examples/rules_library.rs`,
 > benched by the `rules` group.
 
 ## Source of truth
 
-- `crates/lintel-core/src/validate.rs` — `RuleMeta` (id, codes, summary),
+- `crates/lintl-core/src/validate.rs` — `RuleMeta` (id, codes, summary),
   the `meta()` default on the `ValidationRule` trait, the eight built-in
   classifications and the two listing functions.
-- `crates/lintel-diag/src/lib.rs` — `Code::lnt`, the stable `LNTxxxx`
+- `crates/lintl-diag/src/lib.rs` — `Code::lnt`, the stable `LNLxxxx`
   strings the `codes` field reports, and `json_escape`, the shared
   escaping `RuleMeta::to_json` uses.
-- `crates/lintel-cli/src/lib.rs` — the `rules` subcommand and its
+- `crates/lintl-cli/src/lib.rs` — the `rules` subcommand and its
   `--format=text|json` rendering.
 
 ## Exact contract
@@ -31,7 +31,7 @@
 1. **A rule's identity is a `RuleMeta`.** Three stable fields: `id` (a
    unique kebab-case machine key, e.g. `"builtin-shadow"` — the key a docs
    page or editor integration addresses the rule by; built-in ids never
-   change once shipped), `codes` (the `LNTxxxx` classes the rule can emit,
+   change once shipped), `codes` (the `LNLxxxx` classes the rule can emit,
    in emission order — the order a single node's diagnostics arrive in),
    and `summary` (one line; the diagnostics' `help:` lines carry the
    specifics).
@@ -46,17 +46,17 @@
 3. **The built-in registry is fully classified — and pinned.** All eight
    built-in rules carry meta, and the integration tests assert the
    registry's `codes` union equals *exactly* the eight rule-emittable
-   classes (`LNT0201`–`LNT0205`, `LNT0301`–`LNT0302`, `LNT0401`): a new
+   classes (`LNL0201`–`LNL0205`, `LNL0301`–`LNL0302`, `LNL0401`): a new
    `Code` variant cannot ship without a rule classification or an
-   intentional parse-class exemption. Parse classes (`LNT01xx`) never
+   intentional parse-class exemption. Parse classes (`LNL01xx`) never
    appear in a registry: they are scanner output, never rule-selected.
 4. **`to_json()` is one stable JSON line** — the `Diagnostic::to_json`
    contract applied to a registry entry: no trailing newline, field order
-   `id`, `codes`, `summary`, the shared `lintel_diag::json_escape`
-   escaping, `codes` a JSON array of `LNTxxxx` strings (`[]` for a
-   policy-only rule). `lintel rules --format=json` writes one object per
+   `id`, `codes`, `summary`, the shared `lintl_diag::json_escape`
+   escaping, `codes` a JSON array of `LNLxxxx` strings (`[]` for a
+   policy-only rule). `lintl rules --format=json` writes one object per
    rule followed by `\n` (JSON Lines).
-5. **`lintel rules` is compile-time knowledge.** The subcommand takes no
+5. **`lintl rules` is compile-time knowledge.** The subcommand takes no
    paths (a path is a usage error: the registry does not depend on any
    source), accepts only the shared `--format=text|json` flag (plus
    `--help`/`--version`), always exits 0, and renders the built-in
@@ -75,10 +75,10 @@
   `check` (the static-handler rule emits a warning); a registry entry does
   not promise one until a second severity-expressing rule shape exists.
 - **Per-code docs pages cover five of the ten diagnostic classes.**
-  `docs/errors/` ships `LNT0102`, `LNT0201`, `LNT0202`, `LNT0301` and
-  `LNT0401`; `LNT0101`, `LNT0203`, `LNT0204`, `LNT0205` and `LNT0302`
+  `docs/errors/` ships `LNL0102`, `LNL0201`, `LNL0202`, `LNL0301` and
+  `LNL0401`; `LNL0101`, `LNL0203`, `LNL0204`, `LNL0205` and `LNL0302`
   are still future work (the machine-readable registry remains the
-  compiler-side prerequisite for the remaining `docs/errors/LNT*.md`
+  compiler-side prerequisite for the remaining `docs/errors/LNL*.md`
   index pages, architecture §21.1).
 - **No rule configuration surface.** A registry entry carries identity
   only; tuning rules (thresholds, allow-lists) has no seam yet.

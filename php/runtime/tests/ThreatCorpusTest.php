@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
 use InvalidArgumentException;
-use Lintel\Html;
-use Lintel\Suspense;
+use Lintl\Html;
+use Lintl\Suspense;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\a;
-use function Lintel\attrs;
-use function Lintel\c;
-use function Lintel\cls;
-use function Lintel\e;
-use function Lintel\srcset;
-use function Lintel\stream;
-use function Lintel\sty;
-use function Lintel\u;
+use function Lintl\a;
+use function Lintl\attrs;
+use function Lintl\c;
+use function Lintl\cls;
+use function Lintl\e;
+use function Lintl\srcset;
+use function Lintl\stream;
+use function Lintl\sty;
+use function Lintl\u;
 
 /**
  * The §7.2 threat corpus (task-card T-07): every attack vector the
@@ -72,12 +72,12 @@ final class ThreatCorpusTest extends TestCase
     /** §7.1: the allowlist plus relative URLs pass through. */
     public function test_allowed_schemes_and_relative_urls_pass(): void
     {
-        foreach (['https://lintel.sh', 'http://lintel.sh', 'mailto:x@y.z', 'tel:+123', 'sms:+123', '/relative', 'img.png', '#anchor'] as $url) {
+        foreach (['https://lintl.sh', 'http://lintl.sh', 'mailto:x@y.z', 'tel:+123', 'sms:+123', '/relative', 'img.png', '#anchor'] as $url) {
             self::assertSame(' href="'.$url.'"', u('href', $url), $url);
         }
-        self::assertSame(' href="https://lintel.sh"', u('href', 'https://lintel.sh'));
+        self::assertSame(' href="https://lintl.sh"', u('href', 'https://lintl.sh'));
         // The scheme check is case-insensitive, the emitted value is as written.
-        self::assertSame(' href="HTTPS://LINTEL.SH"', u('href', 'HTTPS://LINTEL.SH'));
+        self::assertSame(' href="HTTPS://LINTL.SH"', u('href', 'HTTPS://LINTL.SH'));
     }
 
     /** §7.2: attribute-breakout `" onmouseover=` — the quote escapes, the value stays inside the attribute. */
@@ -221,8 +221,8 @@ final class ThreatCorpusTest extends TestCase
     /** §6.8: spread routing — each key goes through the right helper, hostile keys rejected first. */
     public function test_spread_routing_per_key(): void
     {
-        $out = attrs(['href' => 'https://lintel.sh', 'class' => 'btn', 'style' => ['color' => 'red'], 'data-id' => '7']);
-        self::assertSame(' href="https://lintel.sh" class="btn" style="color:red" data-id="7"', $out);
+        $out = attrs(['href' => 'https://lintl.sh', 'class' => 'btn', 'style' => ['color' => 'red'], 'data-id' => '7']);
+        self::assertSame(' href="https://lintl.sh" class="btn" style="color:red" data-id="7"', $out);
         $out = attrs(['hidden' => true, 'title' => null]);
         self::assertSame(' hidden', $out);
     }
@@ -240,8 +240,8 @@ final class ThreatCorpusTest extends TestCase
             srcset('srcset', "java\tscript:alert(1) 2x"),
         );
         self::assertSame(
-            ' srcset="https://lintel.sh/img.png 2x, about:invalid#blocked 4x"',
-            srcset('srcset', 'https://lintel.sh/img.png 2x, data:text/html,x 4x'),
+            ' srcset="https://lintl.sh/img.png 2x, about:invalid#blocked 4x"',
+            srcset('srcset', 'https://lintl.sh/img.png 2x, data:text/html,x 4x'),
         );
     }
 
@@ -288,7 +288,7 @@ final class ThreatCorpusTest extends TestCase
     }
 
     /** §10 streaming threat case: a hostile value inside a resolved streamed
-     * subtree rides through `c()` exactly like compiled output (`yield \Lintel\c($x)`),
+     * subtree rides through `c()` exactly like compiled output (`yield \Lintl\c($x)`),
      * so the streaming path cannot bypass escaping. */
     public function test_suspense_subtree_escapes_dynamic_chunks(): void
     {

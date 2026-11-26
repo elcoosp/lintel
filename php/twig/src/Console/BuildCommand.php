@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig\Console;
+namespace Lintl\Twig\Console;
 
-use Lintel\Dev\Loader;
+use Lintl\Dev\Loader;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * `bin/console lintel:build` (§11 Symfony wrapper, §17.1-Q2's remaining
- * Symfony surface): compiles the app's `.lintel.php` sources with the
- * lintel binary — artifacts into the configured cache dir and the T-31
- * `lintel.json` manifest into the workspace root (the common ancestor of
+ * `bin/console lintl:build` (§11 Symfony wrapper, §17.1-Q2's remaining
+ * Symfony surface): compiles the app's `.lintl.php` sources with the
+ * lintl binary — artifacts into the configured cache dir and the T-31
+ * `lintl.json` manifest into the workspace root (the common ancestor of
  * the source dirs and the cache dir — the project root, wherever the
  * console runs from) — the same prod warm-up the artisan lane drives.
  * Paths arrive as constructor arguments (the kernel extension wires them
@@ -22,10 +22,10 @@ use Symfony\Component\Console\Output\OutputInterface;
  * it booted in. Diagnostics stream RAW — they carry raw `<…>` markup the
  * output formatter must not eat.
  */
-#[AsCommand(name: 'lintel:build', description: 'Compile the Lintel sources (§11): artifacts into the cache dir + the lintel.json manifest')]
+#[AsCommand(name: 'lintl:build', description: 'Compile the Lintl sources (§11): artifacts into the cache dir + the lintl.json manifest')]
 final class BuildCommand extends Command
 {
-    /** @param list<string> $sourceDirs dirs holding `<Name>.lintel.php` */
+    /** @param list<string> $sourceDirs dirs holding `<Name>.lintl.php` */
     public function __construct(
         private readonly string $cacheDir,
         private readonly array $sourceDirs,

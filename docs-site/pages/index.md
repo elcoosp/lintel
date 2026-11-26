@@ -1,11 +1,11 @@
-# Lintel — JSX for PHP, compiled to plain PHP
+# Lintl — JSX for PHP, compiled to plain PHP
 
-Lintel is a compiler that lets you write PHP components with JSX-style
+Lintl is a compiler that lets you write PHP components with JSX-style
 markup and compiles them to **plain PHP string concatenation**. The output
 is readable PHP: auto-escaped by default, line numbers preserved, no virtual
 DOM, no runtime past a handful of small helpers. It runs on PHP 8.6+ today
 and lowers to the same markup shape the native JSX-in-PHP RFC for PHP 8.7/9
-proposes, so a future `lintel migrate --to=native` is a lowering change, not
+proposes, so a future `lintl migrate --to=native` is a lowering change, not
 a rewrite.
 
 ```php
@@ -29,7 +29,7 @@ compiles to:
 ```php
 function Card(string $title, string $body): Html
 {
-    return new \Lintel\Html('<div class="card"><h2>'
+    return new \Lintl\Html('<div class="card"><h2>'
  . \htmlspecialchars($title, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5) . '</h2><p>'
  . \htmlspecialchars($body, \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5) . '</p></div>'
 );
@@ -54,5 +54,5 @@ server involved.
   rules that reject sinks instead of escaping them.
 - [Benchmarks](/benchmarks/) — the reproducible §9.2 harness, the committed
   raw JSON every number comes from, and the publishing rule.
-- [Error index](/errors/) — every `LNTxxxx` diagnostic, served exactly at
+- [Error index](/errors/) — every `LNLxxxx` diagnostic, served exactly at
   the path the compiler prints.

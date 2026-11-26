@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Bench;
+namespace Lintl\Bench;
 
 /**
  * The §9.2 scenarios S1–S5. Each scenario carries:
- *  - `source`: the .lintel.php source every lintel lane is compiled from
+ *  - `source`: the .lintl.php source every lintl lane is compiled from
  *    (string / rfc / stream targets of the SAME source),
- *  - `lintel_call`: the compiled component invocation (data ⇒ output),
+ *  - `lintl_call`: the compiled component invocation (data ⇒ output),
  *  - `competitors`: echo (hand-written floor), blade, twig, plates, and the
  *    compiled rfc lane, each rendering the SAME data shape.
  *
@@ -25,7 +25,7 @@ final class Scenarios
 
     public static function s1Data(): array
     {
-        return ['title' => 'Lintel Bench', 'brand' => 'lintel.sh', 'year' => 2026, 'note' => 'dynamic note'];
+        return ['title' => 'Lintl Bench', 'brand' => 'lintl.sh', 'year' => 2026, 'note' => 'dynamic note'];
     }
 
     /** @return array<int, array{id: int, name: string, score: float}> */
@@ -50,7 +50,7 @@ final class Scenarios
     {
         $links = [];
         for ($i = 0; $i < 200; $i++) {
-            $links[] = ['href' => "https://lintel.sh/item/$i", 'label' => "item $i", 'active' => $i % 3 === 0, 'kind' => 'nav-link'];
+            $links[] = ['href' => "https://lintl.sh/item/$i", 'label' => "item $i", 'active' => $i % 3 === 0, 'kind' => 'nav-link'];
         }
 
         return $links;
@@ -61,19 +61,19 @@ final class Scenarios
         return ['ms' => 5, 'title' => 'Streaming TTFB'];
     }
 
-    /** The shared preamble every .lintel.php scenario source uses. */
+    /** The shared preamble every .lintl.php scenario source uses. */
     private const SRC_HEAD = <<<'PHP'
 <?php
 
 declare(strict_types=1);
 
-namespace Lintel\Bench\Gen;
+namespace Lintl\Bench\Gen;
 
-use Lintel\Html;
+use Lintl\Html;
 
 PHP;
 
-    /** @return array<string, array{title: string, source: string, lintel_call: string, competitors: array<string, callable}> */
+    /** @return array<string, array{title: string, source: string, lintl_call: string, competitors: array<string, callable}> */
     public static function all(string $compiledDir): array
     {
         return [
@@ -93,7 +93,7 @@ function S1Page(array $d): Html
     return <div class="page">
         <header class="hero">
             <h1>{$d['title']}</h1>
-            <nav><a href="https://lintel.sh">docs</a><a href="https://lintel.sh/play">playground</a></nav>
+            <nav><a href="https://lintl.sh">docs</a><a href="https://lintl.sh/play">playground</a></nav>
         </header>
         <main>
             <section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section>
@@ -114,9 +114,9 @@ PHP;
         return [
             'title' => 'S1 static-heavy page (95% static) — measures folding',
             'source' => $source,
-            'lintel_call' => 'Lintel\\Bench\\Gen\\S1Page($bench_data)',
+            'lintl_call' => 'Lintl\\Bench\\Gen\\S1Page($bench_data)',
             'competitors' => [
-                'echo' => static fn (): string => '<div class="page"><header class="hero"><h1>'.\htmlspecialchars($d['title'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'</h1><nav><a href="https://lintel.sh">docs</a><a href="https://lintel.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author\'s line numbers, not the compiled file\'s.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>'.\htmlspecialchars($d['note'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').' · '.$d['year'].' '.$d['brand'].'</small></footer></main></div>',
+                'echo' => static fn (): string => '<div class="page"><header class="hero"><h1>'.\htmlspecialchars($d['title'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').'</h1><nav><a href="https://lintl.sh">docs</a><a href="https://lintl.sh/play">playground</a></nav></header><main><section class="intro"><p>Markup is an expression. JSX compiles ahead of time to plain PHP string concat, line numbers are preserved, and every dynamic value is escaped by default.</p></section><section class="features"><div class="feature"><h2>Line preserving</h2><p>Stack traces and PHPStan report the author\'s line numbers, not the compiled file\'s.</p></div><div class="feature"><h2>Secure by default</h2><p>The unsafe escape hatch is one greppable call: Html::unsafeRaw.</p></div><div class="feature"><h2>Zero runtime</h2><p>Production runs vendor-free compiled PHP plus ~300 lines of helpers.</p></div><div class="feature"><h2>Measured</h2><p>Every performance claim links to this reproducible benchmark.</p></div></section><footer><small>'.\htmlspecialchars($d['note'], \ENT_QUOTES | \ENT_SUBSTITUTE | \ENT_HTML5, 'UTF-8').' · '.$d['year'].' '.$d['brand'].'</small></footer></main></div>',
                 'blade' => static fn (object $engine): string => $engine->make('s1', ['d' => $d])->render(),
                 'twig' => static fn (object $engine): string => $engine->render('s1.html.twig', ['d' => $d]),
                 'plates' => static fn (object $engine): string => $engine->render('s1', ['d' => $d]),
@@ -143,7 +143,7 @@ PHP;
         return [
             'title' => 'S2 1,000-row table with escaping — measures c()/a() overhead',
             'source' => $source,
-            'lintel_call' => 'Lintel\\Bench\\Gen\\S2Table($bench_data)',
+            'lintl_call' => 'Lintl\\Bench\\Gen\\S2Table($bench_data)',
             'competitors' => [
                 'echo' => static function () use ($rows, $esc): string {
                     $o = '';
@@ -182,7 +182,7 @@ PHP;
         return [
             'title' => 'S3 component depth 10 × fan-out 3 — measures Html allocation',
             'source' => $source,
-            'lintel_call' => 'Lintel\\Bench\\Gen\\S3Tree($bench_data)',
+            'lintl_call' => 'Lintl\\Bench\\Gen\\S3Tree($bench_data)',
             'competitors' => [
                 'echo' => static function () use ($depth): string {
                     $node = static function (int $d) use (&$node): string {
@@ -221,7 +221,7 @@ PHP;
         return [
             'title' => 'S4 attribute-heavy (class, href, spread) — measures helper cost',
             'source' => $source,
-            'lintel_call' => 'Lintel\\Bench\\Gen\\S4Links($bench_data)',
+            'lintl_call' => 'Lintl\\Bench\\Gen\\S4Links($bench_data)',
             'competitors' => [
                 'echo' => static function () use ($links, $esc): string {
                     $o = '';
@@ -279,7 +279,7 @@ PHP;
             'title' => 'S5 streaming TTFB with 3 slow boundaries (5 ms simulated I/O each)',
             'source' => $source,
             'stream_source' => $streamSource,
-            'lintel_call' => 'Lintel\\Bench\\Gen\\S5Page($bench_data)',
+            'lintl_call' => 'Lintl\\Bench\\Gen\\S5Page($bench_data)',
             'competitors' => [],
         ];
     }

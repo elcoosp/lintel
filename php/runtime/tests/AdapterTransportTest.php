@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests;
+namespace Lintl\Tests;
 
-use Lintel\FrankenPHPFlushTransport;
-use Lintel\Html;
-use Lintel\ReactPHPFlushTransport;
-use Lintel\RoadRunnerFlushTransport;
-use Lintel\Suspense;
-use Lintel\SwooleFlushTransport;
-use Lintel\Tests\Support\FakeReactResponse;
-use Lintel\Tests\Support\FakeRoadRunnerHttpWorker;
-use Lintel\Tests\Support\FakeSwooleResponse;
-use Lintel\Tests\Support\StreamingPage;
+use Lintl\FrankenPHPFlushTransport;
+use Lintl\Html;
+use Lintl\ReactPHPFlushTransport;
+use Lintl\RoadRunnerFlushTransport;
+use Lintl\Suspense;
+use Lintl\SwooleFlushTransport;
+use Lintl\Tests\Support\FakeReactResponse;
+use Lintl\Tests\Support\FakeRoadRunnerHttpWorker;
+use Lintl\Tests\Support\FakeSwooleResponse;
+use Lintl\Tests\Support\StreamingPage;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 /**
  * The §10 server adapters (architecture doc §10: "FPM (flush +
@@ -142,7 +142,7 @@ final class AdapterTransportTest extends TestCase
 <?php declare(strict_types=1);
 require {RUNTIME};
 $chunk = static function (string $c): void { echo $c; };
-$t = new Lintel\FrankenPHPFlushTransport();
+$t = new Lintl\FrankenPHPFlushTransport();
 $t->begin();
 $t->write('<p>a</p>');
 $t->write('<p>b</p>');
@@ -150,7 +150,7 @@ $t->write('<p>c</p>');
 $t->end();
 PHP;
         $script = str_replace('{RUNTIME}', var_export(\dirname(__DIR__).'/src/functions.php', true), $script);
-        $path = sys_get_temp_dir().'/lintel-frankenphp-'.bin2hex((string) random_bytes(4)).'.php';
+        $path = sys_get_temp_dir().'/lintl-frankenphp-'.bin2hex((string) random_bytes(4)).'.php';
         file_put_contents($path, $script);
         try {
             $out = shell_exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($path).' 2>&1');
@@ -165,7 +165,7 @@ PHP;
     public function test_franken_php_adapter_over_http_server(): void
     {
         $this->assertStreamedPageOverHttpServer(
-            'stream_via($page, new \\Lintel\\FrankenPHPFlushTransport());',
+            'stream_via($page, new \\Lintl\\FrankenPHPFlushTransport());',
             'FrankenPHP adapter',
         );
     }
@@ -186,12 +186,12 @@ PHP;
 
         self::assertSame(200, $worker->status);
         self::assertSame(['Content-Type' => ['text/html; charset=utf-8']], $worker->headers);
-        $script = \array_search('<script>lintelSwap("lt-1")</script>', $worker->frames, true);
+        $script = \array_search('<script>lintlSwap("lt-1")</script>', $worker->frames, true);
         self::assertNotFalse($script, 'the swap script must be its own stream chunk');
         $template = \array_search('<template id="lt-1-r">', $worker->frames, true);
         self::assertNotFalse($template, 'the resolved template must precede the swap script');
         self::assertTrue($script > $template);
-        self::assertSame('<script>lintelSwap("lt-1")</script>', $worker->frames[\count($worker->frames) - 1]);
+        self::assertSame('<script>lintlSwap("lt-1")</script>', $worker->frames[\count($worker->frames) - 1]);
         self::assertContains('<div id="lt-1">', $worker->frames);
         self::assertContains('<main>', $worker->frames);
     }
@@ -202,14 +202,14 @@ PHP;
      * is not on PATH — CI runs it in the php job's `adapters` step. */
     public function test_road_runner_adapter_end_to_end_over_rr_server(): void
     {
-        if (getenv('LINTEL_E2E_RR') !== '1' || trim((string) shell_exec('command -v rr 2>/dev/null')) === '') {
-            self::markTestSkipped('the live RoadRunner lane needs the rr binary + LINTEL_E2E_RR=1 '
+        if (getenv('LINTL_E2E_RR') !== '1' || trim((string) shell_exec('command -v rr 2>/dev/null')) === '') {
+            self::markTestSkipped('the live RoadRunner lane needs the rr binary + LINTL_E2E_RR=1 '
                 .'(CI: the php job `adapters` step installs both)');
         }
         $this->assertStreamedPageOverHttpServer(<<<'PHP'
 $rr = new \Spiral\RoadRunner\Http\HttpWorker(\Spiral\RoadRunner\Worker::create());
 while ($rr->waitRequest() !== null) {
-    $t = new \Lintel\RoadRunnerFlushTransport($rr, 200, [
+    $t = new \Lintl\RoadRunnerFlushTransport($rr, 200, [
         'Content-Type' => ['text/html; charset=utf-8'],
         'X-Accel-Buffering' => ['no'],
     ]);
@@ -255,7 +255,7 @@ PHP, 'RoadRunner adapter', true);
      */
     private function assertStreamedPageOverHttpServer(string $drivePhp, string $label, bool $viaRR = false): void
     {
-        $docroot = sys_get_temp_dir().'/lintel-adapter-'.bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintl-adapter-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $autoload = \dirname(__DIR__).'/vendor/autoload.php';
         $body = false;
@@ -267,10 +267,10 @@ PHP, 'RoadRunner adapter', true);
 <?php declare(strict_types=1);
 require {AUTOLOAD};
 
-use Lintel\Suspense;
+use Lintl\Suspense;
 
-use function Lintel\c;
-use function Lintel\stream_via;
+use function Lintl\c;
+use function Lintl\stream_via;
 
 $payload = '<script>alert("pwned")</script>';
 $page = (static function () use ($payload): \Generator {
@@ -356,16 +356,16 @@ PHP;
      * Caddy-based runtime, a static release build) serves the streamed
      * page natively — the echo + flush shape runs through its worker, and
      * the §10 wire contract must hold on the bytes it serves. Skipped
-     * unless LINTEL_E2E_FRANKENPHP=1 AND the binary is on PATH
+     * unless LINTL_E2E_FRANKENPHP=1 AND the binary is on PATH
      * (CI: the adapters-live job downloads the v1.14.0 static build). */
     public function test_franken_php_adapter_end_to_end_over_the_real_binary(): void
     {
-        if (getenv('LINTEL_E2E_FRANKENPHP') !== '1' || trim((string) shell_exec('command -v frankenphp 2>/dev/null')) === '') {
-            self::markTestSkipped('the live FrankenPHP lane needs the frankenphp binary + LINTEL_E2E_FRANKENPHP=1 '
+        if (getenv('LINTL_E2E_FRANKENPHP') !== '1' || trim((string) shell_exec('command -v frankenphp 2>/dev/null')) === '') {
+            self::markTestSkipped('the live FrankenPHP lane needs the frankenphp binary + LINTL_E2E_FRANKENPHP=1 '
                 .'(CI: the adapters-live job downloads the static v1.14.0 build)');
         }
         $label = 'FrankenPHP binary adapter';
-        $docroot = sys_get_temp_dir().'/lintel-frankenphp-'.bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintl-frankenphp-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
             var_export(\dirname(__DIR__).'/vendor/autoload.php', true),
@@ -374,10 +374,10 @@ PHP;
 <?php declare(strict_types=1);
 require {AUTOLOAD};
 
-use Lintel\Suspense;
+use Lintl\Suspense;
 
-use function Lintel\c;
-use function Lintel\stream_via;
+use function Lintl\c;
+use function Lintl\stream_via;
 
 $payload = '<script>alert("pwned")</script>';
 $page = (static function () use ($payload): \Generator {
@@ -388,7 +388,7 @@ $page = (static function () use ($payload): \Generator {
     });
     yield '<p>footer</p></body></html>';
 })();
-stream_via($page, new \Lintel\FrankenPHPFlushTransport());
+stream_via($page, new \Lintl\FrankenPHPFlushTransport());
 PHP);
         file_put_contents($docroot.'/index.php', $worker);
 
@@ -451,7 +451,7 @@ PHP);
                 .'(CI: the adapters-live job installs it via setup-php)');
         }
         $label = 'Swoole adapter';
-        $docroot = sys_get_temp_dir().'/lintel-swoole-'.bin2hex((string) random_bytes(4));
+        $docroot = sys_get_temp_dir().'/lintl-swoole-'.bin2hex((string) random_bytes(4));
         mkdir($docroot, 0777, true);
         $worker = str_replace(['{AUTOLOAD}', '{LABEL}'], [
             var_export(\dirname(__DIR__).'/vendor/autoload.php', true),
@@ -465,13 +465,13 @@ $http->on('request', static function ($request, $response) {
     $payload = '<script>alert("pwned")</script>';
     $page = (static function () use ($payload): \Generator {
         yield '<!doctype html><html><body><h1>{LABEL}</h1>';
-        yield new \Lintel\Suspense('loading…', static function () use ($payload): \Generator {
+        yield new \Lintl\Suspense('loading…', static function () use ($payload): \Generator {
             \usleep(10_000); // the slow boundary
-            yield '<p>user: ' . \Lintel\c($payload) . '</p>';
+            yield '<p>user: ' . \Lintl\c($payload) . '</p>';
         });
         yield '<p>footer</p></body></html>';
     })();
-    \Lintel\stream_via($page, \Lintel\SwooleFlushTransport::fromSwoole($response));
+    \Lintl\stream_via($page, \Lintl\SwooleFlushTransport::fromSwoole($response));
 });
 $http->start();
 PHP);

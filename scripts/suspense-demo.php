@@ -10,17 +10,17 @@ declare(strict_types=1);
 // The chunk ORDER is the protocol: the shell and the fallback placeholder
 // (`<div id="lt-1">…`) print first, the footer prints while the boundary is
 // still pending, and only then the resolved content arrives inside
-// `<template id="lt-1-r">…</template><script>lintelSwap("lt-1")</script>` —
+// `<template id="lt-1-r">…</template><script>lintlSwap("lt-1")</script>` —
 // the swap script replaces the placeholder in place. The attacker payload
 // in the resolved data prints escaped: the streaming path never bypasses
 // the escapers.
 
 require __DIR__.'/../php/runtime/src/functions.php';
 
-use Lintel\Suspense;
+use Lintl\Suspense;
 
-use function Lintel\c;
-use function Lintel\stream;
+use function Lintl\c;
+use function Lintl\stream;
 
 $payload = '<script>alert("pwned")</script>';
 

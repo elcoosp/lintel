@@ -1,22 +1,22 @@
 {
-    "name": "lintel/twig",
-    "description": "The Symfony Twig bridge: the lintel_render() Twig function renders a Lintel component invocation, reusing the dev loader for .lintel.php sources (architecture doc §11 Symfony interop, §17.1-Q2 Laravel & Symfony packages)",
+    "name": "lintl/twig",
+    "description": "The Symfony Twig bridge: the lintl_render() Twig function renders a Lintl component invocation, reusing the dev loader for .lintl.php sources (architecture doc §11 Symfony interop, §17.1-Q2 Laravel & Symfony packages)",
     "type": "library",
     "license": "MIT",
     "autoload": {
         "psr-4": {
-            "Lintel\\Twig\\": "src/"
+            "Lintl\\Twig\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Lintel\\Twig\\Tests\\": "tests/"
+            "Lintl\\Twig\\Tests\\": "tests/"
         }
     },
     "require": {
         "php": ">=8.5",
-        "lintel/lintel": "*",
-        "lintel/runtime": "*",
+        "lintl/lintl": "*",
+        "lintl/runtime": "*",
         "symfony/console": "^7.0",
         "symfony/dependency-injection": "^7.0",
         "symfony/http-foundation": "^7.0",
@@ -26,7 +26,7 @@
     "repositories": [
         {
             "type": "path",
-            "url": "../lintel"
+            "url": "../lintl"
         },
         {
             "type": "path",
@@ -45,7 +45,7 @@
     "config": {
         "sort-packages": true,
         "allow-plugins": {
-            "lintel/lintel": true
+            "lintl/lintl": true
         }
     },
     "prefer-stable": true

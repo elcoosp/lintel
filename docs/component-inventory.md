@@ -2,22 +2,22 @@
 
 > Architecture doc §6.2 defines the AST and §17.1 the signature scanning;
 > consumers that describe a file (LSP outlines, metrics, dashboards, the
-> CLI's `lintel stats`) need the declared/invoked component lists derived
+> CLI's `lintl stats`) need the declared/invoked component lists derived
 > from the compiler's own data. This page records the exact contract of
 > `inventory::collect_inventory` and its types (re-exported at the crate
 > root) the way `docs/node-visitor.md` records the traversal contract.
-> Testable in `crates/lintel-core/tests/inventory.rs`, demoed by
+> Testable in `crates/lintl-core/tests/inventory.rs`, demoed by
 > `examples/inventory.rs`, benched by the `inventory` group.
 
 ## Source of truth
 
-- `crates/lintel-core/src/inventory.rs` — `collect_inventory`,
+- `crates/lintl-core/src/inventory.rs` — `collect_inventory`,
   `FileInventory`, `DeclaredComponent`, `Invocation` and the public
   `InventoryBuilder` (the `NodeVisitor` impl the walk uses).
-- `crates/lintel-core/src/scan.rs` — `ScanContext::declared_signatures`
+- `crates/lintl-core/src/scan.rs` — `ScanContext::declared_signatures`
   (the declaration table the report reads) and `Signature`, whose fields
   the declared entries carry verbatim.
-- `crates/lintel-core/src/ast.rs` — `Attr::name()`, the accessor the prop
+- `crates/lintl-core/src/ast.rs` — `Attr::name()`, the accessor the prop
   list reads (a spread carries no name and never appears in `props`).
 
 ## Exact report contract
@@ -41,9 +41,9 @@
    named arguments). `children` reports JSX children; `declared_in_file`
    reports whether the signature table knows the component (`false` for
    cross-file components, where prop checks are impossible — the same
-   boundary `LNT0203`/`LNT0205` respect).
+   boundary `LNL0203`/`LNL0205` respect).
 4. **Suppression plays no part.** The report is not a diagnostic: the
-   `lintel-ignore-next` / `lintel-ignore-file` contracts
+   `lintl-ignore-next` / `lintl-ignore-file` contracts
    (`docs/ignore-directives.md`) silence validation output, and a shape
    report stays complete. The walk never consults `ScanContext`'s
    suppression state.
@@ -59,7 +59,7 @@
    `typed_strings`) then `invocations` (entries: `name`, `offset`, `line`,
    `col`, `props`, `children`, `spread`, `declared_in_file`),
    renderer-parity positions from `SourceMap` (out-of-range offsets clamp,
-   so emission never panics) and the shared `lintel_diag::json_escape`
+   so emission never panics) and the shared `lintl_diag::json_escape`
    escaping. An empty report is `{"declared":[],"invocations":[]}`.
 7. **The builder is public.** `InventoryBuilder::new(&context)` is a
    `NodeVisitor` impl a consumer can fold into its own walk (record

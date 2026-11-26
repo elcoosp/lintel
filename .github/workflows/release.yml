@@ -7,7 +7,7 @@
 # the maintainer's review. The publish job then ships the four publishable
 # crates to crates.io in dependency order (diag → core → lsp → cli, with
 # index-propagation waits and a `--dry-run` pre-flight per crate) and
-# triggers the Packagist updates for the composer packages (`lintel/lintel`
+# triggers the Packagist updates for the composer packages (`lintl/lintl`
 # + `markup/markup`), verifying the tag landed before the job goes green.
 #
 # The ONLY step left to the human: review the draft release and click
@@ -36,14 +36,14 @@ jobs:
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            binary: lintel
-            archive: lintel-linux-x64.tar.gz
+            binary: lintl
+            archive: lintl-linux-x64.tar.gz
             cross: musl-tools
           - name: linux-arm64
             os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            binary: lintel
-            archive: lintel-linux-arm64.tar.gz
+            binary: lintl
+            archive: lintl-linux-arm64.tar.gz
             cross: cargo-zigbuild
           - name: macos-x64
             # macos-13/macos-14 are retired (GitHub removed the labels).
@@ -52,20 +52,20 @@ jobs:
             # target). Use macos-15-intel for a native Intel build.
             os: macos-15
             target: x86_64-apple-darwin
-            binary: lintel
-            archive: lintel-macos-x64.tar.gz
+            binary: lintl
+            archive: lintl-macos-x64.tar.gz
           - name: macos-arm64
             # macos-14 was retired by GitHub on 2026-11-02 (like macos-13
             # before it); macos-15 is the current arm64 runner.
             os: macos-15
             target: aarch64-apple-darwin
-            binary: lintel
-            archive: lintel-macos-arm64.tar.gz
+            binary: lintl
+            archive: lintl-macos-arm64.tar.gz
           - name: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: lintel.exe
-            archive: lintel-windows-x64.zip
+            binary: lintl.exe
+            archive: lintl-windows-x64.zip
     steps:
       - uses: actions/checkout@v4
       # The tag guard: a `v*` tag that disagrees with the ONE workspace
@@ -93,7 +93,7 @@ jobs:
         if: matrix.cross == 'musl-tools'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p lintel-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p lintl-cli
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: cargo-zigbuild
       - name: Stage the archive
@@ -131,12 +131,12 @@ jobs:
           merge-multiple: true
       - name: Checksums (SHA256SUMS, the composer.json extra pin format)
         working-directory: dist
-        run: sha256sum lintel-* | tee SHA256SUMS
+        run: sha256sum lintl-* | tee SHA256SUMS
       - name: Attest build provenance (the release signatures)
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: |
-            dist/lintel-*
+            dist/lintl-*
       # The release body is the CHANGELOG's `## [0.1.0]` section — the
       # same text scripts/release-dry-run.sh previews, so what was
       # reviewed offline is exactly what the draft carries.
@@ -153,7 +153,7 @@ jobs:
           draft: true
           body_path: release-notes.md
           files: |
-            dist/lintel-*
+            dist/lintl-*
             dist/SHA256SUMS
 
   publish:
@@ -170,7 +170,7 @@ jobs:
         run: |
           missing=0
           if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "::error::CARGO_REGISTRY_TOKEN is not set — add it under Settings → Secrets → Actions (a crates.io API token with publish scope for lintel-core/-diag/-lsp/-cli)"; missing=1
+            echo "::error::CARGO_REGISTRY_TOKEN is not set — add it under Settings → Secrets → Actions (a crates.io API token with publish scope for lintl-core/-diag/-lsp/-cli)"; missing=1
           fi
           if [ -z "$PACKAGIST_USERNAME" ] || [ -z "$PACKAGIST_TOKEN" ]; then
             echo "::error::PACKAGIST_USERNAME / PACKAGIST_TOKEN are not set — add them under Settings → Secrets → Actions (a Packagist API token; the update-package call needs it)"; missing=1
@@ -181,15 +181,15 @@ jobs:
       # upload is attempted.
       - name: cargo publish --dry-run (each publishable crate packages standalone)
         run: |
-          for crate in lintel-diag lintel-core lintel-lsp lintel-cli; do
+          for crate in lintl-diag lintl-core lintl-lsp lintl-cli; do
             echo "== dry-run: $crate =="
             cargo publish --dry-run --locked -p "$crate"
           done
       # The crates.io leg, interleaving the dry-run pre-flight with each
-      # real publish, in dependency order: lintel-diag first (it is the
-      # graph's root — lintel-core depends on IT), then lintel-core
-      # (lintel-lsp and lintel-cli depend on core), then lintel-lsp, then
-      # lintel-cli. Each dependent's `--dry-run` resolves its dependency's
+      # real publish, in dependency order: lintl-diag first (it is the
+      # graph's root — lintl-core depends on IT), then lintl-core
+      # (lintl-lsp and lintl-cli depend on core), then lintl-lsp, then
+      # lintl-cli. Each dependent's `--dry-run` resolves its dependency's
       # NEW registry version — which only exists after the previous real
       # publish — so the pre-flight must follow the publish, with the wait
       # letting the registry index propagate in between.
@@ -197,41 +197,41 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish --dry-run --locked -p lintel-diag
-          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-diag
+          cargo publish --dry-run --locked -p lintl-diag
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintl-diag
           sleep 20
-          cargo publish --dry-run --locked -p lintel-core
-          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-core
+          cargo publish --dry-run --locked -p lintl-core
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintl-core
           sleep 20
-          cargo publish --dry-run --locked -p lintel-lsp
-          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-lsp
+          cargo publish --dry-run --locked -p lintl-lsp
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintl-lsp
           sleep 20
-          cargo publish --dry-run --locked -p lintel-cli
-          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintel-cli
+          cargo publish --dry-run --locked -p lintl-cli
+          cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" -p lintl-cli
       # The composer leg: Packagist derives package versions from the pushed
       # tag, so the publish action is the update-package API call over the
-      # repo — it refreshes BOTH monorepo packages (lintel/lintel +
+      # repo — it refreshes BOTH monorepo packages (lintl/lintl +
       # markup/markup), then each is verified to carry the tag's version
       # before the job goes green.
-      - name: Publish the composer packages to Packagist (lintel/lintel + markup/markup)
+      - name: Publish the composer packages to Packagist (lintl/lintl + markup/markup)
         env:
           PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
           PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
           TAG_VERSION: ${{ github.ref_name }}
         run: |
-          echo "triggering the Packagist update for the monorepo packages: lintel/lintel + markup/markup (source: this repository)"
+          echo "triggering the Packagist update for the monorepo packages: lintl/lintl + markup/markup (source: this repository)"
           http=$(curl -sS -o /tmp/packagist-response.json -w '%{http_code}' \
             -X POST \
             -H "Accept: application/json" \
             -u "$PACKAGIST_USERNAME:$PACKAGIST_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"repository": {"url": "https://github.com/elcoosp/lintel"}}' \
+            -d '{"repository": {"url": "https://github.com/elcoosp/lintl"}}' \
             "https://packagist.org/api/update-package")
           cat /tmp/packagist-response.json; echo
           if [ "$http" != "200" ]; then
             echo "::error::the Packagist update-package call failed (HTTP $http)"; exit 1
           fi
-          for pkg in lintel/lintel markup/markup; do
+          for pkg in lintl/lintl markup/markup; do
             ok=0
             for attempt in 1 2 3 4 5; do
               sleep 10
@@ -248,5 +248,5 @@ jobs:
       - name: The maintainer's remaining step (review the draft)
         run: |
           echo "Everything automated: five binaries + SHA256SUMS + provenance attestations on the DRAFT release;"
-          echo "crates.io carries lintel-core/-diag/-lsp/-cli at ${{ github.ref_name }}; Packagist serves both composer packages at ${{ github.ref_name }}."
-          echo "Remaining human step: review https://github.com/elcoosp/lintel/releases and click Publish."
+          echo "crates.io carries lintl-core/-diag/-lsp/-cli at ${{ github.ref_name }}; Packagist serves both composer packages at ${{ github.ref_name }}."
+          echo "Remaining human step: review https://github.com/elcoosp/lintl/releases and click Publish."

@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Blade\Tests;
+namespace Lintl\Blade\Tests;
 
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\View\Compilers\BladeCompiler;
-use Lintel\Blade\Bridge;
-use Lintel\Blade\BridgeException;
-use Lintel\Blade\Directive;
+use Lintl\Blade\Bridge;
+use Lintl\Blade\BridgeException;
+use Lintl\Blade\Directive;
 use PHPUnit\Framework\TestCase;
 
-use function Lintel\c;
+use function Lintl\c;
 
 /**
  * The §11 Blade interop bridge (§17.1-Q2 "Laravel & Symfony packages"):
- * the `@lintel` directive registers on a real `BladeCompiler`
+ * the `@lintl` directive registers on a real `BladeCompiler`
  * (illuminate/view, the same major the bench harness pins), compiles to
  * an echo of the bridge's render call, and executing the compiled string
- * renders a `.lintel.php` component loaded through the dev loader — with
+ * renders a `.lintl.php` component loaded through the dev loader — with
  * the hostile payload escaping through the runtime's `c()`.
  */
 final class BladeBridgeTest extends TestCase
@@ -33,11 +33,11 @@ final class BladeBridgeTest extends TestCase
     /** The directive compiles and the compiled string renders the component. */
     public function test_directive_compiles_and_renders(): void
     {
-        $blade = new BladeCompiler(new Filesystem, sys_get_temp_dir().'/lintel-blade-cache');
+        $blade = new BladeCompiler(new Filesystem, sys_get_temp_dir().'/lintl-blade-cache');
         Directive::register($blade, $this->bridge());
 
-        $compiled = $blade->compileString('@lintel(\'Badge\', [\'name\' => $user])');
-        self::assertStringContainsString("echo \\Lintel\\Blade\\Directive::render('Badge', ['name' => \$user]);", $compiled);
+        $compiled = $blade->compileString('@lintl(\'Badge\', [\'name\' => $user])');
+        self::assertStringContainsString("echo \\Lintl\\Blade\\Directive::render('Badge', ['name' => \$user]);", $compiled);
 
         $user = '<script>alert(1)</script>';
         \ob_start();
@@ -70,7 +70,7 @@ final class BladeBridgeTest extends TestCase
     {
         $bridge = $this->bridge();
         $this->expectException(BridgeException::class);
-        $this->expectExceptionMessage('No .lintel.php source for component "Missing"');
+        $this->expectExceptionMessage('No .lintl.php source for component "Missing"');
         $bridge->render('Missing');
     }
 
@@ -84,7 +84,7 @@ final class BladeBridgeTest extends TestCase
 
     private function bridge(): Bridge
     {
-        $cacheDir = sys_get_temp_dir().'/lintel-blade-bridge-'.bin2hex((string) random_bytes(4));
+        $cacheDir = sys_get_temp_dir().'/lintl-blade-bridge-'.bin2hex((string) random_bytes(4));
 
         return new Bridge($cacheDir, [__DIR__.'/fixture']);
     }

@@ -6,13 +6,13 @@
 > `ast::NodeVisitor`, `ast::visit_node`, `ast::visit_roots` (re-exported at
 > the crate root) — so LSP features, metrics collectors and doc generators
 > walk the compiler's tree instead of re-implementing the recursion.
-> Testable in `crates/lintel-core/tests/visitor.rs`.
+> Testable in `crates/lintl-core/tests/visitor.rs`.
 
 ## Source of truth
 
-- `crates/lintel-core/src/ast.rs` — the `NodeVisitor` trait and the two
+- `crates/lintl-core/src/ast.rs` — the `NodeVisitor` trait and the two
   walk functions, next to the `Node` types they traverse.
-- `crates/lintel-core/src/validate.rs` — the private `walk` the seam
+- `crates/lintl-core/src/validate.rs` — the private `walk` the seam
   mirrors; rules see the same node sequence.
 
 ## Exact traversal contract
@@ -36,10 +36,10 @@
    accumulates state through `&mut self`; the walk cannot fail and has no
    error channel. A visitor that *reports* belongs on the
    `ValidationRule` seam, where diagnostics flow through the severity
-   split and the `lintel-ignore-*` choke point (`docs/ignore-directives.md`).
+   split and the `lintl-ignore-*` choke point (`docs/ignore-directives.md`).
 5. **Line/offset fields are honored.** Every node carries the absolute
    byte `offset` fields (doc §6.2's documented extension), so a visitor can
-   map positions through `lintel_diag::SourceMap` without re-scanning.
+   map positions through `lintl_diag::SourceMap` without re-scanning.
 
 ## What the seam does not do yet
 

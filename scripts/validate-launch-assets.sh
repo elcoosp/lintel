@@ -166,11 +166,11 @@ else
     MEDIAN=$(python3 - "$RESULTS_JSON" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-print(data["settings"]["opcache-off"]["results"]["S1"]["lintel"]["median_ns"])
+print(data["settings"]["opcache-off"]["results"]["S1"]["lintl"]["median_ns"])
 PY
 ) || MEDIAN=""
     if [ -z "$MEDIAN" ]; then
-        bail "could not read S1 lintel median_ns (opcache-off) from $RESULTS_JSON"
+        bail "could not read S1 lintl median_ns (opcache-off) from $RESULTS_JSON"
     else
         CITED_MEDIAN=$(grep -oE 'S1 median: [0-9]+ ns' "$POSTS" | grep -oE '[0-9]+ ns' | grep -oE '^[0-9]+') || CITED_MEDIAN=""
         if [ "$CITED_MEDIAN" = "$MEDIAN" ]; then

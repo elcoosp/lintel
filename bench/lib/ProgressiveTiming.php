@@ -36,17 +36,17 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Bench;
+namespace Lintl\Bench;
 
-use Lintel\FlushTransport;
-use Lintel\Html;
-use Lintel\RoadRunnerFlushTransport;
-use Lintel\Suspense;
+use Lintl\FlushTransport;
+use Lintl\Html;
+use Lintl\RoadRunnerFlushTransport;
+use Lintl\Suspense;
 use Spiral\RoadRunner\Http\HttpWorkerInterface;
 use Spiral\RoadRunner\Http\Request;
 use Spiral\RoadRunner\WorkerInterface;
 
-use function Lintel\stream_via;
+use function Lintl\stream_via;
 
 /**
  * Times every write AND delegates to the real `RoadRunnerFlushTransport`

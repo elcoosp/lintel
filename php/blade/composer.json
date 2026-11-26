@@ -1,36 +1,36 @@
 {
-    "name": "lintel/blade",
-    "description": "The Laravel Blade bridge: the @lintel directive renders a Lintel component invocation, reusing the dev loader for .lintel.php sources (architecture doc §11 Laravel interop, §17.1-Q2 Laravel & Symfony packages)",
+    "name": "lintl/blade",
+    "description": "The Laravel Blade bridge: the @lintl directive renders a Lintl component invocation, reusing the dev loader for .lintl.php sources (architecture doc §11 Laravel interop, §17.1-Q2 Laravel & Symfony packages)",
     "type": "library",
     "license": "MIT",
     "autoload": {
         "psr-4": {
-            "Lintel\\Blade\\": "src/"
+            "Lintl\\Blade\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Lintel\\Blade\\Tests\\": "tests/"
+            "Lintl\\Blade\\Tests\\": "tests/"
         }
     },
     "require": {
         "php": ">=8.5",
         "illuminate/console": "^13.0",
         "illuminate/support": "^13.0",
-        "lintel/lintel": "*",
-        "lintel/runtime": "*"
+        "lintl/lintl": "*",
+        "lintl/runtime": "*"
     },
     "extra": {
         "laravel": {
             "providers": [
-                "Lintel\\Blade\\LintelServiceProvider"
+                "Lintl\\Blade\\LintlServiceProvider"
             ]
         }
     },
     "repositories": [
         {
             "type": "path",
-            "url": "../lintel"
+            "url": "../lintl"
         },
         {
             "type": "path",
@@ -53,7 +53,7 @@
     "config": {
         "sort-packages": true,
         "allow-plugins": {
-            "lintel/lintel": true
+            "lintl/lintl": true
         }
     },
     "prefer-stable": true

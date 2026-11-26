@@ -1,0 +1,11 @@
+[package]
+name = "lintl-diag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Stable LNL-coded diagnostics for the Lintl JSX-for-PHP compiler"
+repository = "https://github.com/elcoosp/lintl"
+
+[lints]
+workspace = true

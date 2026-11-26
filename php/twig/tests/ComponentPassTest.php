@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Twig\Tests;
+namespace Lintl\Twig\Tests;
 
-use Lintel\Twig\AsLintelComponent;
-use Lintel\Twig\BridgeException;
-use Lintel\Twig\ComponentLocator;
-use Lintel\Twig\ComponentPass;
-use Lintel\Twig\Extension;
+use Lintl\Twig\AsLintlComponent;
+use Lintl\Twig\BridgeException;
+use Lintl\Twig\ComponentLocator;
+use Lintl\Twig\ComponentPass;
+use Lintl\Twig\Extension;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Twig\Environment;
@@ -16,14 +16,14 @@ use Twig\Loader\ArrayLoader;
 
 /**
  * The §11 Symfony DI lane (§17.1-Q2's remaining Symfony surface): the
- * `#[AsLintelComponent]` attribute + the {@see ComponentPass} register
+ * `#[AsLintlComponent]` attribute + the {@see ComponentPass} register
  * service components on a real `ContainerBuilder`, and the bridge's
- * `lintel_render()` resolves them through {@see ComponentLocator}.
+ * `lintl_render()` resolves them through {@see ComponentLocator}.
  * The service lane keeps the escape contract: trusted markup ships as
- * `\Lintel\Html` (the shape compiled components return — the author
+ * `\Lintl\Html` (the shape compiled components return — the author
  * escapes dynamic props through `e()`), and a plain string output goes
  * through `c()`'s escapers like any child value. Untagged names fall
- * back to the `.lintel.php` sources.
+ * back to the `.lintl.php` sources.
  */
 final class ComponentPassTest extends TestCase
 {
@@ -66,7 +66,7 @@ final class ComponentPassTest extends TestCase
         self::assertNull($locator->get('Missing'), 'untagged names fall back to the file lane');
 
         $extension = new Extension(
-            sys_get_temp_dir().'/lintel-twig-services-'.bin2hex((string) random_bytes(4)),
+            sys_get_temp_dir().'/lintl-twig-services-'.bin2hex((string) random_bytes(4)),
             [__DIR__.'/fixture'],
             $locator,
         );
@@ -84,7 +84,7 @@ final class ComponentPassTest extends TestCase
         $container->compile();
 
         $extension = new Extension(
-            sys_get_temp_dir().'/lintel-twig-services-'.bin2hex((string) random_bytes(4)),
+            sys_get_temp_dir().'/lintl-twig-services-'.bin2hex((string) random_bytes(4)),
             [],
             new ComponentLocator($container),
         );
@@ -97,7 +97,7 @@ final class ComponentPassTest extends TestCase
     {
         $locator = new ComponentLocator(new ContainerBuilder);
         $extension = new Extension(
-            sys_get_temp_dir().'/lintel-twig-services-'.bin2hex((string) random_bytes(4)),
+            sys_get_temp_dir().'/lintl-twig-services-'.bin2hex((string) random_bytes(4)),
             [__DIR__.'/fixture'],
             $locator,
         );
@@ -113,7 +113,7 @@ final class ComponentPassTest extends TestCase
         $container->compile();
 
         $extension = new Extension(
-            sys_get_temp_dir().'/lintel-twig-services-'.bin2hex((string) random_bytes(4)),
+            sys_get_temp_dir().'/lintl-twig-services-'.bin2hex((string) random_bytes(4)),
             [],
             new ComponentLocator($container),
         );
@@ -131,9 +131,9 @@ final class ComponentPassTest extends TestCase
         (new ComponentPass)->process($container);
         $container->compile();
 
-        $twig = new Environment(new ArrayLoader(['p.twig' => '{{ lintel_render("Badge", {name: user}) }}']));
+        $twig = new Environment(new ArrayLoader(['p.twig' => '{{ lintl_render("Badge", {name: user}) }}']));
         $twig->addExtension(new Extension(
-            sys_get_temp_dir().'/lintel-twig-services-'.bin2hex((string) random_bytes(4)),
+            sys_get_temp_dir().'/lintl-twig-services-'.bin2hex((string) random_bytes(4)),
             [],
             new ComponentLocator($container),
         ));

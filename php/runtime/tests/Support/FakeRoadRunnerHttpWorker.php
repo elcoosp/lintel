@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests\Support;
+namespace Lintl\Tests\Support;
 
 use Spiral\RoadRunner\Http\HttpWorkerInterface;
 use Spiral\RoadRunner\Http\Request;

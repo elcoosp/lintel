@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Lintel\Tests\Support;
+namespace Lintl\Tests\Support;
 
-use Lintel\ReactResponse;
+use Lintl\ReactResponse;
 
 /**
- * The structural fake for the `Lintel\ReactResponse` contract
+ * The structural fake for the `Lintl\ReactResponse` contract
  * (AdapterTransportTest): records the adapter's calls in order.
  */
 final class FakeReactResponse implements ReactResponse

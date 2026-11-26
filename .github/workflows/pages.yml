@@ -1,10 +1,10 @@
 # M3 release-readiness: publish the docs-site + playground to GitHub Pages.
 #
-# `lintel.sh` is not live at launch, so every diagnostic the product emits
-# (the 13 LNT docs URLs) points at the configurable `LINTEL_DOCS_BASE`,
+# `lintl.sh` is not live at launch, so every diagnostic the product emits
+# (the 13 LNL docs URLs) points at the configurable `LINTL_DOCS_BASE`,
 # whose default is this Pages URL. The docs-site builder (make docs-site)
 # emits docs-site/build/ with every markdown page rendered, the error
-# index at /e/LNTxxxx/ for all 13 codes, and the playground mirrored at
+# index at /e/LNLxxxx/ for all 13 codes, and the playground mirrored at
 # /playground/. This workflow publishes that tree to Pages on every push
 # to main, so the emitted URLs resolve from launch day.
 name: pages
@@ -39,7 +39,7 @@ jobs:
         # Run the gate against the LOCAL build tree (file://), not the live
         # Pages URL: the build job runs BEFORE the deploy job publishes the
         # site, so on a fresh repo (or the first run after Pages is enabled)
-        # the live /e/LNTxxxx/ URLs do not exist yet and would 404 — a
+        # the live /e/LNLxxxx/ URLs do not exist yet and would 404 — a
         # chicken-and-egg that reds the build and blocks the deploy that
         # would publish them. The gate's job is to prove every emitted URL
         # HAS a page (the docs-site build emitted it); the deploy job's

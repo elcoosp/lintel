@@ -1,0 +1,34 @@
+{
+    "name": "lintl/lintl",
+    "description": "Lintl dev tooling: the binary installer plugin and the no-watcher dev loader (architecture doc §6.10, §12)",
+    "type": "composer-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Lintl\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lintl\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.5",
+        "composer-plugin-api": "^2.0"
+    },
+    "require-dev": {
+        "composer/composer": "^2.0",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    },
+    "suggest": {
+        "phpunit/phpunit": "For ComponentTester's assert* helpers (render() alone needs none)"
+    },
+    "extra": {
+        "class": "Lintl\\Installer\\Plugin"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-<conduct@lintel.sh> (or via GitHub's *Report a user* flow if email is
+<conduct@lintl.sh> (or via GitHub's *Report a user* flow if email is
 unavailable). All complaints will be reviewed and investigated promptly and
 fairly.
 

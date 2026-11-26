@@ -1,15 +1,15 @@
 // The T-13 offline contract: "works offline after first load." The service
 // worker precaches every asset the page needs — the page makes no other
 // network requests, so cache-first answers everything from here on.
-const CACHE = 'lintel-playground-v1';
+const CACHE = 'lintl-playground-v1';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './sw.js',
-  './assets/lintel_wasm.js',
-  './assets/lintel_wasm_bg.wasm',
+  './assets/lintl_wasm.js',
+  './assets/lintl_wasm_bg.wasm',
 ];
 
 self.addEventListener('install', (event) => {

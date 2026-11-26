@@ -1,12 +1,12 @@
-# The daemon protocol (`lintel watch --socket`)
+# The daemon protocol (`lintl watch --socket`)
 
-The `lintel watch` daemon keeps one resident compiler process behind a
+The `lintl watch` daemon keeps one resident compiler process behind a
 socket so the dev loader's per-request compile skips the process spawn
 (T-12's measured p50/p99 vs spawn). Since the Phase 10 hardening pass, the
 socket speaks one **length-prefixed JSON protocol** on both directions —
 the §6.7 sketch `{"path":…} → {"php":…}|{"diag":[…]}` made real — and the
 daemon's recompiles run through the same content-addressed build cache the
-`lintel build` CLI uses.
+`lintl build` CLI uses.
 
 ## Transport
 
@@ -39,7 +39,7 @@ non-decimal prefix is a malformed frame (below).
 Example request and answer, as bytes:
 
 ```text
-0000000027\n{"path":"/app/src/Page.lintel.php"}
+0000000027\n{"path":"/app/src/Page.lintl.php"}
 0000000063\n{"ok":true,"php":"<?php\nreturn (static function ..."}
 ```
 
@@ -48,7 +48,7 @@ Example request and answer, as bytes:
 - **Compile a file** — `{"path": "<absolute path>"}`:
 
   ```json
-  {"path": "/app/src/Page.lintel.php"}
+  {"path": "/app/src/Page.lintl.php"}
   ```
 
 - **Stop the daemon** — `{"quit": true}`. The daemon answers (below) and
@@ -66,7 +66,7 @@ JSON) are a request error (below), not a crash.
   single plain-text entry). A failed *compile* is an answer, not a
   transport failure — the loader surfaces it the way the `proc_open`
   fallback surfaces a non-zero exit.
-- **Request error** — `{"ok": false, "diag": ["lintel watch: <problem>"]}`
+- **Request error** — `{"ok": false, "diag": ["lintl watch: <problem>"]}`
   for a malformed shape; the connection stays usable.
 - **Quit** — `{"ok": true, "quit": true}` before the daemon stops.
 
@@ -88,12 +88,12 @@ bug this protocol pass fixed: the probe used to send `quit`.)
 
 ## Reconnection logic
 
-`lintel_cli::watch::request` — the client the Rust integration tests and
+`lintl_cli::watch::request` — the client the Rust integration tests and
 the PHP loader's socket lane mirror — retries a *connect* failure up to
 three times with a short backoff (0 ms, 50 ms, 250 ms), which covers a
 daemon restart window; once connected, a protocol-level failure is final
 for that request. The PHP loader
-(`php/lintel/src/Dev/Loader.php`) retries the connect twice (100 ms
+(`php/lintl/src/Dev/Loader.php`) retries the connect twice (100 ms
 apart) and then falls back to the `proc_open` lane — the socket is an
 optimization, never a staleness or availability source.
 
@@ -101,14 +101,14 @@ optimization, never a staleness or availability source.
 
 The daemon serves from an in-memory mtime+size map; a miss reads the
 source and consults the workspace's content-addressed cache at
-`<workspace>/.lintel-cache/` — the same engine `lintel build` uses, keyed
+`<workspace>/.lintl-cache/` — the same engine `lintl build` uses, keyed
 by a SHA-256 of the source content with the compile target, so a
 watch-triggered rebuild of an unchanged content never recompiles and a
 reverted edit serves instantly. The daemon's counters accumulate in
-`.lintel-cache/stats.json` (`compiled`, `cache_hits`) and are recorded
+`.lintl-cache/stats.json` (`compiled`, `cache_hits`) and are recorded
 after every disk-cache consult; both `stats.json` and the LSP index's
-`.lintel-cache/lsp-index.json` are written under an exclusive `flock(2)`
-so concurrent writers (a watch daemon and a `lintel build`, two LSP
+`.lintl-cache/lsp-index.json` are written under an exclusive `flock(2)`
+so concurrent writers (a watch daemon and a `lintl build`, two LSP
 sessions) cannot interleave a partial write. Watcher events under
-`.lintel-cache/` never invalidate entries — the cache's own writes must
+`.lintl-cache/` never invalidate entries — the cache's own writes must
 not churn the in-memory map.

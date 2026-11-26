@@ -1,6 +1,6 @@
 # Security Policy
 
-Lintel's core promise is XSS-safety by default: every dynamic value is
+Lintl's core promise is XSS-safety by default: every dynamic value is
 escaped for its HTML context, URL attributes pass a scheme allowlist, and
 the only raw-HTML sink is the greppable `Html::unsafeRaw()` (architecture
 doc §7). If you find a way around that promise, we want to hear about it.
@@ -16,8 +16,8 @@ doc §7). If you find a way around that promise, we want to hear about it.
 **Do not open a public GitHub issue for a security report.**
 
 1. Use GitHub's *Report a vulnerability* flow on
-   <https://github.com/elcoosp/lintel/security/advisories> (private).
-2. Include: the affected version/commit, a minimal `.lintel.php` input that
+   <https://github.com/elcoosp/lintl/security/advisories> (private).
+2. Include: the affected version/commit, a minimal `.lintl.php` input that
    demonstrates the issue, the compiled output, and the rendered HTML —
    a differential-style repro makes triage fast.
 3. You will get an acknowledgement within **7 days** and a first assessment
